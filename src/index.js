@@ -24,3 +24,4 @@ export { SCRATCH_DIR, openScratchSyncWriter, openScratchReader, removeScratchFil
 export { colourize, RAMPS, CLASS_COLOURS } from "./colour/colourize.js";
 export { writeLas, createLasWriter } from "./write/writeLas.js";
 export { chooseScaleOffset } from "./write/scaleOffset.js";
+export { createWorkerHandler } from "./workers/workerProtocol.js";
