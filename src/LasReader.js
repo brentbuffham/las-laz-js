@@ -59,12 +59,27 @@ export async function openLas(source, opts) {
 	}
 	var evlrs = [];
 	if (header.numberOfEvlrs > 0 && header.evlrStart > 0 && header.evlrStart < src.size) {
-		var evBytes = await src.read(header.evlrStart, src.size);
-		evlrs = parseEvlrs(new MemorySource(evBytes), 0, header.numberOfEvlrs).map(function (e) {
-			return Object.assign({}, e, { start: e.start + header.evlrStart });
-		});
+		evlrs = await walkEvlrs(src, header.evlrStart, header.numberOfEvlrs);
 	}
 	return new LasReader(src, header, vlrs, evlrs, (opts && opts.windowSize) || DEFAULT_WINDOW);
+}
+
+// EVLRs sit after the points and can be huge (waveform data): read each
+// 60-byte header, keep the bytes of small and coordinate-system records,
+// and leave the rest on disk for readEvlrBytes.
+var EVLR_EAGER = 65536;
+async function walkEvlrs(src, start, count) {
+	var out = [], pos = start;
+	for (var i = 0; i < count; i++) {
+		if (pos + 60 > src.size) throw new LasError(ERROR_CODES.BAD_VLR, "EVLR " + (i + 1) + " starts past the end of the file", pos);
+		var e = parseEvlrs(new MemorySource(await src.read(pos, pos + 60)), 0, 1, true)[0];
+		if (pos + 60 + e.length > src.size) throw new LasError(ERROR_CODES.BAD_VLR, "EVLR " + (i + 1) + " runs past the end of the file", pos);
+		e.start = pos + 60;
+		e.bytes = e.length <= EVLR_EAGER || e.userId === "LASF_Projection" ? new Uint8Array(await src.read(e.start, e.start + e.length)) : null;
+		out.push(e);
+		pos += 60 + e.length;
+	}
+	return out;
 }
 
 /**
@@ -240,6 +255,18 @@ LasReader.prototype.readPointsToScratch = async function (opts) {
 		fields.forEach(function (name) { writers[name].close(); });
 	}
 	return { count: count, fields: ids, types: types, bounds: worldBounds(b, opts.localOrigin) };
+};
+
+/**
+ * The bytes of an EVLR — big ones are not read by openLas (bytes: null).
+ * @param {number} index - into reader.evlrs
+ * @returns {Promise<Uint8Array>}
+ */
+LasReader.prototype.readEvlrBytes = async function (index) {
+	var e = this.evlrs[index];
+	if (!e) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "no EVLR " + index + " (the file has " + this.evlrs.length + ")");
+	if (e.bytes) return e.bytes;
+	return new Uint8Array(await this._src.read(e.start, e.start + e.length));
 };
 
 /** Close the underlying file (Node). */

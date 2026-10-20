@@ -176,3 +176,28 @@ test("chunks thins over the filtered points too", async function () {
 	assert.equal(xs.length, 100);
 	assert.equal(xs[99], 1996);
 });
+
+test("open walks EVLR headers and leaves a big EVLR on disk until asked", async function () {
+	var big = new Uint8Array(2000000);
+	for (var i = 0; i < big.length; i++) big[i] = i % 251;
+	var wkt = "PROJCS[\"GDA94 / MGA zone 50\"]";
+	var wb = new TextEncoder().encode(wkt);
+	var b = buildLas({ version: "1.4", pointFormat: 6, points: points(3), evlrs: [{ userId: "Waveform", recordId: 65535, bytes: big }, { userId: "LASF_Projection", recordId: 2112, bytes: wb }] });
+	var src = spy(b);
+	var las = await openLas(src);
+	assert.ok(src.bytesRead < 100000, "read " + src.bytesRead + " bytes to open");
+	assert.equal(las.crs.wkt, wkt);                    // the CRS record is loaded
+	assert.equal(las.evlrs[0].length, 2000000);
+	assert.equal(las.evlrs[0].bytes, null);            // the big one is not
+	var got = await las.readEvlrBytes(0);
+	assert.equal(got.length, 2000000);
+	assert.equal(got[1999999], 1999999 % 251);
+	assert.deepEqual(Array.from(await las.readEvlrBytes(1)), Array.from(wb));
+});
+
+test("an EVLR running past the end of the file is BAD_VLR; a missing EVLR index is INVALID_ARGUMENT", async function () {
+	var b = buildLas({ version: "1.4", pointFormat: 6, points: points(3), evlrs: [{ userId: "Waveform", recordId: 1, bytes: new Uint8Array(100000) }] });
+	await assert.rejects(openLas(b.subarray(0, b.length - 10)), { code: "BAD_VLR" });
+	var las = await openLas(b);
+	await assert.rejects(las.readEvlrBytes(1), { code: "INVALID_ARGUMENT" });
+});

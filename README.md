@@ -37,7 +37,9 @@ var las = await openLas(file);           // File / Blob, ArrayBuffer, Uint8Array
 las.header;   // { versionMajor, versionMinor, pointFormat, pointCount, bounds, scale, offset,
               //   software, systemId, creationDay, creationYear, pointsByReturn, compressed, ... }
 las.crs;      // { kind: "geokeys" | "wkt" | null, epsg, wkt?, keys? } — parsed, never reprojected
-las.vlrs;     // [{ userId, recordId, description, bytes }]
+las.vlrs;     // [{ userId, recordId, description, start, length, bytes }]
+las.evlrs;    // the same; an EVLR over 64 KiB (waveform data) has bytes: null until
+              //   await las.readEvlrBytes(i) — opening never reads it
 
 var pts = await las.readPoints({
 	fields: ["x", "y", "z", "classification", "red", "green", "blue"],

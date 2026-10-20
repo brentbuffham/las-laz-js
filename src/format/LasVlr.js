@@ -16,7 +16,7 @@ var LE = true;
  * @param {number} start - offset of the first record in src.
  * @param {number} count
  * @param {number} [limit] - records must end at or before this offset (default: end of src).
- * @returns {Array<{userId:string, recordId:number, description:string, start:number, bytes:Uint8Array}>}
+ * @returns {Array<{userId:string, recordId:number, description:string, start:number, length:number, bytes:Uint8Array}>}
  */
 export function parseVlrs(src, start, count, limit) {
 	var end = typeof limit === "number" ? limit : src.length();
@@ -31,6 +31,7 @@ export function parseVlrs(src, start, count, limit) {
 			recordId: src.getUint16(pos + 18, LE),
 			description: readAscii(src, pos + 22, 32),
 			start: pos + 54,
+			length: len,
 			bytes: new Uint8Array(src.slice(pos + 54, pos + 54 + len))
 		});
 		pos += 54 + len;
@@ -43,21 +44,23 @@ export function parseVlrs(src, start, count, limit) {
  * @param {object} src - sync source holding the records (offsets in src).
  * @param {number} start
  * @param {number} count
- * @returns {Array<{userId:string, recordId:number, description:string, start:number, bytes:Uint8Array}>}
+ * @param {boolean} [headersOnly] - src holds only the headers: no bytes (null), no length check
+ * @returns {Array<{userId:string, recordId:number, description:string, start:number, length:number, bytes:Uint8Array|null}>}
  */
-export function parseEvlrs(src, start, count) {
+export function parseEvlrs(src, start, count, headersOnly) {
 	var out = [];
 	var pos = start;
 	for (var i = 0; i < count; i++) {
 		if (pos + 60 > src.length()) throw new LasError(ERROR_CODES.BAD_VLR, "EVLR " + (i + 1) + " starts past the end of the file", pos);
 		var len = readU64(src, pos + 20, LE);
-		if (len === null || pos + 60 + len > src.length()) throw new LasError(ERROR_CODES.BAD_VLR, "EVLR " + (i + 1) + " runs past the end of the file", pos);
+		if (len === null || (!headersOnly && pos + 60 + len > src.length())) throw new LasError(ERROR_CODES.BAD_VLR, "EVLR " + (i + 1) + " runs past the end of the file", pos);
 		out.push({
 			userId: readAscii(src, pos + 2, 16),
 			recordId: src.getUint16(pos + 18, LE),
 			description: readAscii(src, pos + 28, 32),
 			start: pos + 60,
-			bytes: new Uint8Array(src.slice(pos + 60, pos + 60 + len))
+			length: len,
+			bytes: headersOnly ? null : new Uint8Array(src.slice(pos + 60, pos + 60 + len))
 		});
 		pos += 60 + len;
 	}
