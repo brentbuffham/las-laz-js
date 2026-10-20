@@ -21,6 +21,7 @@ import { decodeRecords, resolveFields } from "./read/decodeRecords.js";
 import { windows } from "./read/windows.js";
 import { makeKeep, strideFor } from "./filter/filters.js";
 import { dedupe } from "./filter/dedupe.js";
+import { openScratchSyncWriter } from "./io/ScratchBinaryFile.js";
 
 var DEFAULT_WINDOW = 64 * 1024 * 1024;
 
@@ -163,21 +164,32 @@ LasReader.prototype.readPoints = async function (opts) {
 	return out;
 };
 
-function boundsOf(c, origin) {
-	if (!c.x || !c.count) return null;
-	var ox = origin && isFinite(origin.x) ? origin.x : 0;
-	var oy = origin && isFinite(origin.y) ? origin.y : 0;
-	var oz = origin && isFinite(origin.z) ? origin.z : 0;
-	var b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity };
+function emptyBounds() { return { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity }; }
+
+// Grow raw (stored-value) bounds over one set of columns
+function extendBounds(b, c) {
 	for (var i = 0; i < c.count; i++) {
 		var x = c.x[i], y = c.y ? c.y[i] : 0, z = c.z ? c.z[i] : 0;
 		if (x < b.minX) b.minX = x; if (x > b.maxX) b.maxX = x;
 		if (y < b.minY) b.minY = y; if (y > b.maxY) b.maxY = y;
 		if (z < b.minZ) b.minZ = z; if (z > b.maxZ) b.maxZ = z;
 	}
-	// Float32 storage rounds; report world bounds to the stored precision
+	return b;
+}
+
+// Raw bounds -> world bounds (origin added back), to the stored precision
+function worldBounds(b, origin) {
+	if (!(b.minX <= b.maxX)) return null;
+	var ox = origin && isFinite(origin.x) ? origin.x : 0;
+	var oy = origin && isFinite(origin.y) ? origin.y : 0;
+	var oz = origin && isFinite(origin.z) ? origin.z : 0;
 	var r = function (v) { return Math.round(v * 1e6) / 1e6; };
 	return { minX: r(b.minX + ox), maxX: r(b.maxX + ox), minY: r(b.minY + oy), maxY: r(b.maxY + oy), minZ: r(b.minZ + oz), maxZ: r(b.maxZ + oz) };
+}
+
+function boundsOf(c, origin) {
+	if (!c.x || !c.count) return null;
+	return worldBounds(extendBounds(emptyBounds(), c), origin);
 }
 
 function statsOf(c) {
@@ -189,6 +201,40 @@ function statsOf(c) {
 	}
 	return s;
 }
+
+/**
+ * Read the selected points straight into OPFS scratch files — one per
+ * field, raw little-endian typed-array bytes — for selections too big
+ * for memory (browser, in a worker: OPFS sync handles are worker-only).
+ * @param {object} [opts] - chunks() options plus root / dir (OPFS) and prefix (file names)
+ * @returns {Promise<{count:number, fields:Object<string,string>, types:Object<string,string>, bounds:object}>}
+ */
+LasReader.prototype.readPointsToScratch = async function (opts) {
+	opts = opts || {};
+	var fields = resolveFields(this.header, opts.fields);
+	var prefix = opts.prefix || ("las-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8));
+	var where = { root: opts.root, dir: opts.dir };
+	var writers = {}, ids = {}, types = {};
+	for (var f = 0; f < fields.length; f++) {
+		ids[fields[f]] = prefix + "-" + fields[f];
+		writers[fields[f]] = await openScratchSyncWriter(ids[fields[f]], where);
+	}
+	var count = 0, b = emptyBounds();
+	try {
+		for await (var c of this.chunks(opts)) {
+			fields.forEach(function (name) {
+				var col = c[name];
+				types[name] = col.constructor.name;
+				writers[name].write(new Uint8Array(col.buffer, col.byteOffset, col.byteLength));
+			});
+			if (c.x) extendBounds(b, c);
+			count += c.count;
+		}
+	} finally {
+		fields.forEach(function (name) { writers[name].close(); });
+	}
+	return { count: count, fields: ids, types: types, bounds: worldBounds(b, opts.localOrigin) };
+};
 
 /** Close the underlying file (Node). */
 LasReader.prototype.close = async function () {
