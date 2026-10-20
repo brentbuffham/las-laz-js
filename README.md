@@ -11,7 +11,8 @@ for files far larger than memory.
   and thinning; `colourize` colours points; `writeLas` writes LAS 1.0–1.4.
 - Big files: a 1.1 GB, 34-million-point cloud reads in about 2 seconds in Node, and is never held
   in memory whole.
-- Also: a ready-made module Worker (`las-laz-js/worker`) and a Three.js demo.
+- Also: a ready-made module Worker (`las-laz-js/worker`) and a
+  [Three.js demo](https://brentbuffham.github.io/las-laz-js/).
 - Not yet: reading LAZ (0.2.0) and writing LAZ (0.3.0).
 
 ## Install
@@ -24,9 +25,13 @@ Node 22 or newer, or any current browser. No dependencies.
 
 ## Demo
 
-Drop a LAS file onto the page and it is read locally (never uploaded), in the library's Worker,
-and streamed into a Three.js viewer. The side panel runs every library function.
-Run it locally with `npm run demo`, then open http://localhost:8080/.
+Try it in the browser: **https://brentbuffham.github.io/las-laz-js/**
+
+Drop a LAS file onto the page. It is read locally (never uploaded), in the library's Worker, and
+streamed into a Three.js viewer. The side panel shows the header, VLRs and coordinate system;
+reads with class, return and thinning filters; colours by RGB, intensity, elevation or class;
+lists point statistics; and saves the points back out as LAS. To run it locally: `npm run demo`,
+then open http://localhost:8080/.
 
 ## Reading
 
