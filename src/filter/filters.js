@@ -70,3 +70,16 @@ export function countKept(bytes, recordLength, keep) {
 	for (var i = 0; i < n; i++) if (keep(view, i * recordLength)) k++;
 	return k;
 }
+
+/**
+ * Kirra's floor(count / maxPoints) record stride, as published in 0.1.0.
+ * @deprecated The reader no longer uses it (it kept only the start of a
+ *   file); kept so 0.1.0 callers do not break. Removed in 0.2.0.
+ * @param {number} pointCount
+ * @param {number} maxPoints - 0 = keep every point
+ * @returns {number} stride, at least 1
+ */
+export function strideFor(pointCount, maxPoints) {
+	if (!(maxPoints > 0) || pointCount <= maxPoints) return 1;
+	return Math.max(1, Math.floor(pointCount / maxPoints));
+}
