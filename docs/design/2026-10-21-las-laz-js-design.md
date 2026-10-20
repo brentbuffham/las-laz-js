@@ -59,8 +59,8 @@ global encoding, and the per-return counts.
 `reader.vlrs`, `reader.evlrs` — raw records (user id, record id, description, bytes).
 `reader.crs` — parsed GeoKey directory (EPSG codes where present) or OGC WKT. **Parsed, never
 reprojected**: the library has no projection dependency; callers (Kirra) reproject.
-`reader.compressed` — true for LAZ. In 0.1.0, reading points from it throws
-`LasUnsupportedError("Compressed LAZ is supported from 0.2.0")` — never a DataView crash.
+`reader.compressed` — true for LAZ. In 0.1.0, reading points from it throws `LasError`
+`COMPRESSED_LAZ` ("Compressed LAZ is supported from 0.2.0") — never a DataView crash.
 
 ### Read
 `reader.readPoints(opts) → Promise<PointColumns>`
@@ -100,8 +100,10 @@ standard colours.
 `workerProtocol.js` documents the messages (progress, result, error).
 
 ### Errors
-`LasFormatError` (malformed file: bad signature, offsets out of range, record length
-mismatch), `LasUnsupportedError` (a feature not yet supported), `LasAbortError`.
+One class, `LasError(code, message, offset?)`, with frozen `ERROR_CODES` — the same shape as
+ecw-js's `EcwError` (changed from three classes when planning, 2026-10-21). Codes: `NOT_LAS`,
+`UNSUPPORTED_VERSION`, `UNSUPPORTED`, `COMPRESSED_LAZ`, `TRUNCATED`, `BAD_HEADER`, `BAD_VLR`,
+`INVALID_ARGUMENT`, `ABORTED`, `TOO_MANY_POINTS`.
 
 ## 4. Big-file rules (Kirra's findings, written in)
 

@@ -1,0 +1,48 @@
+{
+	"name": "las-laz-js",
+	"version": "0.1.0",
+	"description": "Zero-dependency JavaScript reader and writer for ASPRS LAS point clouds (LAZ to follow), for the browser and Node, built for files larger than memory.",
+	"type": "module",
+	"exports": {
+		".": "./src/index.js",
+		"./worker": "./src/workers/lasWorker.js"
+	},
+	"files": [
+		"src",
+		"README.md",
+		"LICENSE",
+		"CHANGELOG.md"
+	],
+	"sideEffects": false,
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"test": "node --test \"test/**/*.test.js\"",
+		"test:coverage": "node --test --experimental-test-coverage --test-coverage-include=\"src/**\" --test-coverage-lines=97 --test-coverage-branches=88 --test-coverage-functions=97 \"test/**/*.test.js\"",
+		"demo": "node _dev/serve.mjs",
+		"check:private": "node _dev/checkPrivate.mjs"
+	},
+	"keywords": [
+		"las",
+		"laz",
+		"lidar",
+		"point-cloud",
+		"pointcloud",
+		"asprs",
+		"gis",
+		"survey",
+		"opfs",
+		"threejs"
+	],
+	"author": "Brent Buffham (https://kirra-design.com)",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/brentbuffham/las-laz-js.git"
+	},
+	"bugs": {
+		"url": "https://github.com/brentbuffham/las-laz-js/issues"
+	},
+	"homepage": "https://github.com/brentbuffham/las-laz-js#readme"
+}
