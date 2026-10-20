@@ -14,6 +14,12 @@
 //   so one hot return does not wash the rest out.
 // classification: conventional viewer colours. ASPRS defines the
 //   codes, not colours; these follow common LiDAR-viewer practice.
+//
+// createChunkColourizer colours a STREAM of chunks with one set of
+// rules, so neighbouring windows match: elevation over the file's
+// header Z range, intensity over the first chunk's percentiles, and
+// the 8-bit decision made once (it only ever moves to 16-bit, when a
+// later chunk holds a value above 255).
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -81,9 +87,15 @@ function rampColours(values, n, range, ramp) {
 	return out;
 }
 
+function maxRgb(points) {
+	var n = points.count;
+	return Math.max(rangeOf(need(points, "red"), n)[1], rangeOf(need(points, "green"), n)[1], rangeOf(need(points, "blue"), n)[1]);
+}
+
 /**
  * @param {object} points - PointColumns.
- * @param {{by:string, ramp?:string, range?:number[]}} opts
+ * @param {{by:string, ramp?:string, range?:number[], eightBit?:boolean}} opts - eightBit
+ *   overrides the 8-bit colour detection
  * @returns {Uint8Array} r, g, b per point
  */
 export function colourize(points, opts) {
@@ -96,8 +108,7 @@ export function colourize(points, opts) {
 	switch (opts.by) {
 		case "rgb": {
 			var r = need(points, "red"), g = need(points, "green"), b = need(points, "blue");
-			var max = Math.max(rangeOf(r, n)[1], rangeOf(g, n)[1], rangeOf(b, n)[1]);
-			var eightBit = max <= 255;
+			var eightBit = typeof opts.eightBit === "boolean" ? opts.eightBit : maxRgb(points) <= 255;
 			out = new Uint8Array(n * 3);
 			for (i = 0; i < n; i++) {
 				out[i * 3] = eightBit ? r[i] : Math.min(255, Math.round(r[i] / 256));
@@ -126,4 +137,25 @@ export function colourize(points, opts) {
 		default:
 			throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "colourize by \"" + opts.by + "\" is not a mode (rgb, intensity, elevation, classification)");
 	}
+}
+
+/**
+ * Colour a stream of chunks (reader.chunks) consistently from window to window.
+ * @param {{by:string, ramp?:string, range?:number[]}} opts - as colourize
+ * @param {{minZ:number, maxZ:number}} [bounds] - the file's header bounds (elevation range)
+ * @param {{z?:number}} [localOrigin] - the origin the chunks were read with
+ * @returns {function(object): Uint8Array} colours one chunk
+ */
+export function createChunkColourizer(opts, bounds, localOrigin) {
+	opts = opts || {};
+	var range = opts.range || null, eightBit = null;
+	if (!range && opts.by === "elevation" && bounds && bounds.maxZ >= bounds.minZ) {
+		var oz = localOrigin && isFinite(localOrigin.z) ? localOrigin.z : 0;
+		range = [bounds.minZ - oz, bounds.maxZ - oz];
+	}
+	return function (points) {
+		if (opts.by === "intensity" && !range && points.count) range = percentiles(need(points, "intensity"), points.count);
+		if (opts.by === "rgb" && points.count && eightBit !== false) eightBit = maxRgb(points) <= 255;
+		return colourize(points, Object.assign({}, opts, { range: range || undefined, eightBit: eightBit === null ? undefined : eightBit }));
+	};
 }

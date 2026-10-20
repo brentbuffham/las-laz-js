@@ -7,7 +7,9 @@
 //   open                { blob | bytes, windowSize? } -> { header, vlrs, evlrs, crs, compressed }
 //   readPoints          readPoints options + colour?  -> PointColumns (+ colours)
 //   chunks              chunks options + colour?      -> streams { id, type: "chunk", chunk } per
-//                                                        window, then result { count }
+//                                                        window, then result { count }; colours
+//                                                        follow one rule for the whole stream
+//                                                        (createChunkColourizer)
 //   readPointsToScratch readPointsToScratch options   -> { count, fields, types, bounds }
 //   colourize           { points, by, ramp?, range? } -> Uint8Array
 //   abort               { id }                        -> cancels that job (it rejects ABORTED)
@@ -19,7 +21,7 @@
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { openLas } from "../LasReader.js";
-import { colourize } from "../colour/colourize.js";
+import { colourize, createChunkColourizer } from "../colour/colourize.js";
 
 function buffersOf(cols) {
 	var out = [];
@@ -73,9 +75,10 @@ export function createWorkerHandler(post) {
 			return { result: cols, transfer: buffersOf(cols) };
 		},
 		chunks: async function (id, payload, controller) {
-			var count = 0;
-			for await (var c of needReader().chunks(readOptions(id, payload, controller))) {
-				withColour(c, payload && payload.colour);
+			var count = 0, r = needReader();
+			var paint = payload.colour ? createChunkColourizer(payload.colour, r.header.bounds, payload.localOrigin) : null;
+			for await (var c of r.chunks(readOptions(id, payload, controller))) {
+				if (paint) c.colours = paint(c);
 				count += c.count;
 				post({ id: id, type: "chunk", chunk: c }, buffersOf(c));
 			}

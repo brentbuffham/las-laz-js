@@ -6,7 +6,7 @@
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colourize, RAMPS, CLASS_COLOURS } from "../../src/colour/colourize.js";
+import { colourize, RAMPS, CLASS_COLOURS, createChunkColourizer } from "../../src/colour/colourize.js";
 
 function rgbAt(c, i) { return [c[i * 3], c[i * 3 + 1], c[i * 3 + 2]]; }
 
@@ -70,4 +70,27 @@ test("ramps are exposed; a missing field or unknown mode is INVALID_ARGUMENT", f
 	assert.ok(RAMPS.spectrum && RAMPS.greyscale);
 	assert.throws(function () { colourize({ count: 1, x: Float64Array.from([1]) }, { by: "rgb" }); }, { code: "INVALID_ARGUMENT" });
 	assert.throws(function () { colourize({ count: 1, z: Float64Array.from([1]) }, { by: "rainbow" }); }, { code: "INVALID_ARGUMENT" });
+});
+
+test("createChunkColourizer pins the intensity range from the first chunk", function () {
+	var paint = createChunkColourizer({ by: "intensity" });
+	var first = new Uint16Array(101); for (var i = 0; i <= 100; i++) first[i] = i;   // percentiles 2 and 98
+	paint({ count: 101, intensity: first });
+	var second = paint({ count: 2, intensity: new Uint16Array([50, 2000]) });
+	assert.deepEqual(Array.from(second), [128, 128, 128, 255, 255, 255]);   // 50 of 2..98: t = 0.5, round(127.5) = 128; 2000 clamps
+});
+
+test("createChunkColourizer decides 8-bit colour once, and moves to 16-bit if a later chunk proves it", function () {
+	var paint = createChunkColourizer({ by: "rgb" });
+	var a = paint({ count: 1, red: new Uint16Array([200]), green: new Uint16Array([10]), blue: new Uint16Array([0]) });
+	assert.deepEqual(Array.from(a), [200, 10, 0]);
+	var b = paint({ count: 1, red: new Uint16Array([200]), green: new Uint16Array([0]), blue: new Uint16Array([0]) });
+	assert.deepEqual(Array.from(b), [200, 0, 0]);            // still 8-bit
+	var c = paint({ count: 1, red: new Uint16Array([65535]), green: new Uint16Array([25600]), blue: new Uint16Array([0]) });
+	assert.deepEqual(Array.from(c), [255, 100, 0]);          // 16-bit from here on
+});
+
+test("createChunkColourizer uses the elevation range it is given (header bounds, less the local origin)", function () {
+	var paint = createChunkColourizer({ by: "elevation" }, { minZ: 100, maxZ: 200 }, { x: 0, y: 0, z: 100 });
+	assert.deepEqual(Array.from(paint({ count: 1, z: new Float64Array([50]) })), [0, 255, 0]);   // z 50 + origin 100 = 150 -> t = 0.5 -> [0, 255, 0]
 });

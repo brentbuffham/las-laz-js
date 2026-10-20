@@ -88,3 +88,15 @@ test("close closes the reader", async function () {
 	await h.handle({ id: 10, type: "readPoints", payload: {} });
 	assert.equal(h.of(10).pop().m.code, "INVALID_ARGUMENT");
 });
+
+test("chunks colour by elevation over the FILE's Z range, so every window matches", async function () {
+	var h = harness();
+	await h.handle({ id: 1, type: "open", payload: { blob: file(100), windowSize: 34 * 10 } });   // 10 windows, z = 0..99
+	await h.handle({ id: 2, type: "chunks", payload: { fields: ["z"], colour: { by: "elevation" } } });
+	var chunks = h.of(2).filter(function (x) { return x.m.type === "chunk"; }).map(function (x) { return x.m.chunk; });
+	assert.equal(chunks.length, 10);
+	// z = 9 -> t = 9 / 99, green = floor(t * 4 * 255) = 92 (a per-window range would make it red)
+	assert.deepEqual(Array.from(chunks[0].colours.subarray(27, 30)), [0, 92, 255]);
+	// z = 10 -> t = 10 / 99, green = floor(103.03) = 103 (a per-window range would make it blue)
+	assert.deepEqual(Array.from(chunks[1].colours.subarray(0, 3)), [0, 103, 255]);
+});
