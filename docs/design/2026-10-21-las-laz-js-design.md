@@ -87,8 +87,8 @@ larger than memory. `reader.readPointsToScratch(opts)` — writes the selected c
 → Uint8Array` (r, g, b per point). LAS 16-bit colour is scaled to 8 bits. **New (not in
 Kirra):** files that store 8-bit values in the 16-bit fields (a common writer bug) are detected
 from the maximum and not divided by 256 — Kirra's reader divides unconditionally
-(`lasImportWorker.js:198`), which turns such files almost black. Classification uses the ASPRS
-standard colours.
+(`lasImportWorker.js:198`), which turns such files almost black. Classification uses the usual
+LiDAR-viewer colours (ASPRS defines the codes, not colours).
 
 ### Write
 `writeLas(points, opts) → Promise<Blob | Uint8Array>` — `version` (1.2 / 1.4), `pointFormat`,

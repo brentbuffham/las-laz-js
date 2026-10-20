@@ -21,3 +21,4 @@ export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
 export { SCRATCH_DIR, openScratchSyncWriter, openScratchReader, removeScratchFile, sweepStaleScratchFiles, listScratchFiles, getScratchFile } from "./io/ScratchBinaryFile.js";
+export { colourize, RAMPS, CLASS_COLOURS } from "./colour/colourize.js";
