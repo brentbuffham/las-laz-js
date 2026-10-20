@@ -26,11 +26,15 @@ export function NodeFileSource(handle, size) {
  * @param {string} path
  * @returns {Promise<NodeFileSource>}
  */
+var NODE_FS = ["node", "fs/promises"].join(":");
+
 NodeFileSource.open = async function (path) {
 	if (typeof path !== "string" || !path) {
 		throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "NodeFileSource needs a file path");
 	}
-	var fs = await import("node:fs/promises");
+	// A non-literal specifier, so browser bundlers (esbuild, webpack, Vite)
+	// leave it alone instead of failing to resolve a Node built-in
+	var fs = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_FS);
 	var handle = await fs.open(path, "r");
 	var stat = await handle.stat();
 	return new NodeFileSource(handle, stat.size);

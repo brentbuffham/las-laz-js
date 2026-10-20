@@ -6,7 +6,10 @@
 //     wrap past 2 GB (Kirra's "position arithmetic" trap); masks on
 //     single field bytes are marked // bits-ok
 //  2. no static node: import — the browser bundle must never load
-//     Node modules (NodeFileSource imports node:fs lazily)
+//     Node modules (NodeFileSource imports node:fs lazily) — and no
+//     dynamic import() of a LITERAL node: specifier either: browser
+//     bundlers (esbuild, webpack) try to resolve a literal and fail
+//     with "Could not resolve node:fs/promises"
 //  3. nothing in src imports from test/ or outside the package
 //==========================================================
 /* prettier-ignore-file */
@@ -75,6 +78,16 @@ test("src never imports from test/ or from outside the package", function () {
 			if (!m) return;
 			var ups = (m[1].match(/\.\.\//g) || []).length;
 			if (ups > depth || /\/test\//.test(m[1])) hits.push(relative(SRC, f) + ":" + (i + 1) + " " + m[1]);
+		});
+	});
+	assert.deepEqual(hits, []);
+});
+
+test("(static pin) no dynamic import() of a literal node: specifier in src/", function () {
+	var hits = [];
+	files(SRC).forEach(function (f) {
+		readFileSync(f, "utf8").split(/\r?\n/).forEach(function (line, i) {
+			if (/import\(\s*(\/\*[^*]*\*\/\s*)*["'`]node:/.test(line)) hits.push(relative(SRC, f) + ":" + (i + 1));
 		});
 	});
 	assert.deepEqual(hits, []);
