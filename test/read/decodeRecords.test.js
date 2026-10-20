@@ -115,9 +115,13 @@ test("an unknown field name is INVALID_ARGUMENT", function () {
 	assert.throws(function () { decode(0, "1.2", ["x", "colour"]); }, { code: "INVALID_ARGUMENT" });
 });
 
-test("stride keeps every n-th record counted from the file start (firstIndex)", function () {
-	assert.equal(decode(0, "1.2", ["x"], { stride: 2 }).count, 1);
-	var odd = decode(0, "1.2", ["x"], { stride: 2, firstIndex: 1 });
-	assert.equal(odd.count, 1);
-	assert.equal(odd.x[0], 477000); // record 1 of the window = file record 2
+test("thin keeps target of total records, evenly, carried across calls", function () {
+	var thin = { total: 4, target: 2, acc: 0 };      // keep records 1 and 3 of four
+	var a = decode(0, "1.2", ["x"], { thin: thin });  // records 0, 1
+	assert.equal(a.count, 1);
+	assert.equal(a.x[0], 477000);                     // record 1
+	var b = decode(0, "1.2", ["x"], { thin: thin });  // records 2, 3
+	assert.equal(b.count, 1);
+	assert.equal(b.x[0], 477000);                     // record 3
+	assert.equal(thin.acc, 0);
 });

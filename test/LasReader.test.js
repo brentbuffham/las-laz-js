@@ -64,8 +64,9 @@ test("filters and maxPoints through readPoints: hand counts", async function () 
 	var las = await openLas(lasOf(1000), { windowSize: 2000 });
 	assert.equal((await las.readPoints({ fields: ["x"], classes: [2] })).count, 250);
 	var thin = await las.readPoints({ fields: ["x"], maxPoints: 300 });
-	assert.equal(thin.count, 300);                // stride floor(1000 / 300) = 3 gives 334, capped at 300
-	assert.equal(thin.x[1], 1003);
+	assert.equal(thin.count, 300);                // even thinning keeps exactly maxPoints
+	assert.equal(thin.x[0], 1003);                // record ceil(1 * 1000 / 300) - 1 = 3
+	assert.equal(thin.x[1], 1006);                // record ceil(2 * 1000 / 300) - 1 = 6
 	assert.equal((await las.readPoints({ fields: ["x"], maxPoints: 0 })).count, 1000);
 	var box = await las.readPoints({ fields: ["x"], bounds: { minX: 1100, maxX: 1109, minY: -1e9, maxY: 1e9, minZ: -1e9, maxZ: 1e9 } });
 	assert.equal(box.count, 10);
@@ -139,10 +140,39 @@ test("LAS 1.4 EVLR with WKT is read and gives the CRS", async function () {
 	assert.equal((await las.readPoints({ fields: ["x"] })).count, 3);
 });
 
-test("maxPoints picks the same points whether read whole or in windows (stride counts from the file start)", async function () {
+test("maxPoints picks the same points whether read whole or in windows (the pick runs across windows)", async function () {
 	var b = lasOf(1000);
 	var whole = await (await openLas(b)).readPoints({ fields: ["x"], maxPoints: 300 });
 	var win = await (await openLas(b, { windowSize: 2000 })).readPoints({ fields: ["x"], maxPoints: 300 });
 	assert.deepEqual(Array.from(win.x), Array.from(whole.x));
-	assert.equal(whole.x[299], 1000 + 3 * 299); // every 3rd record from record 0
+	assert.equal(whole.x[299], 1999);           // the last pick is the last record
+});
+
+// Even thinning keeps record ceil(j * N / m) - 1 for j = 1..m (worked by hand below)
+test("maxPoints spreads across the whole file, not just its start", async function () {
+	var las = await openLas(lasOf(1990), { windowSize: 34 * 100 });
+	var thin = await las.readPoints({ fields: ["x"], maxPoints: 1000 });
+	assert.equal(thin.count, 1000);
+	assert.equal(thin.x[0], 1001);                // ceil(1 * 1990 / 1000) - 1 = 1
+	assert.equal(thin.x[999], 2989);              // ceil(1000 * 1990 / 1000) - 1 = 1989, the last record
+});
+
+test("maxPoints counts the points that pass the filters, then thins those", async function () {
+	// class 2 on every 4th record: 250 of 1000 pass; thin 250 to 100
+	var las = await openLas(lasOf(1000), { windowSize: 34 * 64 });
+	var pts = await las.readPoints({ fields: ["x", "classification"], classes: [2], maxPoints: 100 });
+	assert.equal(pts.count, 100);
+	assert.ok(Array.from(pts.classification).every(function (c) { return c === 2; }));
+	assert.equal(pts.x[0], 1008);                 // passing point ceil(1 * 250 / 100) - 1 = 2 -> record 8
+	assert.equal(pts.x[99], 1996);                // passing point 249 -> record 996
+	var none = await las.readPoints({ fields: ["x"], classes: [2], maxPoints: 1000 });
+	assert.equal(none.count, 250);                // fewer pass than maxPoints: keep them all
+});
+
+test("chunks thins over the filtered points too", async function () {
+	var las = await openLas(lasOf(1000), { windowSize: 34 * 64 });
+	var xs = [];
+	for await (var c of las.chunks({ fields: ["x"], classes: [2], maxPoints: 100 })) for (var i = 0; i < c.count; i++) xs.push(c.x[i]);
+	assert.equal(xs.length, 100);
+	assert.equal(xs[99], 1996);
 });

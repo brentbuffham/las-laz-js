@@ -4,9 +4,10 @@
 // rejected points cost one or two byte reads (Kirra's classFilter
 // trick, generalised): classification codes, return numbers and a
 // 3D box. Filters combine with AND.
-// strideFor is Kirra's maxPoints rule: keep every
-// floor(count / maxPoints)-th record; 0 keeps every point. The
-// reader also caps the kept count at maxPoints.
+// maxPoints thinning is NOT Kirra's floor-stride-and-cap rule, which
+// kept only the start of the file and, run before the filters,
+// could leave nothing: decodeRecords thins the records that PASS,
+// evenly over the whole file (countKept supplies their number).
 //==========================================================
 
 import { POINT_FORMATS } from "../format/PointFormats.js";
@@ -57,12 +58,15 @@ export function makeKeep(filter, header) {
 }
 
 /**
- * Record stride for a maxPoints cap (Kirra's rule).
- * @param {number} pointCount
- * @param {number} maxPoints - 0 = keep every point
- * @returns {number} stride, at least 1
+ * Count the records in a window of whole records that pass keep.
+ * @param {Uint8Array} bytes
+ * @param {number} recordLength
+ * @param {function(DataView, number): boolean} keep
+ * @returns {number}
  */
-export function strideFor(pointCount, maxPoints) {
-	if (!(maxPoints > 0) || pointCount <= maxPoints) return 1;
-	return Math.max(1, Math.floor(pointCount / maxPoints));
+export function countKept(bytes, recordLength, keep) {
+	var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	var n = Math.floor(bytes.length / recordLength), k = 0;
+	for (var i = 0; i < n; i++) if (keep(view, i * recordLength)) k++;
+	return k;
 }

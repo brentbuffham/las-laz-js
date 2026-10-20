@@ -11,9 +11,12 @@
 // data, never on positions (marked // bits-ok for the guard test).
 //
 // opts.keep(view, recordOffset) rejects a record before it is
-// decoded (filters, see filter/filters.js). opts.stride keeps every
-// stride-th record counted from the file's first record
-// (opts.firstIndex = the window's first record number).
+// decoded (filters, see filter/filters.js). opts.thin
+// { total, target, acc } then keeps exactly target of the total
+// records that pass, spread evenly: an integer accumulator gains
+// target per passing record and keeps the record each time it
+// reaches total (Bresenham), so record ceil(j * total / target) - 1
+// is the j-th kept. acc is carried from window to window.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -69,7 +72,7 @@ export function resolveFields(header, fields) {
  * Decode a window of whole point records.
  * @param {Uint8Array} bytes - whole records, the first at bytes[0].
  * @param {object} header - from parseHeader.
- * @param {object} [opts] - { fields, keep, stride, firstIndex, localOrigin, float32 }
+ * @param {object} [opts] - { fields, keep, thin, localOrigin, float32 }
  * @returns {object} PointColumns: { count, <field>: TypedArray, ... }
  */
 export function decodeRecords(bytes, header, opts) {
@@ -79,8 +82,7 @@ export function decodeRecords(bytes, header, opts) {
 	var len = header.recordLength;
 	var n = Math.floor(bytes.length / len);
 	var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-	var stride = opts.stride > 1 ? opts.stride : 1;
-	var first = opts.firstIndex || 0;
+	var thin = opts.thin && opts.thin.target < opts.thin.total ? opts.thin : null;
 	var keep = typeof opts.keep === "function" ? opts.keep : null;
 	var origin = opts.localOrigin || null;
 	var ox = origin && isFinite(origin.x) ? origin.x : 0;
@@ -103,9 +105,13 @@ export function decodeRecords(bytes, header, opts) {
 
 	var k = 0;
 	for (var i = 0; i < n; i++) {
-		if (stride > 1 && (first + i) % stride !== 0) continue;
 		var at = i * len;
 		if (keep && !keep(view, at)) continue;
+		if (thin) {
+			thin.acc += thin.target;
+			if (thin.acc < thin.total) continue;
+			thin.acc -= thin.total;
+		}
 		if (want.x) cols.x[k] = view.getInt32(at, LE) * sx + tx;
 		if (want.y) cols.y[k] = view.getInt32(at + 4, LE) * sy + ty;
 		if (want.z) cols.z[k] = view.getInt32(at + 8, LE) * sz + tz;

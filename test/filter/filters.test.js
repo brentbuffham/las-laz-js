@@ -1,13 +1,13 @@
 // test/filter/filters.test.js
 //==========================================================
-// Filters: classes, returns, bounds (on raw records), stride
-// (Kirra's maxPoints rule) and dedupe (Kirra's XY grid rule).
+// Filters: classes, returns, bounds (on raw records), countKept
+// (for maxPoints over filtered points) and dedupe (Kirra's XY grid rule).
 // Every count is worked by hand from the points below.
 //==========================================================
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { makeKeep, strideFor } from "../../src/filter/filters.js";
+import { makeKeep, countKept } from "../../src/filter/filters.js";
 import { dedupe } from "../../src/filter/dedupe.js";
 import { decodeRecords } from "../../src/read/decodeRecords.js";
 import { parseHeader } from "../../src/format/LasHeader.js";
@@ -56,11 +56,10 @@ test("no filter gives null (the decoder then skips the test)", function () {
 	assert.equal(makeKeep(undefined, h), null);
 });
 
-test("strideFor: Kirra's maxPoints rule, 0 keeps every point", function () {
-	assert.equal(strideFor(1013812, 50000), 20);  // floor(1013812 / 50000)
-	assert.equal(strideFor(1013812, 0), 1);
-	assert.equal(strideFor(40000, 50000), 1);
-	assert.equal(strideFor(99999, 50000), 1);     // floor < 2 -> every point, capped by the reader
+test("countKept counts the records that pass", function () {
+	var bytes = new Uint8Array(5 * 4);
+	for (var i = 0; i < 5; i++) bytes[i * 4] = i;          // record i holds i in its first byte
+	assert.equal(countKept(bytes, 4, function (v, at) { return v.getUint8(at) % 2 === 0; }), 3);   // 0, 2, 4
 });
 
 test("dedupe at 0.1 m: points 0.00 / 0.05 / 0.30 m apart keep 2 (XY)", function () {

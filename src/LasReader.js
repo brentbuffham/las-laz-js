@@ -19,7 +19,7 @@ import { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 import { parseCrs } from "./format/LasCrs.js";
 import { decodeRecords, resolveFields } from "./read/decodeRecords.js";
 import { windows } from "./read/windows.js";
-import { makeKeep, strideFor } from "./filter/filters.js";
+import { makeKeep, countKept } from "./filter/filters.js";
 import { dedupe } from "./filter/dedupe.js";
 import { openScratchSyncWriter } from "./io/ScratchBinaryFile.js";
 
@@ -107,29 +107,35 @@ LasReader.prototype.chunks = async function* (opts) {
 	this._check();
 	var h = this.header;
 	var keep = makeKeep(opts, h);
-	var stride = strideFor(h.pointCount, opts.maxPoints);
-	var cap = opts.maxPoints > 0 ? opts.maxPoints : Infinity;
 	var fields = resolveFields(h, opts.fields);
 	var list = windows(h, this._windowSize);
+	var thin = null;
+	if (opts.maxPoints > 0) {
+		// Thin the points that pass the filters; with filters set, count them first (a second read)
+		var passing = keep ? await this._countPassing(list, keep, opts.signal) : h.pointCount;
+		if (passing > opts.maxPoints) thin = { total: passing, target: opts.maxPoints, acc: 0 };
+	}
 	var kept = 0;
-	for (var w = 0; w < list.length && kept < cap; w++) {
+	for (var w = 0; w < list.length; w++) {
 		if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
 		var win = list[w];
 		var bytes = await this._src.read(win.start, win.end);
-		var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, stride: stride, firstIndex: win.firstRecord, localOrigin: opts.localOrigin, float32: opts.float32 });
-		if (kept + cols.count > cap) cols = trim(cols, fields, cap - kept);
+		var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32 });
 		kept += cols.count;
-		if (typeof opts.onProgress === "function") opts.onProgress(kept >= cap ? 1 : (w + 1) / list.length, "read " + kept + " points");
+		if (typeof opts.onProgress === "function") opts.onProgress((w + 1) / list.length, "read " + kept + " points");
 		yield cols;
 	}
 	if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
 };
 
-function trim(cols, fields, n) {
-	var out = { count: n };
-	fields.forEach(function (f) { out[f] = cols[f].slice(0, n); });
-	return out;
-}
+LasReader.prototype._countPassing = async function (list, keep, signal) {
+	var n = 0;
+	for (var w = 0; w < list.length; w++) {
+		if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
+		n += countKept(await this._src.read(list[w].start, list[w].end), this.header.recordLength, keep);
+	}
+	return n;
+};
 
 /**
  * Read the selected points into one set of columns.

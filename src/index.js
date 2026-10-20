@@ -15,7 +15,7 @@ export { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 export { parseCrs } from "./format/LasCrs.js";
 export { POINT_FORMATS, formatHasRgb } from "./format/PointFormats.js";
 export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords.js";
-export { makeKeep, strideFor } from "./filter/filters.js";
+export { makeKeep, countKept } from "./filter/filters.js";
 export { dedupe } from "./filter/dedupe.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";

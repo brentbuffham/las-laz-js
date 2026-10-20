@@ -60,6 +60,8 @@ red green blue nir`. Fields a point format does not hold are left out. `scanAngl
 degrees for every format.
 
 Filters run on the raw record before it is decoded, so a filtered-out point costs a byte read.
+`maxPoints` keeps exactly that many of the points that pass the filters, spread evenly over
+the whole file; with filters set it first counts the passing points, which reads the file twice.
 
 ## Files bigger than memory
 
