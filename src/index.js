@@ -22,3 +22,5 @@ export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
 export { SCRATCH_DIR, openScratchSyncWriter, openScratchReader, removeScratchFile, sweepStaleScratchFiles, listScratchFiles, getScratchFile } from "./io/ScratchBinaryFile.js";
 export { colourize, RAMPS, CLASS_COLOURS } from "./colour/colourize.js";
+export { writeLas, createLasWriter } from "./write/writeLas.js";
+export { chooseScaleOffset } from "./write/scaleOffset.js";
