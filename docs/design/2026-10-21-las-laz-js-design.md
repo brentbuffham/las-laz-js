@@ -84,8 +84,11 @@ larger than memory. `reader.readPointsToScratch(opts)` — writes the selected c
 
 ### Colour
 `colourize(points, { by: "rgb" | "intensity" | "elevation" | "classification", ramp?, range? })
-→ Uint8Array` (r, g, b per point). LAS 16-bit colour is scaled to 8 bits, with the common 8-bit
-mis-encoding detected (Kirra's finding). Classification uses the ASPRS standard colours.
+→ Uint8Array` (r, g, b per point). LAS 16-bit colour is scaled to 8 bits. **New (not in
+Kirra):** files that store 8-bit values in the 16-bit fields (a common writer bug) are detected
+from the maximum and not divided by 256 — Kirra's reader divides unconditionally
+(`lasImportWorker.js:198`), which turns such files almost black. Classification uses the ASPRS
+standard colours.
 
 ### Write
 `writeLas(points, opts) → Promise<Blob | Uint8Array>` — `version` (1.2 / 1.4), `pointFormat`,
