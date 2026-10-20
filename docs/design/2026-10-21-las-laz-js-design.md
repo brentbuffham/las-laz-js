@@ -134,8 +134,8 @@ ecw-js's `EcwError` (changed from three classes when planning, 2026-10-21). Code
 
 - **0.2.0 — read LAZ.** Port of laz-rs: arithmetic decoder, LASzip chunk table, point10 /
   gpstime11 / rgb12 (formats 0–3) and the layered 1.4 decoders (formats 6–8). Oracle: each of
-  Brent's `.laz` files decodes to exactly the records of its `.las` twin (HOLETRIMMED, the
-  28 M-point TRIMMED cloud). README credits laz-rs. Kirra adopts the library here: its LAS
+  Brent's `.laz` files decodes to exactly the records of its `.las` twin (a 1 M-point pair and
+  a 28 M-point pair, kept private). README credits laz-rs. Kirra adopts the library here: its LAS
   import / export call `las-laz-js`; Kirra's output before and after must match.
 - **0.3.0 — write LAZ.** Encoders for the same formats; oracle: round trip through the 0.2.0
   reader, and the files open in CloudCompare / PDAL.
