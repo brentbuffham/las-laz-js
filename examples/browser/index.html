@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>las-laz-js demo</title>
+	<link rel="stylesheet" href="demo.css">
+	<!-- Three.js is the demo's only dependency (pinned); the library itself has none -->
+	<script type="importmap">
+	{ "imports": {
+		"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+		"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+	} }
+	</script>
+</head>
+<body>
+	<header class="topbar">
+		<div class="brand"><strong>las-laz-js</strong> <span class="muted">demo</span></div>
+		<div class="file-name" id="fileName">Drop a .las file anywhere</div>
+		<label class="button">
+			Open file
+			<input type="file" id="fileInput" accept=".las,.laz" hidden>
+		</label>
+		<button class="icon-button" id="togglePanel" title="Show or hide the side panel" aria-label="Toggle panel">☰</button>
+	</header>
+
+	<main class="layout">
+		<section class="viewer" id="viewerWrap">
+			<div id="viewer"></div>
+			<div class="viewer-empty" id="viewerEmpty">
+				<p><strong>Drop a LAS file here</strong></p>
+				<p class="muted">Your file never leaves your browser. It is read locally, in a Worker, a window at a time.</p>
+			</div>
+			<div class="viewer-hud" id="hud"></div>
+		</section>
+
+		<aside class="panel" id="panel">
+			<nav class="tabs" role="tablist">
+				<button class="tab active" data-tab="header" role="tab">Header</button>
+				<button class="tab" data-tab="read" role="tab">Read</button>
+				<button class="tab" data-tab="colour" role="tab">Colour</button>
+				<button class="tab" data-tab="stats" role="tab">Stats</button>
+				<button class="tab" data-tab="write" role="tab">Write</button>
+				<button class="tab" data-tab="about" role="tab">About</button>
+			</nav>
+
+			<div class="tab-body" id="tab-header">
+				<p class="muted" id="headerEmpty">Open a file to see its header, coordinate system and records.</p>
+				<table class="kv" id="headerTable"></table>
+				<h3>VLRs</h3>
+				<table class="grid-table" id="vlrTable"></table>
+			</div>
+
+			<div class="tab-body hidden" id="tab-read">
+				<p class="muted">Streams the points into the viewer window by window (<code>chunks</code>).</p>
+				<div class="form-grid">
+					<label>Classes <input type="text" id="classes" placeholder="all (e.g. 2,6)"></label>
+					<label>Returns <input type="text" id="returns" placeholder="all (e.g. 1)"></label>
+					<label>Max points <input type="number" id="maxPoints" value="5000000" min="0" step="100000" title="0 = every point"></label>
+					<label>Window (MB) <input type="number" id="windowMb" value="64" min="1" max="1024"></label>
+				</div>
+				<div class="row">
+					<button class="button" id="readButton" disabled>Read points</button>
+					<button class="button" id="abortButton" disabled>Stop</button>
+				</div>
+				<p class="muted small">The viewer draws at most <span id="drawCapText">20,000,000</span> points; Max points thins the read evenly (every n-th point).</p>
+			</div>
+
+			<div class="tab-body hidden" id="tab-colour">
+				<label class="field">Colour by
+					<select id="colourBy">
+						<option value="elevation">Elevation</option>
+						<option value="rgb">RGB</option>
+						<option value="intensity">Intensity</option>
+						<option value="classification">Classification</option>
+					</select>
+				</label>
+				<label class="field">Ramp
+					<select id="ramp">
+						<option value="spectrum">Spectrum</option>
+						<option value="greyscale">Greyscale</option>
+					</select>
+				</label>
+				<label class="field">Point size (px)
+					<input type="number" id="pointSize" value="2" min="1" max="10">
+				</label>
+				<p class="muted small">Changing the colour re-reads the file, coloured in the Worker by <code>colourize</code>.</p>
+			</div>
+
+			<div class="tab-body hidden" id="tab-stats">
+				<p class="muted" id="statsEmpty">Read the points to see statistics.</p>
+				<table class="kv" id="statsTable"></table>
+				<h3>Classification</h3>
+				<table class="grid-table" id="classTable"></table>
+			</div>
+
+			<div class="tab-body hidden" id="tab-write">
+				<p class="muted">Writes the points read (with every field the format holds) as a new LAS file with <code>writeLas</code>, then reads it back to check the round trip.</p>
+				<label class="field">LAS version
+					<select id="writeVersion"><option>1.2</option><option>1.4</option></select>
+				</label>
+				<label class="field">Point format
+					<select id="writeFormat"></select>
+				</label>
+				<div class="row"><button class="button" id="writeButton" disabled>Save as LAS</button></div>
+				<div id="writeResult" class="muted small"></div>
+			</div>
+
+			<div class="tab-body hidden" id="tab-about">
+				<p><strong>las-laz-js</strong> reads and writes ASPRS LAS point clouds in plain JavaScript, with no dependencies, in the browser and Node. LAZ reading arrives in 0.2.0.</p>
+				<p class="muted">Big files stream through in windows of whole records, never held whole. This page draws with Three.js; the library itself has no dependency.</p>
+				<p><a href="https://github.com/brentbuffham/las-laz-js">Source and docs</a> · MIT licence · by Brent Buffham (kirra-design.com)</p>
+			</div>
+		</aside>
+	</main>
+
+	<footer class="statusbar">
+		<div class="progress-wrap"><progress id="progress" max="1" value="0"></progress><span id="status" class="muted">Ready</span></div>
+		<div class="stats" id="stats"></div>
+	</footer>
+	<div class="drop-overlay hidden" id="dropOverlay">Drop the LAS file</div>
+
+	<script type="module" src="demo.js"></script>
+</body>
+</html>
