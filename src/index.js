@@ -9,3 +9,15 @@
 export var VERSION = "0.1.0";
 
 export { LasError, ERROR_CODES } from "./errors.js";
+export { openLas, LasReader } from "./LasReader.js";
+export { parseHeader } from "./format/LasHeader.js";
+export { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
+export { parseCrs } from "./format/LasCrs.js";
+export { POINT_FORMATS, formatHasRgb } from "./format/PointFormats.js";
+export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords.js";
+export { makeKeep, strideFor } from "./filter/filters.js";
+export { dedupe } from "./filter/dedupe.js";
+export { MemorySource } from "./io/MemorySource.js";
+export { BlobSource } from "./io/BlobSource.js";
+export { NodeFileSource } from "./io/NodeFileSource.js";
+export { SCRATCH_DIR, openScratchSyncWriter, openScratchReader, removeScratchFile, sweepStaleScratchFiles, listScratchFiles, getScratchFile } from "./io/ScratchBinaryFile.js";
