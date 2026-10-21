@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0 (2026-10-21)
+
+Reads LAZ.
+
+- LAZ (LASzip) point formats 0–3 and 6–8, with extra bytes, are read by `openLas` /
+  `readPoints` / `chunks` / `readPointsToScratch` and the worker exactly as LAS is: each chunk
+  is decompressed into plain LAS records, then decoded by the same code, so every option works
+  the same. Plain JavaScript, translated from laz-rs (Apache-2.0); the package licence is now
+  `MIT AND Apache-2.0` (see `NOTICE`).
+- Checked against an independent encoder: fixtures compressed by PDAL decode to exactly PDAL's own
+  decompression, and real files to exactly their LAS twins (1 M points), or to PDAL's decompression
+  (10 M points).
+- `reader.laz` describes the compression. Wave-packet LAZ items, LASzip item version 1 and files
+  without a chunk table are `UNSUPPORTED`; a LAZ cut short is `TRUNCATED`. `COMPRESSED_LAZ` is
+  no longer thrown.
+- Breaking: `strideFor` (deprecated in 0.1.1) is removed.
+- Demo: reads LAZ, and shows its compression.
+
 ## 0.1.1 (2026-10-21)
 
 Fixes from the 0.1.0 review. No breaking changes.

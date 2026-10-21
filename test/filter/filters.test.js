@@ -7,7 +7,7 @@
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { makeKeep, countKept, strideFor } from "../../src/filter/filters.js";
+import { makeKeep, countKept } from "../../src/filter/filters.js";
 import { dedupe } from "../../src/filter/dedupe.js";
 import { decodeRecords } from "../../src/read/decodeRecords.js";
 import { parseHeader } from "../../src/format/LasHeader.js";
@@ -79,10 +79,4 @@ test("dedupe in XYZ keeps points stacked in Z; XY drops them", function () {
 
 test("dedupe tolerance must be positive", function () {
 	assert.throws(function () { dedupe({ count: 0, x: new Float64Array(0), y: new Float64Array(0) }, 0); }, { code: "INVALID_ARGUMENT" });
-});
-
-test("strideFor (deprecated, kept from 0.1.0): floor(count / maxPoints), 0 keeps every point", function () {
-	assert.equal(strideFor(1013812, 50000), 20);  // floor(1013812 / 50000)
-	assert.equal(strideFor(1013812, 0), 1);
-	assert.equal(strideFor(40000, 50000), 1);
 });

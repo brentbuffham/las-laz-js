@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.1.1";
+export var VERSION = "0.2.0";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -15,7 +15,7 @@ export { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 export { parseCrs } from "./format/LasCrs.js";
 export { POINT_FORMATS, formatHasRgb } from "./format/PointFormats.js";
 export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords.js";
-export { makeKeep, countKept, strideFor } from "./filter/filters.js";
+export { makeKeep, countKept } from "./filter/filters.js";
 export { dedupe } from "./filter/dedupe.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
