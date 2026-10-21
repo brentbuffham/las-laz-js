@@ -75,9 +75,13 @@ export async function readChunks(src, header, vlr) {
 	}
 	if (dataStart + 8 > src.size) throw new LasError(ERROR_CODES.TRUNCATED, "the LAZ point data is cut short", src.size);
 	var tableAt = i64(await src.read(dataStart, dataStart + 8), 0);
-	if (tableAt <= dataStart && src.size >= 8) tableAt = i64(await src.read(src.size - 8, src.size), 0);   // streaming writers repeat it last
-	if (tableAt <= dataStart || tableAt >= src.size) {
-		throw new LasError(ERROR_CODES.UNSUPPORTED, "this LAZ file has no chunk table (an unfinished write?); it cannot be read in windows");
+	if (tableAt <= dataStart) {
+		tableAt = i64(await src.read(src.size - 8, src.size), 0);   // streaming writers repeat it last
+		if (tableAt <= dataStart || tableAt >= src.size) {
+			throw new LasError(ERROR_CODES.UNSUPPORTED, "this LAZ file has no chunk table (an unfinished write?); it cannot be read in windows");
+		}
+	} else if (tableAt >= src.size) {
+		throw new LasError(ERROR_CODES.TRUNCATED, "the LAZ chunk table should be at byte " + tableAt + " but the file is " + src.size + " bytes (cut short?)", src.size);
 	}
 	// Read only the table: EVLRs (which can be huge) may follow it. Each coded entry
 	// is two integers of at most ~6 bytes each; 24 bytes per chunk is a safe ceiling.

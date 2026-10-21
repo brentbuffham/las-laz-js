@@ -22,3 +22,24 @@ export function windows(header, windowSize) {
 	}
 	return out;
 }
+
+/**
+ * Group LAZ chunks into windows of whole chunks, about windowSize bytes of
+ * DECOMPRESSED records each (one chunk at least).
+ * @param {Array<{firstRecord:number, count:number, start:number, end:number}>} chunks - from readChunks
+ * @param {number} recordLength
+ * @param {number} windowSize
+ * @returns {Array<{start:number, end:number, firstRecord:number, count:number, chunks:Array}>}
+ */
+export function lazWindows(chunks, recordLength, windowSize) {
+	var out = [], cur = null;
+	chunks.forEach(function (c) {
+		if (cur && (cur.count + c.count) * recordLength > windowSize) { out.push(cur); cur = null; }
+		if (!cur) cur = { start: c.start, end: c.end, firstRecord: c.firstRecord, count: 0, chunks: [] };
+		cur.end = c.end;
+		cur.count += c.count;
+		cur.chunks.push(c);
+	});
+	if (cur) out.push(cur);
+	return out;
+}

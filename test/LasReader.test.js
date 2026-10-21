@@ -102,11 +102,12 @@ test("a file cut 10 bytes short is TRUNCATED, naming where the data ran out", as
 	await assert.rejects(las.readPoints({ fields: ["x"] }), { code: "TRUNCATED", offset: cut.length });
 });
 
-test("a LAZ file opens (header) but readPoints is COMPRESSED_LAZ naming 0.2.0", async function () {
+test("a file flagged as LAZ (format byte 131) without a LASzip VLR opens, but its points are BAD_VLR", async function () {
 	var b = lasOf(10, { formatByte: 131 });
 	var las = await openLas(b);
 	assert.equal(las.compressed, true);
-	await assert.rejects(las.readPoints({}), function (e) { return e.code === "COMPRESSED_LAZ" && /0\.2\.0/.test(e.message); });
+	assert.equal(las.header.pointFormat, 3);
+	await assert.rejects(las.readPoints({}), { code: "BAD_VLR" });
 });
 
 test("sources: Uint8Array, ArrayBuffer, Blob and a Node file path read the same", async function () {

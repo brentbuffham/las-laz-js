@@ -28,7 +28,7 @@
 		<section class="viewer" id="viewerWrap">
 			<div id="viewer"></div>
 			<div class="viewer-empty" id="viewerEmpty">
-				<p><strong>Drop a LAS file here</strong></p>
+				<p><strong>Drop a LAS or LAZ file here</strong></p>
 				<p class="muted">Your file never leaves your browser. It is read locally, in a Worker, a window at a time.</p>
 			</div>
 			<div class="viewer-hud" id="hud"></div>
@@ -116,9 +116,9 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-about">
-				<p><strong>las-laz-js</strong> reads and writes ASPRS LAS point clouds in plain JavaScript, with no dependencies, in the browser and Node. LAZ reading arrives in 0.2.0.</p>
+				<p><strong>las-laz-js</strong> reads and writes ASPRS LAS point clouds in plain JavaScript, with no dependencies, in the browser and Node. LAZ (LASzip) files are read too; writing LAZ arrives in 0.3.0. The LAZ decoder is translated from laz-rs (Apache-2.0).</p>
 				<p class="muted">Big files stream through in windows of whole records, never held whole. This page draws with Three.js; the library itself has no dependency.</p>
-				<p><a href="https://github.com/brentbuffham/las-laz-js">Source and docs</a> · MIT licence · by Brent Buffham (kirra-design.com)</p>
+				<p><a href="https://github.com/brentbuffham/las-laz-js">Source and docs</a> · MIT licence (the LAZ decoder Apache-2.0) · by Brent Buffham (kirra-design.com)</p>
 			</div>
 		</aside>
 	</main>
@@ -127,7 +127,7 @@
 		<div class="progress-wrap"><progress id="progress" max="1" value="0"></progress><span id="status" class="muted">Ready</span></div>
 		<div class="stats" id="stats"></div>
 	</footer>
-	<div class="drop-overlay hidden" id="dropOverlay">Drop the LAS file</div>
+	<div class="drop-overlay hidden" id="dropOverlay">Drop the LAS or LAZ file</div>
 
 	<script type="module" src="demo.js"></script>
 </body>

@@ -105,15 +105,6 @@ ArithmeticDecoder.prototype.decodeSymbol = function (m) {
 	return sym;
 };
 
-/** One raw (unmodelled) bit. */
-ArithmeticDecoder.prototype.readBit = function () {
-	this.range = this.range >>> 1;
-	var sym = Math.floor(this.value / this.range);
-	this.value -= this.range * sym;
-	if (this.range < AC_MIN_LENGTH) this._renorm();
-	return sym;
-};
-
 /** `bits` raw bits (1-32), as an unsigned Number. */
 ArithmeticDecoder.prototype.readBits = function (bits) {
 	if (bits > 19) {

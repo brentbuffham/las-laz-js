@@ -19,21 +19,13 @@ import { ArithmeticModel, ArithmeticBitModel } from "./models.js";
  * @param {number} [bits] - integer width (default 16; 32 wraps as i32)
  * @param {number} [contexts] - number of k models (default 1)
  * @param {number} [bitsHigh] - correction bits that are modelled (default 8)
- * @param {number} [range] - explicit range instead of bits (default 0)
+ * (laz-rs also takes an explicit range; no LAZ item uses one, so it is left out)
  */
-export function IntegerDecompressor(bits, contexts, bitsHigh, range) {
+export function IntegerDecompressor(bits, contexts, bitsHigh) {
 	bits = bits === undefined ? 16 : bits;
 	this.contexts = contexts === undefined ? 1 : contexts;
 	this.bitsHigh = bitsHigh === undefined ? 8 : bitsHigh;
-	range = range || 0;
-	if (range) {
-		var corrBits = 0, r = range;
-		while (r) { r = Math.floor(r / 2); corrBits++; }
-		if (range === Math.pow(2, corrBits - 1)) corrBits--;
-		this.corrBits = corrBits;
-		this.corrRange = range;
-		this.corrMin = -Math.floor(range / 2);
-	} else if (bits && bits < 32) {
+	if (bits && bits < 32) {
 		this.corrBits = bits;
 		this.corrRange = Math.pow(2, bits);
 		this.corrMin = -Math.floor(this.corrRange / 2);

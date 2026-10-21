@@ -10,36 +10,15 @@
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { parseHeader } from "../../src/format/LasHeader.js";
-import { parseVlrs } from "../../src/format/LasVlr.js";
-import { MemorySource } from "../../src/io/MemorySource.js";
-import { findLazVlr } from "../../src/laz/LazVlr.js";
-import { readChunks } from "../../src/laz/chunkTable.js";
-import { createChunkDecoder } from "../../src/laz/decompressChunk.js";
 import { decodeRecords } from "../../src/read/decodeRecords.js";
 import { LAZ_FIXTURES, fixturePoints } from "../helpers/lazFixtureData.js";
+import { LAZ_MANIFEST, fixtureBytes, decompressAll } from "../helpers/lazFixtureFiles.js";
 
 // int * 0.001 + offset is the builder's decimal to within float noise; half a scale step is the honest bound
 function near(a, b, what) { assert.ok(Math.abs(a - b) < 0.0005, what + ": " + a + " vs " + b); }
 
-var MANIFEST = JSON.parse(readFileSync(new URL("../fixtures/laz/manifest.json", import.meta.url), "utf8")).fixtures;
-
-export function fixtureBytes(name) { return new Uint8Array(readFileSync(new URL("../fixtures/laz/" + name + ".laz", import.meta.url))); }
-
-// Every record of a LAZ file, decompressed chunk by chunk
-export async function decompressAll(bytes) {
-	var h = parseHeader(new MemorySource(bytes));
-	var vlrs = parseVlrs(new MemorySource(bytes), h.headerSize, h.numberOfVlrs, h.offsetToPointData);
-	var vlr = findLazVlr(vlrs);
-	var src = { size: bytes.length, read: async function (a, b) { return bytes.subarray(a, b); } };
-	var chunks = await readChunks(src, h, vlr);
-	var out = new Uint8Array(h.pointCount * h.recordLength), view = new DataView(out.buffer);
-	var decode = createChunkDecoder(vlr, h.recordLength);
-	chunks.forEach(function (c) { decode(bytes, c.start, c.end, c.count, view, c.firstRecord * h.recordLength); });
-	return { header: Object.assign({}, h, { compressed: false }), records: out, chunks: chunks };
-}
+var MANIFEST = LAZ_MANIFEST;
 
 LAZ_FIXTURES.filter(function (fx) { return fx.pointFormat <= 5; }).forEach(function (fx) {
 	test(fx.name + " (format " + fx.pointFormat + (fx.extra ? " + " + fx.extra + " extra bytes" : "") + ", " + fx.points + " points): records equal PDAL's decompression", async function () {

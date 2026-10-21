@@ -18,7 +18,10 @@ import { parseHeader } from "./format/LasHeader.js";
 import { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 import { parseCrs } from "./format/LasCrs.js";
 import { decodeRecords, resolveFields, columnType } from "./read/decodeRecords.js";
-import { windows } from "./read/windows.js";
+import { windows, lazWindows } from "./read/windows.js";
+import { findLazVlr } from "./laz/LazVlr.js";
+import { readChunks } from "./laz/chunkTable.js";
+import { createChunkDecoder } from "./laz/decompressChunk.js";
 import { makeKeep, countKept } from "./filter/filters.js";
 import { dedupe } from "./filter/dedupe.js";
 import { openScratchSyncWriter } from "./io/ScratchBinaryFile.js";
@@ -113,17 +116,48 @@ export function LasReader(src, header, vlrs, evlrs, windowSize) {
 	this.crs = parseCrs(vlrs.concat(evlrs));
 	/** True for LAZ (compressed points). */
 	this.compressed = header.compressed;
+	/** The parsed LASzip VLR of a LAZ file (compressor, chunk size, items), else null. */
+	this.laz = null;
+	if (header.compressed) { try { this.laz = findLazVlr(vlrs); } catch (e) { this.laz = null; } }   // a bad VLR fails on read, not open
 }
 
-LasReader.prototype._check = function () {
-	var h = this.header;
-	if (h.compressed) {
-		throw new LasError(ERROR_CODES.COMPRESSED_LAZ, "this file is LAZ (compressed); reading LAZ points is supported from las-laz-js 0.2.0");
+// How to read this file's points: the windows, and how to turn one into raw
+// LAS records (a LAS window is read as it is; a LAZ window is a run of whole
+// chunks, decompressed into the scan's buffer). Built once per reader.
+LasReader.prototype._plan = async function () {
+	if (this._planned) return this._planned;
+	var h = this.header, src = this._src, len = h.recordLength;
+	var plan;
+	if (!h.compressed) {
+		var end = h.offsetToPointData + h.pointCount * len;
+		if (end > src.size) {
+			throw new LasError(ERROR_CODES.TRUNCATED, "the header promises " + h.pointCount + " points ending at byte " + end + " but the file is " + src.size + " bytes", src.size);
+		}
+		var list = windows(h, this._windowSize);
+		plan = {
+			list: list,
+			// a source that can fill one reused buffer gets one (no bytes outlive a window)
+			bufferSize: typeof src.readInto === "function" && list.length ? list[0].end - list[0].start : 0,
+			records: function (win, buf) { return buf ? src.readInto(win.start, win.end, buf) : src.read(win.start, win.end); }
+		};
+	} else {
+		var vlr = findLazVlr(this.vlrs);
+		if (!vlr) throw new LasError(ERROR_CODES.BAD_VLR, "this LAZ file has no LASzip VLR (user \"laszip encoded\", record 22204), so its points cannot be decompressed");
+		var decode = createChunkDecoder(vlr, len);
+		var lazList = lazWindows(await readChunks(src, h, vlr), len, this._windowSize);
+		plan = {
+			list: lazList,
+			bufferSize: lazList.reduce(function (m, w) { return Math.max(m, w.count * len); }, 0),
+			records: async function (win, buf) {
+				var packed = await src.read(win.start, win.end);
+				var view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+				win.chunks.forEach(function (c) { decode(packed, c.start - win.start, c.end - win.start, c.count, view, (c.firstRecord - win.firstRecord) * len); });
+				return buf.subarray(0, win.count * len);
+			}
+		};
 	}
-	var end = h.offsetToPointData + h.pointCount * h.recordLength;
-	if (end > this._src.size) {
-		throw new LasError(ERROR_CODES.TRUNCATED, "the header promises " + h.pointCount + " points ending at byte " + end + " but the file is " + this._src.size + " bytes", this._src.size);
-	}
+	this._planned = plan;
+	return plan;
 };
 
 /**
@@ -140,24 +174,23 @@ LasReader.prototype.chunks = async function* (opts) {
 // The window loop behind chunks and readPoints. into(win, n) -> { cols, at }
 // makes decodeRecords write straight into readPoints' result columns.
 LasReader.prototype._scan = async function* (opts, into) {
-	this._check();
 	var h = this.header;
+	var plan = await this._plan();
 	var keep = makeKeep(opts, h);
 	var fields = resolveFields(h, opts.fields);
-	var list = windows(h, this._windowSize);
+	var list = plan.list;
+	var buf = plan.bufferSize ? new Uint8Array(plan.bufferSize) : null;
 	var thin = null;
 	if (opts.maxPoints > 0) {
 		// Thin the points that pass the filters; with filters set, count them first (a second read)
-		var passing = keep ? await this._countPassing(list, keep, opts.signal) : h.pointCount;
+		var passing = keep ? await this._countPassing(plan, buf, keep, opts.signal) : h.pointCount;
 		if (passing > opts.maxPoints) thin = { total: passing, target: opts.maxPoints, acc: 0 };
 	}
-	var kept = 0, buf = null;
+	var kept = 0;
 	for (var w = 0; w < list.length; w++) {
 		if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
 		var win = list[w];
-		// One window buffer for the whole scan when the source can fill it (no bytes outlive a window)
-		if (typeof this._src.readInto === "function" && !buf) buf = new Uint8Array(list[0].end - list[0].start);
-		var bytes = buf ? await this._src.readInto(win.start, win.end, buf) : await this._src.read(win.start, win.end);
+		var bytes = await plan.records(win, buf);
 		var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, into: into ? into(win) : null });
 		kept += cols.count;
 		if (typeof opts.onProgress === "function") opts.onProgress((w + 1) / list.length, "read " + kept + " points");
@@ -166,11 +199,11 @@ LasReader.prototype._scan = async function* (opts, into) {
 	if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
 };
 
-LasReader.prototype._countPassing = async function (list, keep, signal) {
+LasReader.prototype._countPassing = async function (plan, buf, keep, signal) {
 	var n = 0;
-	for (var w = 0; w < list.length; w++) {
+	for (var w = 0; w < plan.list.length; w++) {
 		if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
-		n += countKept(await this._src.read(list[w].start, list[w].end), this.header.recordLength, keep);
+		n += countKept(await plan.records(plan.list[w], buf), this.header.recordLength, keep);
 	}
 	return n;
 };

@@ -19,21 +19,21 @@
 			"pointFormat": 2,
 			"points": 6000,
 			"recordLength": 26,
-			"sha256": "a0ec0787086901d4606be9cda420baccecd9ec8360545c7447173f547bf815e1",
+			"sha256": "af726eef341804f46539042130e99c6d07c935d570aadd2b900296166321baed",
 			"pdalKeptRecords": true
 		},
 		"f3": {
 			"pointFormat": 3,
 			"points": 51000,
 			"recordLength": 34,
-			"sha256": "ff1fdbc22754e32e4f5e743152c38a31387fb195ced3026b0033c69b6fe164e2",
+			"sha256": "91cf75adc1befbd91332446fc83b867c21baa8239f1328bb04aebe79294f3328",
 			"pdalKeptRecords": true
 		},
 		"f3x": {
 			"pointFormat": 3,
 			"points": 6000,
 			"recordLength": 37,
-			"sha256": "f73ea8a1ee171944b3c95cfb6b54d09027e496b6eb75caa693bca3fe62db27bc",
+			"sha256": "2af4f99855fd3420bce908c5b382fd1f07067afba0938d0f20a29d4e217d6b34",
 			"pdalKeptRecords": true
 		},
 		"f6": {
@@ -47,21 +47,21 @@
 			"pointFormat": 7,
 			"points": 51000,
 			"recordLength": 36,
-			"sha256": "3bd5b5237ce819ee299405d53699514bab9f83a7c7f07321f8e555a780984d95",
+			"sha256": "634c7b5248845547036b32f05101b96f462d1a148223ef98a844720d8d440715",
 			"pdalKeptRecords": true
 		},
 		"f8": {
 			"pointFormat": 8,
 			"points": 6000,
 			"recordLength": 40,
-			"sha256": "9d5081383e81cd3599933d48ed54c78ae195f13538ddefcd15e134f4ba62619a",
+			"sha256": "0fa20d8bc29955aba96e5902f9eac3c435717a9c14ed9a1b8e7807acc71d69a8",
 			"pdalKeptRecords": false
 		},
 		"f7x": {
 			"pointFormat": 7,
 			"points": 6000,
 			"recordLength": 39,
-			"sha256": "d423947bc74f0af148901990d7df6481ce1fc2af010ec48762a0213be5c30073",
+			"sha256": "c8d230f98bd4c06de6cbdc998d8402a9b93f8d52773536b443bdad8a0c4dbbaa",
 			"pdalKeptRecords": true
 		}
 	}

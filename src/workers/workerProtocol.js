@@ -4,7 +4,7 @@
 // Worker globals so it can be driven directly (tests, custom hosts).
 // Same shape as ecw-js's.
 // In:  { id, type, payload }
-//   open                { blob | bytes, windowSize? } -> { header, vlrs, evlrs, crs, compressed }
+//   open                { blob | bytes, windowSize? } -> { header, vlrs, evlrs, crs, compressed, laz }
 //   readPoints          readPoints options + colour?  -> PointColumns (+ colours)
 //   chunks              chunks options + colour?      -> streams { id, type: "chunk", chunk } per
 //                                                        window, then result { count }; colours
@@ -68,7 +68,7 @@ export function createWorkerHandler(post) {
 			if (reader) await reader.close();
 			reader = null;
 			reader = await openLas((payload && (payload.blob || payload.bytes)), { windowSize: payload && payload.windowSize });
-			return { result: { header: reader.header, vlrs: reader.vlrs, evlrs: reader.evlrs, crs: reader.crs, compressed: reader.compressed } };
+			return { result: { header: reader.header, vlrs: reader.vlrs, evlrs: reader.evlrs, crs: reader.crs, compressed: reader.compressed, laz: reader.laz } };
 		},
 		readPoints: async function (id, payload, controller) {
 			var cols = withColour(await needReader().readPoints(readOptions(id, payload, controller)), payload && payload.colour);

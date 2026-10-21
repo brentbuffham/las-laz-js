@@ -1,6 +1,6 @@
 // examples/browser/demo.js
 //==========================================================
-// las-laz-js demo: drop a LAS file, read it in the library's Worker
+// las-laz-js demo: drop a LAS or LAZ file, read it in the library's Worker
 // (las-laz-js/worker) a window at a time, stream the points into a
 // Three.js viewer, and drive the public API from the side panel.
 // Imports the library from ../../src so it always runs current code.
@@ -52,9 +52,8 @@ async function openFile(f) {
 	showHeader();
 	var hasRgb = !!POINT_FORMATS[h.pointFormat].fields.red;
 	$("colourBy").value = hasRgb ? "rgb" : "elevation";
-	$("readButton").disabled = info.compressed;
+	$("readButton").disabled = false;
 	$("writeButton").disabled = true;
-	if (info.compressed) { setStatus("This is a LAZ (compressed) file. Reading LAZ points arrives in las-laz-js 0.2.0.", true); return; }
 	read();
 }
 
@@ -64,6 +63,7 @@ function showHeader() {
 	t.innerHTML = "";
 	row(t, "Version", h.versionMajor + "." + h.versionMinor);
 	row(t, "Point format", h.pointFormat + (info.compressed ? " (LAZ)" : "") + ", " + h.recordLength + " bytes");
+	if (info.laz) row(t, "LAZ", ["", "point-wise", "point-wise, chunked", "layered, chunked"][info.laz.compressor] + (info.laz.variableChunks ? ", variable chunks" : ", chunks of " + fmt(info.laz.chunkSize)) + ", LASzip " + info.laz.version.major + "." + info.laz.version.minor);
 	row(t, "Points", fmt(h.pointCount));
 	row(t, "Bounds X", num(h.bounds.minX) + " … " + num(h.bounds.maxX));
 	row(t, "Bounds Y", num(h.bounds.minY) + " … " + num(h.bounds.maxY));
@@ -133,7 +133,7 @@ function take(c) {
 }
 
 async function read() {
-	if (!info || info.compressed) return;
+	if (!info) return;
 	if (readJob) await stop();
 	viewer.clear();
 	chunks = [];

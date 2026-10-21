@@ -71,7 +71,8 @@ export function fixturePoints(fx) {
 				userData: Math.floor(i / 5000),
 				pointSourceId: i < n / 2 ? 101 : 102,
 				gpsTime: t + (k - 1) * 0.0000001,
-				red: red, green: green, blue: blue, nir: nir
+				// grey (r = g = b) in the quiet stretch, as many scanners write: LASzip's one-channel path
+				red: red, green: quiet ? red : green, blue: quiet ? red : blue, nir: nir
 			});
 		}
 	}

@@ -72,11 +72,6 @@ ArithmeticEncoder.prototype.writeShort = function (sym) {
 	this._add(sym * this.range);
 	if (this.range < AC_MIN_LENGTH) this._renorm();
 };
-ArithmeticEncoder.prototype.writeBit = function (sym) {
-	this.range = Math.floor(this.range / 2);
-	this._add(sym * this.range);
-	if (this.range < AC_MIN_LENGTH) this._renorm();
-};
 ArithmeticEncoder.prototype.writeInt = function (sym) { this.writeShort(sym % 65536); this.writeShort(Math.floor(sym / 65536)); };
 
 /** Flush, as laz-rs done(): returns the stream bytes. */
