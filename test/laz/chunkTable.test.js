@@ -102,3 +102,12 @@ test("no chunk table anywhere is UNSUPPORTED; a table short of points is TRUNCAT
 	assert.deepEqual(pw, [{ firstRecord: 0, count: 12, start: 300, end: 900 }]);
 	await assert.rejects(readChunks({ size: 900 }, { offsetToPointData: 300, pointCount: 1 }, { compressor: 9 }), { code: "UNSUPPORTED" });
 });
+
+test("variable-size chunk counts that do not add up to the header's count are BAD_HEADER", async function () {
+	var more = fakeFile(300, [10, 20], tableBytes([[7, 10], [5, 20]], true));            // 12 points in the table
+	await assert.rejects(readChunks(more, { offsetToPointData: 300, pointCount: 10 }, { compressor: 3, chunkSize: 0xFFFFFFFF, variableChunks: true }), { code: "BAD_HEADER" });
+	var fewer = fakeFile(300, [10, 20], tableBytes([[7, 10], [1, 20]], true));           // 8 points in the table
+	await assert.rejects(readChunks(fewer, { offsetToPointData: 300, pointCount: 10 }, { compressor: 3, chunkSize: 0xFFFFFFFF, variableChunks: true }), { code: "BAD_HEADER" });
+	var huge = fakeFile(300, [10], tableBytes([[2000000000, 10]], true));               // a corrupt count must not size a buffer
+	await assert.rejects(readChunks(huge, { offsetToPointData: 300, pointCount: 10 }, { compressor: 3, chunkSize: 0xFFFFFFFF, variableChunks: true }), { code: "BAD_HEADER" });
+});

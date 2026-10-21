@@ -97,6 +97,12 @@ export async function readChunks(src, header, vlr) {
 		first += count;
 		at = end;
 	}
+	if (vlr.variableChunks) {
+		// counts come from the table: they must add up to the header's, or a corrupt count
+		// would decode past the header's points (or size a huge buffer)
+		var listed = table.reduce(function (s, e) { return s + e.pointCount; }, 0);
+		if (listed !== total) throw new LasError(ERROR_CODES.BAD_HEADER, "the LAZ chunk table lists " + listed + " points but the header says " + total, tableAt);
+	}
 	if (first < total) throw new LasError(ERROR_CODES.TRUNCATED, "the LAZ chunk table covers " + first + " of " + total + " points", tableAt);
 	return chunks;
 }
