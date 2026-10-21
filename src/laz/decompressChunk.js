@@ -53,14 +53,16 @@ function layeredItem(it) {
 	}
 }
 
-function cutShort(at) { throw new LasError(ERROR_CODES.TRUNCATED, "a LAZ chunk is cut short", at); }
+function cutShortAt(base) { return function (at) { throw new LasError(ERROR_CODES.TRUNCATED, "a LAZ chunk is cut short", base + at); }; }
 
 // A layered chunk: the first record raw, a u32 point count, every field's
 // layer sizes, then the layers; each later point is decoded field by field,
 // Point14 passing the scanner channel on to the fields after it.
 function layeredChunk(makers, recordLength, layerWords) {
-	return function decodeChunk(bytes, s, e, count, view, o) {
+	return function decodeChunk(bytes, s, e, count, view, o, base) {
 		if (!count) return;
+		base = base || 0;
+		var cutShort = cutShortAt(base);
 		var fields = [];
 		makers.forEach(function (make) { fields.push.apply(fields, make()); });
 		var ctx = { v: 0 }, p = s, k;
@@ -71,7 +73,7 @@ function layeredChunk(makers, recordLength, layerWords) {
 		var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 		p += 4;                                                    // the chunk's point count (the table already has it)
 		for (k = 0; k < fields.length; k++) p = fields[k].readLayerSizes(dv, p);
-		for (k = 0; k < fields.length; k++) p = fields[k].readLayers(bytes, p, e, cutShort);
+		for (k = 0; k < fields.length; k++) p = fields[k].readLayers(bytes, p, e, cutShort, base);
 		for (var i = 1; i < count; i++) {
 			ctx.v = 0;
 			for (k = 0; k < fields.length; k++) { fields[k].next(view, o, ctx); o += fields[k].size; }
@@ -84,7 +86,8 @@ function layeredChunk(makers, recordLength, layerWords) {
  * @param {object} vlr - parseLazVlr
  * @param {number} recordLength - header record length
  * @returns {function(Uint8Array, number, number, number, DataView, number): void}
- *   decode(bytes, start, end, count, outView, outOffset) — one chunk's records into outView
+ *   decode(bytes, start, end, count, outView, outOffset, base) — one chunk's records into outView;
+ *   base is the file offset of bytes[0], for error offsets
  */
 export function createChunkDecoder(vlr, recordLength) {
 	var size = vlr.items.reduce(function (s, it) { return s + it.size; }, 0);
@@ -95,14 +98,15 @@ export function createChunkDecoder(vlr, recordLength) {
 		return layeredChunk(vlr.items.map(layeredItem), recordLength, words);
 	}
 	var makers = vlr.items.map(pointwiseItem);
-	return function decodeChunk(bytes, s, e, count, view, o) {
+	return function decodeChunk(bytes, s, e, count, view, o, base) {
 		if (!count) return;
+		base = base || 0;
 		var items = makers.map(function (make) { return make(); });
 		var k, p = s;
-		if (p + recordLength > e) throw new LasError(ERROR_CODES.TRUNCATED, "a LAZ chunk is shorter than one record", p);
+		if (p + recordLength > e) throw new LasError(ERROR_CODES.TRUNCATED, "a LAZ chunk is shorter than one record", base + p);
 		for (k = 0; k < items.length; k++) { items[k].first(bytes, p, view, o); p += items[k].size; o += items[k].size; }
 		if (count === 1) return;
-		var dec = new ArithmeticDecoder(bytes, p, e);
+		var dec = new ArithmeticDecoder(bytes, p, e, base);
 		dec.readInitBytes();
 		for (var i = 1; i < count; i++) {
 			for (k = 0; k < items.length; k++) { items[k].next(dec, view, o); o += items[k].size; }

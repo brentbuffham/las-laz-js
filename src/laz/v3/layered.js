@@ -37,10 +37,10 @@ function enterContext(item, ctx, seed) {
 	return lastIdx;
 }
 
-function layer(item, bytes, q, n, fail, e) {
+function layer(item, bytes, q, n, fail, e, base) {
 	if (q + n > e) fail(q);
 	if (n === 0) return null;
-	var d = new ArithmeticDecoder(bytes, q, q + n);
+	var d = new ArithmeticDecoder(bytes, q, q + n, base);
 	d.readInitBytes();
 	return d;
 }
@@ -64,7 +64,7 @@ Rgb14Decompressor.prototype.first = function (src, s, view, o, ctx) {
 	this.lastContext = c;
 };
 Rgb14Decompressor.prototype.readLayerSizes = function (dv, q) { this.layerSize = dv.getUint32(q, LE); return q + 4; };
-Rgb14Decompressor.prototype.readLayers = function (bytes, q, e, fail) { this.dec = layer(this, bytes, q, this.layerSize, fail, e); return q + this.layerSize; };
+Rgb14Decompressor.prototype.readLayers = function (bytes, q, e, fail, base) { this.dec = layer(this, bytes, q, this.layerSize, fail, e, base); return q + this.layerSize; };
 Rgb14Decompressor.prototype.next = function (view, o, ctx) {
 	var self = this;
 	var idx = enterContext(this, ctx.v, function (from, to) { self.last[to].set(self.last[from]); });
@@ -130,8 +130,8 @@ Byte14Decompressor.prototype.readLayerSizes = function (dv, q) {
 	for (var i = 0; i < this.size; i++) { this.sizes[i] = dv.getUint32(q, LE); q += 4; }
 	return q;
 };
-Byte14Decompressor.prototype.readLayers = function (bytes, q, e, fail) {
-	for (var i = 0; i < this.size; i++) { this.dec[i] = layer(this, bytes, q, this.sizes[i], fail, e); q += this.sizes[i]; }
+Byte14Decompressor.prototype.readLayers = function (bytes, q, e, fail, base) {
+	for (var i = 0; i < this.size; i++) { this.dec[i] = layer(this, bytes, q, this.sizes[i], fail, e, base); q += this.sizes[i]; }
 	return q;
 };
 Byte14Decompressor.prototype.next = function (view, o, ctx) {

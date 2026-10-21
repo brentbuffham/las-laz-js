@@ -24,9 +24,11 @@ var AC_MIN_LENGTH = 0x01000000;
  * @param {Uint8Array} bytes
  * @param {number} [start] - first byte of the stream (default 0)
  * @param {number} [end] - one past the last byte (default bytes.length)
+ * @param {number} [base] - file offset of bytes[0], so errors report file offsets (default 0)
  */
-export function ArithmeticDecoder(bytes, start, end) {
+export function ArithmeticDecoder(bytes, start, end, base) {
 	this.bytes = bytes;
+	this.base = base || 0;
 	this.p = start || 0;
 	this.end = end === undefined ? bytes.length : end;
 	this.value = 0;
@@ -34,7 +36,7 @@ export function ArithmeticDecoder(bytes, start, end) {
 }
 
 ArithmeticDecoder.prototype._next = function () {
-	if (this.p >= this.end) throw new LasError(ERROR_CODES.TRUNCATED, "compressed LAZ data ended early", this.p);
+	if (this.p >= this.end) throw new LasError(ERROR_CODES.TRUNCATED, "compressed LAZ data ended early", this.base + this.p);
 	return this.bytes[this.p++];
 };
 
@@ -74,7 +76,7 @@ ArithmeticDecoder.prototype.decodeSymbol = function (m) {
 	var dist = m.distribution, sym, n, x, k, y = this.range;
 	if (m.decoderTable) {
 		this.range = this.range >>> 15;   // DM_LENGTH_SHIFT
-		if (this.range === 0) throw new LasError(ERROR_CODES.TRUNCATED, "corrupt LAZ stream (zero interval)", this.p);
+		if (this.range === 0) throw new LasError(ERROR_CODES.TRUNCATED, "corrupt LAZ stream (zero interval)", this.base + this.p);
 		var dv = Math.floor(this.value / this.range);
 		var t = dv >>> m.tableShift;
 		sym = m.decoderTable[t];

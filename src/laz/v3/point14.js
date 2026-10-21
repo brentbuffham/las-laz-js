@@ -180,12 +180,13 @@ Point14Decompressor.prototype.readLayerSizes = function (dv, q) {
 	return q;
 };
 
-Point14Decompressor.prototype.readLayers = function (bytes, q, e, fail) {
+Point14Decompressor.prototype.readLayers = function (bytes, q, e, fail, base) {
+	if (this.sizes[0] === 0) fail(q);   // channel / returns / XY is coded for every point after the first
 	for (var i = 0; i < LAYERS; i++) {
 		var n = this.sizes[i];
 		if (q + n > e) fail(q);
 		this.on[i] = n > 0;
-		if (n > 0) { this.dec[i] = new ArithmeticDecoder(bytes, q, q + n); this.dec[i].readInitBytes(); }
+		if (n > 0) { this.dec[i] = new ArithmeticDecoder(bytes, q, q + n, base); this.dec[i].readInitBytes(); }
 		q += n;
 	}
 	return q;

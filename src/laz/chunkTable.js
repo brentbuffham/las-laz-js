@@ -34,15 +34,16 @@ function i64(bytes, at) {
  * Decode the chunk table body.
  * @param {Uint8Array} bytes - from the table's start to the end of the file
  * @param {boolean} withPointCounts - variable-size chunks
+ * @param {number} [base] - file offset of bytes[0], for error offsets
  * @returns {Array<{pointCount:number, byteCount:number}>}
  */
-export function decodeChunkTable(bytes, withPointCounts) {
+export function decodeChunkTable(bytes, withPointCounts, base) {
 	if (bytes.length < 8) throw new LasError(ERROR_CODES.TRUNCATED, "the LAZ chunk table is cut short");
 	var v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 	var n = v.getUint32(4, true);
 	var out = [];
 	if (!n) return out;
-	var dec = new ArithmeticDecoder(bytes, 8, bytes.length);
+	var dec = new ArithmeticDecoder(bytes, 8, bytes.length, base);
 	dec.readInitBytes();
 	var ic = new IntegerDecompressor(32, 2);
 	var prevPoints = 0, prevBytes = 0;
@@ -87,7 +88,7 @@ export async function readChunks(src, header, vlr) {
 	// is two integers of at most ~6 bytes each; 24 bytes per chunk is a safe ceiling.
 	var head = await src.read(tableAt, Math.min(src.size, tableAt + 8));
 	var nChunks = head.length === 8 ? new DataView(head.buffer, head.byteOffset, 8).getUint32(4, true) : 0;
-	var table = decodeChunkTable(await src.read(tableAt, Math.min(src.size, tableAt + 8 + nChunks * 24 + 16)), vlr.variableChunks);
+	var table = decodeChunkTable(await src.read(tableAt, Math.min(src.size, tableAt + 8 + nChunks * 24 + 16)), vlr.variableChunks, tableAt);
 	var chunks = [], at = dataStart + 8, first = 0;
 	for (var i = 0; i < table.length && first < total; i++) {
 		var count = vlr.variableChunks ? table[i].pointCount : Math.min(vlr.chunkSize, total - first);

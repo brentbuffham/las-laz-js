@@ -12,6 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openLas } from "../../src/LasReader.js";
 import { FIELD_TYPES } from "../../src/read/decodeRecords.js";
+import { readChunks } from "../../src/laz/chunkTable.js";
 import { createWorkerHandler } from "../../src/workers/workerProtocol.js";
 import { openScratchReader } from "../../src/io/ScratchBinaryFile.js";
 import { createFakeRoot } from "../helpers/fakeOpfs.js";
@@ -141,4 +142,23 @@ test("a layered chunk cut short is TRUNCATED", async function () {
 	var start = las.header.offsetToPointData + 8 + 30 + 4;   // first record raw, then the point count, then layer sizes
 	new DataView(bytes.buffer).setUint32(start + 4, 0x7FFFFFFF, true);   // the Z layer claims 2 GB
 	await assert.rejects((await openLas(bytes)).readPoints({ fields: ["z"] }), { code: "TRUNCATED" });
+});
+
+test("a layered chunk whose first layer (channel, returns, XY) is empty is TRUNCATED, not a TypeError", async function () {
+	var bytes = fixtureBytes("f6").slice();
+	var start = (await openLas(bytes)).header.offsetToPointData + 8 + 30 + 4;
+	new DataView(bytes.buffer).setUint32(start, 0, true);                // layer 0 size -> 0
+	await assert.rejects((await openLas(bytes)).readPoints({ fields: ["x"] }), { code: "TRUNCATED" });
+});
+
+test("LAZ decode errors carry the FILE offset of the fault", async function () {
+	var bytes = fixtureBytes("f3").slice();
+	var las = await openLas(bytes);
+	var src = { size: bytes.length, read: async function (s, e) { return bytes.subarray(s, e); } };
+	var c1 = (await readChunks(src, las.header, las.laz))[1];              // the second chunk, ~390 KB into the file
+	for (var i = c1.start + 200; i < c1.end; i++) bytes[i] = 0xFF;         // its data turns to garbage after 200 bytes
+	var err = await (await openLas(bytes, { windowSize: 1000 })).readPoints({ fields: ["x"] }).then(function () { return null; }, function (e) { return e; });   // one chunk per window
+	assert.ok(err, "the damaged chunk must fail");
+	assert.equal(err.code, "TRUNCATED");
+	assert.ok(err.offset >= c1.start + 200 && err.offset <= c1.end, "offset " + err.offset + " should lie in chunk 1 (" + c1.start + ".." + c1.end + ")");
 });

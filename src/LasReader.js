@@ -151,7 +151,7 @@ LasReader.prototype._plan = async function () {
 			records: async function (win, buf) {
 				var packed = await src.read(win.start, win.end);
 				var view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-				win.chunks.forEach(function (c) { decode(packed, c.start - win.start, c.end - win.start, c.count, view, (c.firstRecord - win.firstRecord) * len); });
+				win.chunks.forEach(function (c) { decode(packed, c.start - win.start, c.end - win.start, c.count, view, (c.firstRecord - win.firstRecord) * len, win.start); });
 				return buf.subarray(0, win.count * len);
 			}
 		};
