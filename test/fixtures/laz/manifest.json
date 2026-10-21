@@ -1,0 +1,68 @@
+{
+	"made": "pdal 2.10.0",
+	"fixtures": {
+		"f0": {
+			"pointFormat": 0,
+			"points": 6000,
+			"recordLength": 20,
+			"sha256": "a882aa8a7fe812fa6854a5eff1099a7b88c9c588ac0f6d12f52b59eebd8e1dee",
+			"pdalKeptRecords": true
+		},
+		"f1": {
+			"pointFormat": 1,
+			"points": 6000,
+			"recordLength": 28,
+			"sha256": "3b5694625ad0aecfe6dce3890459127e7b72d3426ed1b8341794daae073a8fc1",
+			"pdalKeptRecords": true
+		},
+		"f2": {
+			"pointFormat": 2,
+			"points": 6000,
+			"recordLength": 26,
+			"sha256": "a0ec0787086901d4606be9cda420baccecd9ec8360545c7447173f547bf815e1",
+			"pdalKeptRecords": true
+		},
+		"f3": {
+			"pointFormat": 3,
+			"points": 51000,
+			"recordLength": 34,
+			"sha256": "ff1fdbc22754e32e4f5e743152c38a31387fb195ced3026b0033c69b6fe164e2",
+			"pdalKeptRecords": true
+		},
+		"f3x": {
+			"pointFormat": 3,
+			"points": 6000,
+			"recordLength": 37,
+			"sha256": "f73ea8a1ee171944b3c95cfb6b54d09027e496b6eb75caa693bca3fe62db27bc",
+			"pdalKeptRecords": true
+		},
+		"f6": {
+			"pointFormat": 6,
+			"points": 6000,
+			"recordLength": 30,
+			"sha256": "88f210797c23061c1e58292ecf51d2376c36a1fbd270ca3871a11199777c8ff8",
+			"pdalKeptRecords": true
+		},
+		"f7": {
+			"pointFormat": 7,
+			"points": 51000,
+			"recordLength": 36,
+			"sha256": "3bd5b5237ce819ee299405d53699514bab9f83a7c7f07321f8e555a780984d95",
+			"pdalKeptRecords": true
+		},
+		"f8": {
+			"pointFormat": 8,
+			"points": 6000,
+			"recordLength": 40,
+			"sha256": "9d5081383e81cd3599933d48ed54c78ae195f13538ddefcd15e134f4ba62619a",
+			"pdalKeptRecords": false
+		},
+		"f7x": {
+			"pointFormat": 7,
+			"points": 6000,
+			"recordLength": 39,
+			"sha256": "d423947bc74f0af148901990d7df6481ce1fc2af010ec48762a0213be5c30073",
+			"pdalKeptRecords": true
+		}
+	}
+}
