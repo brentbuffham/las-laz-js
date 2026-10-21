@@ -15,6 +15,10 @@
 
 import { ArithmeticModel, ArithmeticBitModel } from "./models.js";
 
+// 2^0 .. 2^32, exact in Numbers (the hot loop needs them per integer)
+var POW2 = new Float64Array(33);
+for (var p2 = 0; p2 <= 32; p2++) POW2[p2] = Math.pow(2, p2);
+
 /**
  * @param {number} [bits] - integer width (default 16; 32 wraps as i32)
  * @param {number} [contexts] - number of k models (default 1)
@@ -60,10 +64,10 @@ IntegerDecompressor.prototype.decompress = function (dec, pred, context) {
 				c = dec.decodeSymbol(this.mCorrector[k - 1]);
 			} else {
 				var k1 = k - this.bitsHigh;
-				c = dec.decodeSymbol(this.mCorrector[k - 1]) * Math.pow(2, k1) + dec.readBits(k1);
+				c = dec.decodeSymbol(this.mCorrector[k - 1]) * POW2[k1] + dec.readBits(k1);
 			}
-			if (c >= Math.pow(2, k - 1)) c += 1;
-			else c -= Math.pow(2, k) - 1;
+			if (c >= POW2[k - 1]) c += 1;
+			else c -= POW2[k] - 1;
 		} else {
 			c = this.corrMin;
 		}

@@ -23,12 +23,13 @@ var LE = true;
 
 // laz-rs's context switch, shared by the three items: returns the index whose
 // last value predicts this point (`last_idx`), after switching to `ctx`.
-function enterContext(item, ctx, seed) {
+// item.seed(from, to) starts a context from another's last value.
+function enterContext(item, ctx) {
 	var lastIdx = item.lastContext;
 	if (item.lastContext !== ctx) {
 		item.lastContext = ctx;
 		if (item.unused[ctx]) {
-			seed(lastIdx, ctx);
+			item.seed(lastIdx, ctx);
 			item.unused[ctx] = false;
 			if (item.version === 3) lastIdx = ctx;
 		}
@@ -65,9 +66,9 @@ Rgb14Decompressor.prototype.first = function (src, s, view, o, ctx) {
 };
 Rgb14Decompressor.prototype.readLayerSizes = function (dv, q) { this.layerSize = dv.getUint32(q, LE); return q + 4; };
 Rgb14Decompressor.prototype.readLayers = function (bytes, q, e, fail, base) { this.dec = layer(this, bytes, q, this.layerSize, fail, e, base); return q + this.layerSize; };
+Rgb14Decompressor.prototype.seed = function (from, to) { this.last[to].set(this.last[from]); };
 Rgb14Decompressor.prototype.next = function (view, o, ctx) {
-	var self = this;
-	var idx = enterContext(this, ctx.v, function (from, to) { self.last[to].set(self.last[from]); });
+	var idx = enterContext(this, ctx.v);
 	var rgb = this.last[idx];
 	if (this.dec) decodeRgb(this.dec, this.models[this.lastContext], rgb);
 	view.setUint16(o, rgb[0], LE); view.setUint16(o + 2, rgb[1], LE); view.setUint16(o + 4, rgb[2], LE);
@@ -93,9 +94,9 @@ Nir14Decompressor.prototype.first = function (src, s, view, o, ctx) {
 };
 Nir14Decompressor.prototype.readLayerSizes = Rgb14Decompressor.prototype.readLayerSizes;
 Nir14Decompressor.prototype.readLayers = Rgb14Decompressor.prototype.readLayers;
+Nir14Decompressor.prototype.seed = function (from, to) { this.last[to] = this.last[from]; };
 Nir14Decompressor.prototype.next = function (view, o, ctx) {
-	var self = this;
-	var idx = enterContext(this, ctx.v, function (from, to) { self.last[to] = self.last[from]; });
+	var idx = enterContext(this, ctx.v);
 	if (this.dec) {
 		var c = this.lastContext, last = this.last[idx];
 		var sym = this.dec.decodeSymbol(this.used[c]);
@@ -134,9 +135,9 @@ Byte14Decompressor.prototype.readLayers = function (bytes, q, e, fail, base) {
 	for (var i = 0; i < this.size; i++) { this.dec[i] = layer(this, bytes, q, this.sizes[i], fail, e, base); q += this.sizes[i]; }
 	return q;
 };
+Byte14Decompressor.prototype.seed = function (from, to) { this.models[to] = byteModels(this.size); this.last[to].set(this.last[from]); };
 Byte14Decompressor.prototype.next = function (view, o, ctx) {
-	var self = this;
-	var idx = enterContext(this, ctx.v, function (from, to) { self.models[to] = byteModels(self.size); self.last[to].set(self.last[from]); });
+	var idx = enterContext(this, ctx.v);
 	var last = this.last[idx], models = this.models[ctx.v];
 	for (var i = 0; i < this.size; i++) {
 		if (this.dec[i]) last[i] = (last[i] + this.dec[i].decodeSymbol(models[i])) & 255;

@@ -61,6 +61,9 @@ StreamingMedian.prototype.add = function (x) {
 };
 
 function models(n, symbols) { var out = []; for (var i = 0; i < n; i++) out.push(new ArithmeticModel(symbols)); return out; }
+// A model made on first use: a fresh model is the same whenever it is made, and most
+// of the 256 per table are never touched in a chunk
+function lazyModel(table, i) { return table[i] || (table[i] = new ArithmeticModel(256)); }
 function medians() { var out = []; for (var i = 0; i < 16; i++) out.push(new StreamingMedian()); return out; }
 
 /** Point10 v2 decompressor: one per chunk. */
@@ -72,9 +75,9 @@ export function Point10Decompressor() {
 	this.lastHeight = new Int32Array(8);
 	this.changedValues = new ArithmeticModel(64);
 	this.scanAngleRank = models(2, 256);
-	this.bitByte = models(256, 256);
-	this.classification = models(256, 256);
-	this.userData = models(256, 256);
+	this.bitByte = new Array(256);
+	this.classification = new Array(256);
+	this.userData = new Array(256);
 	this.icIntensity = new IntegerDecompressor(16, 4);
 	this.icPointSourceId = new IntegerDecompressor(16, 1);
 	this.icDx = new IntegerDecompressor(32, 2);
@@ -98,7 +101,7 @@ Point10Decompressor.prototype.next = function (dec, view, o) {
 	var changed = dec.decodeSymbol(this.changedValues);
 	var r, n, m, l;
 	if (changed !== 0) {
-		if (changed & 32) this.bits = dec.decodeSymbol(this.bitByte[this.bits]);
+		if (changed & 32) this.bits = dec.decodeSymbol(lazyModel(this.bitByte, this.bits));
 		r = this.bits & 7; n = (this.bits >>> 3) & 7;
 		m = NUMBER_RETURN_MAP[n][r]; l = NUMBER_RETURN_LEVEL[n][r];
 		if (changed & 16) {
@@ -107,12 +110,12 @@ Point10Decompressor.prototype.next = function (dec, view, o) {
 		} else {
 			this.intensity = this.lastIntensity[m];
 		}
-		if (changed & 8) this.cls = dec.decodeSymbol(this.classification[this.cls]);
+		if (changed & 8) this.cls = dec.decodeSymbol(lazyModel(this.classification, this.cls));
 		if (changed & 4) {
 			var d = dec.decodeSymbol(this.scanAngleRank[(this.bits >>> 6) & 1]);
 			this.angle = ((this.angle + d) << 24) >> 24;   // i8 wrapping_add
 		}
-		if (changed & 2) this.user = dec.decodeSymbol(this.userData[this.user]);
+		if (changed & 2) this.user = dec.decodeSymbol(lazyModel(this.userData, this.user));
 		if (changed & 1) this.psid = this.icPointSourceId.decompress(dec, this.psid, 0);
 	} else {
 		r = this.bits & 7; n = (this.bits >>> 3) & 7;

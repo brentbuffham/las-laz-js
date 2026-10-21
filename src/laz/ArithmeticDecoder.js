@@ -77,7 +77,7 @@ ArithmeticDecoder.prototype.decodeSymbol = function (m) {
 	if (m.decoderTable) {
 		this.range = this.range >>> 15;   // DM_LENGTH_SHIFT
 		if (this.range === 0) throw new LasError(ERROR_CODES.TRUNCATED, "corrupt LAZ stream (zero interval)", this.base + this.p);
-		var dv = Math.floor(this.value / this.range);
+		var dv = (this.value / this.range) >>> 0;   // both u32: truncation = floor
 		var t = dv >>> m.tableShift;
 		sym = m.decoderTable[t];
 		n = m.decoderTable[t + 1] + 1;
@@ -114,7 +114,7 @@ ArithmeticDecoder.prototype.readBits = function (bits) {
 		return this.readBits(bits - 16) * 65536 + low;
 	}
 	this.range = this.range >>> bits;
-	var sym = Math.floor(this.value / this.range);
+	var sym = (this.value / this.range) >>> 0;
 	this.value -= this.range * sym;
 	if (this.range < AC_MIN_LENGTH) this._renorm();
 	return sym;
@@ -123,7 +123,7 @@ ArithmeticDecoder.prototype.readBits = function (bits) {
 /** 16 raw bits. */
 ArithmeticDecoder.prototype.readShort = function () {
 	this.range = this.range >>> 16;
-	var sym = Math.floor(this.value / this.range);
+	var sym = (this.value / this.range) >>> 0;
 	this.value -= this.range * sym;
 	if (this.range < AC_MIN_LENGTH) this._renorm();
 	return sym;
