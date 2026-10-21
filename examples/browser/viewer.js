@@ -82,6 +82,16 @@ export function createViewer(container) {
 			camera.updateProjectionMatrix();
 		},
 		setPointSize: function (px) { material.size = px; },
+		/** New colours (r,g,b bytes per point, in the order the points were added), in place. */
+		setColours: function (colours) {
+			var o = 0;
+			chunks.forEach(function (c) {
+				var attr = c.points.geometry.getAttribute("color");
+				attr.array.set(colours.subarray(o * 3, (o + c.count) * 3));
+				attr.needsUpdate = true;
+				o += c.count;
+			});
+		},
 		drawnCount: function () { return drawn; },
 		/** Nearest drawn point to a screen position, within maxPx: { chunk, index } or null. */
 		pick: function (clientX, clientY, maxPx) {

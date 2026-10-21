@@ -1,12 +1,13 @@
 // examples/browser/demo.js
 //==========================================================
 // las-laz-js demo: drop a LAS or LAZ file, read it in the library's Worker
-// (las-laz-js/worker) a window at a time, stream the points into a
-// Three.js viewer, and drive the public API from the side panel.
+// (las-laz-js/worker; LAZ chunks decode on every core) with a progress
+// bar, then show it once in a Three.js viewer. Colour changes recolour the
+// points kept in memory — only the read filters read the file again.
 // Imports the library from ../../src so it always runs current code.
 //==========================================================
 
-import { writeLas, openLas, POINT_FORMATS } from "../../src/index.js";
+import { writeLas, openLas, colourize, POINT_FORMATS } from "../../src/index.js";
 import { createViewer } from "./viewer.js";
 
 var DRAW_CAP = 20000000;
@@ -14,7 +15,7 @@ var $ = function (id) { return document.getElementById(id); };
 var viewer = createViewer($("viewer"));
 var worker = new Worker(new URL("../../src/workers/lasWorker.js", import.meta.url), { type: "module" });
 var nextId = 1, pending = new Map();
-var file = null, info = null, origin = null, chunks = [], readJob = null, stats = null;
+var file = null, info = null, origin = null, readJob = null;
 
 // --- worker calls -----------------------------------------------------------
 worker.onmessage = function (event) {
@@ -108,69 +109,74 @@ function colourOpts() {
 	return o;
 }
 
-var t0 = 0, fitted = false;
+var cloud = null;   // the points last read, kept so colour changes never re-read the file
 
-// One set of columns (a chunk, or the whole deduplicated read) into the viewer and the stats
-function take(c) {
-	var n = c.count;
-	if (!n) return;
-	var pos = new Float32Array(n * 3);
-	for (var i = 0; i < n; i++) { pos[i * 3] = c.x[i]; pos[i * 3 + 1] = c.y[i]; pos[i * 3 + 2] = c.z[i]; }
-	// Only chunks the viewer draws are kept, so hover indexes match and nothing past the cap is held
-	if (viewer.addChunk(pos, c.colours, DRAW_CAP) > 0) chunks.push(c);
-	for (var j = 0; j < n; j++) {
-		stats.classes[c.classification[j]] = (stats.classes[c.classification[j]] || 0) + 1;
-		stats.returns[c.returnNumber[j]] = (stats.returns[c.returnNumber[j]] || 0) + 1;
-		stats.intensity[c.intensity[j]]++;
-		if (c.z[j] < stats.minZ) stats.minZ = c.z[j];
-		if (c.z[j] > stats.maxZ) stats.maxZ = c.z[j];
-	}
-	stats.count += n;
-	if (!fitted) { viewer.fit(); fitted = true; }
-	var secs = (performance.now() - t0) / 1000;
-	$("stats").textContent = fmt(stats.count) + " / " + fmt(info.header.pointCount) + " points · " + secs.toFixed(1) + " s · " + fmt(Math.round(stats.count / Math.max(secs, 0.001))) + " pts/s";
-	setStatus("Reading…");
-}
-
+// Decode out of sight (the library's worker, its chunks on every core), show progress, then
+// build the cloud once. Only the read filters (classes, returns, bounds, max points, dedupe)
+// need a new read; colour changes recolour the points kept here.
 async function read() {
 	if (!info) return;
 	if (readJob) await stop();
-	viewer.clear();
-	chunks = [];
-	stats = { count: 0, classes: {}, returns: {}, intensity: new Uint32Array(65536), minZ: Infinity, maxZ: -Infinity };
 	$("viewerEmpty").classList.add("hidden");
-	$("readButton").disabled = true; $("abortButton").disabled = false;
+	$("readHint").classList.add("hidden");
+	$("readButton").disabled = true; $("abortButton").disabled = false; $("writeButton").disabled = true;
+	$("progress").value = 0;
+	setStatus("Decoding…");
 	await call("open", { blob: file, windowSize: Number($("windowMb").value) * 1048576 }).promise;
-	t0 = performance.now(); fitted = false;
-	var payload = {
-		fields: ["x", "y", "z", "classification", "intensity", "returnNumber"],
-		classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(),
-		maxPoints: Number($("maxPoints").value) || 0,
-		localOrigin: origin, float32: true,
-		colour: colourOpts()
-	};
+	var hasRgb = !!POINT_FORMATS[info.header.pointFormat].fields.red;
+	var t0 = performance.now();
 	var tol = Number($("dedupe").value) || 0;
-	var onEvent = function (m) {
-		if (m.type === "progress") { $("progress").value = m.fraction; return; }
-		take(m.chunk);
-	};
-	// dedupe needs every point at once, so it reads with readPoints; otherwise stream with chunks
-	readJob = tol > 0 ? call("readPoints", Object.assign({ dedupe: tol }, payload), onEvent) : call("chunks", payload, onEvent);
+	readJob = call("readPoints", {
+		fields: ["x", "y", "z", "classification", "intensity", "returnNumber"].concat(hasRgb ? ["red", "green", "blue"] : []),
+		classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(),
+		maxPoints: Number($("maxPoints").value) || 0, dedupe: tol > 0 ? tol : undefined,
+		localOrigin: origin, float32: true
+	}, function (m) {
+		if (m.type !== "progress") return;
+		$("progress").value = m.fraction;
+		setStatus("Decoding " + Math.round(m.fraction * 100) + "% · " + ((performance.now() - t0) / 1000).toFixed(1) + " s");
+	});
 	try {
-		var result = await readJob.promise;
-		if (tol > 0) take(result);
-		viewer.fit();
-		var drawn = viewer.drawnCount();
-		setStatus("Read " + fmt(stats.count) + " points" + (drawn < stats.count ? " (showing " + fmt(drawn) + " of " + fmt(stats.count) + ")" : ""));
+		cloud = await readJob.promise;
+		var secs = (performance.now() - t0) / 1000;
 		$("progress").value = 1;
+		setStatus("Building the view…");
+		await new Promise(function (r) { requestAnimationFrame(function () { setTimeout(r, 0); }); });   // paint before the build
+		display();
+		var drawn = viewer.drawnCount();
+		setStatus("Read " + fmt(cloud.count) + " points in " + secs.toFixed(1) + " s" + (drawn < cloud.count ? " (showing " + fmt(drawn) + ")" : ""));
+		// every record is decoded (thinning picks from all of them), so the rate is over the whole file
+		$("stats").textContent = "decoded " + fmt(info.header.pointCount) + " points in " + secs.toFixed(1) + " s (" + fmt(Math.round(info.header.pointCount / Math.max(secs, 0.001))) + " pts/s) · kept " + fmt(cloud.count);
 		showStats();
 		$("writeButton").disabled = false;
 	} catch (err) {
-		setStatus(err.code === "ABORTED" ? "Stopped after " + fmt(stats.count) + " points" : err.message, err.code !== "ABORTED");
+		setStatus(err.code === "ABORTED" ? "Stopped" : err.message, err.code !== "ABORTED");
 	} finally {
 		readJob = null;
 		$("readButton").disabled = false; $("abortButton").disabled = true;
 	}
+}
+
+// The kept points as one cloud (up to the draw cap)
+function display() {
+	viewer.clear();
+	var n = Math.min(cloud.count, DRAW_CAP), pos = new Float32Array(n * 3);
+	for (var i = 0; i < n; i++) { pos[i * 3] = cloud.x[i]; pos[i * 3 + 1] = cloud.y[i]; pos[i * 3 + 2] = cloud.z[i]; }
+	viewer.addChunk(pos, colours(), DRAW_CAP);
+	viewer.fit();
+}
+
+function colours() {
+	if ($("colourBy").value === "rgb" && !cloud.red) $("colourBy").value = "elevation";   // this format holds no colour
+	return colourize(cloud, colourOpts());
+}
+
+// Colour, ramp or range changed: recolour the points on screen, no re-read
+function recolour() {
+	if (!cloud || !cloud.count) return;
+	var t0 = performance.now();
+	viewer.setColours(colours());
+	setStatus("Recoloured " + fmt(Math.min(cloud.count, DRAW_CAP)) + " points in " + Math.round(performance.now() - t0) + " ms");
 }
 
 async function stop() {
@@ -184,28 +190,36 @@ function table(id, head, rows) {
 	t.innerHTML = "<tr>" + head.map(function (h) { return "<th>" + h + "</th>"; }).join("") + "</tr>";
 	rows.forEach(function (r) { var tr = t.insertRow(); r.forEach(function (v) { tr.insertCell().textContent = v; }); });
 }
-function share(n) { return (100 * n / stats.count).toFixed(1) + " %"; }
 
 function showStats() {
+	var c = cloud, n = c.count, classes = {}, returns = {}, inten = new Uint32Array(65536), minZ = Infinity, maxZ = -Infinity;
+	for (var j = 0; j < n; j++) {
+		classes[c.classification[j]] = (classes[c.classification[j]] || 0) + 1;
+		returns[c.returnNumber[j]] = (returns[c.returnNumber[j]] || 0) + 1;
+		inten[c.intensity[j]]++;
+		if (c.z[j] < minZ) minZ = c.z[j];
+		if (c.z[j] > maxZ) maxZ = c.z[j];
+	}
+	var share = function (k) { return (100 * k / n).toFixed(1) + " %"; };
 	var t = $("statsTable");
 	$("statsEmpty").classList.add("hidden");
 	t.innerHTML = "";
-	row(t, "Points read", fmt(stats.count));
-	row(t, "Z range", stats.count ? (stats.minZ + origin.z).toFixed(3) + " … " + (stats.maxZ + origin.z).toFixed(3) : "—");
+	row(t, "Points read", fmt(n));
+	row(t, "Z range", n ? (minZ + origin.z).toFixed(3) + " … " + (maxZ + origin.z).toFixed(3) : "—");
 	var keys = function (o) { return Object.keys(o).sort(function (a, b) { return a - b; }); };
-	table("classTable", ["Class", "Points", "Share"], keys(stats.classes).map(function (k) { return [k, fmt(stats.classes[k]), share(stats.classes[k])]; }));
-	table("returnTable", ["Return", "Points", "Share"], keys(stats.returns).map(function (k) { return [k, fmt(stats.returns[k]), share(stats.returns[k])]; }));
+	table("classTable", ["Class", "Points", "Share"], keys(classes).map(function (k) { return [k, fmt(classes[k]), share(classes[k])]; }));
+	table("returnTable", ["Return", "Points", "Share"], keys(returns).map(function (k) { return [k, fmt(returns[k]), share(returns[k])]; }));
 	// 16 equal bins over the intensities actually present
-	var h = stats.intensity, lo = 0, hi = 65535;
-	while (lo < 65535 && !h[lo]) lo++;
-	while (hi > 0 && !h[hi]) hi--;
+	var lo = 0, hi = 65535;
+	while (lo < 65535 && !inten[lo]) lo++;
+	while (hi > 0 && !inten[hi]) hi--;
 	var rows = [];
-	if (stats.count && lo <= hi) {
+	if (n && lo <= hi) {
 		var width = Math.max(1, Math.ceil((hi - lo + 1) / 16));
 		for (var b = lo; b <= hi; b += width) {
-			var n = 0, top = Math.min(hi, b + width - 1);
-			for (var v = b; v <= top; v++) n += h[v];
-			rows.push([b + " … " + top, fmt(n), share(n)]);
+			var k = 0, top = Math.min(hi, b + width - 1);
+			for (var v = b; v <= top; v++) k += inten[v];
+			rows.push([b + " … " + top, fmt(k), share(k)]);
 		}
 	}
 	table("intensityTable", ["Intensity", "Points", "Share"], rows);
@@ -252,13 +266,13 @@ async function save() {
 var hoverQueued = false, lastMove = null;
 $("viewer").addEventListener("mousemove", function (e) {
 	lastMove = e;
-	if (hoverQueued || !chunks.length) return;
+	if (hoverQueued || !cloud || !cloud.count) return;
 	hoverQueued = true;
 	requestAnimationFrame(function () {
 		hoverQueued = false;
 		var hit = viewer.pick(lastMove.clientX, lastMove.clientY, 8);
 		if (!hit) { $("hud").textContent = ""; return; }
-		var c = chunks[hit.chunk], i = hit.index;
+		var c = cloud, i = hit.index;
 		$("hud").textContent = "X " + (c.x[i] + origin.x).toFixed(3) + "  Y " + (c.y[i] + origin.y).toFixed(3) + "  Z " + (c.z[i] + origin.z).toFixed(3) +
 			"  · class " + c.classification[i] + "  · intensity " + c.intensity[i] + "  · return " + c.returnNumber[i];
 	});
@@ -276,8 +290,14 @@ $("fileInput").addEventListener("change", function (e) { if (e.target.files[0]) 
 $("readButton").addEventListener("click", read);
 $("abortButton").addEventListener("click", stop);
 $("writeButton").addEventListener("click", save);
-$("colourBy").addEventListener("change", read);
-$("ramp").addEventListener("change", read);
+$("colourBy").addEventListener("change", recolour);
+$("ramp").addEventListener("change", recolour);
+$("rangeMin").addEventListener("change", recolour);
+$("rangeMax").addEventListener("change", recolour);
+// The read filters need a new read: say so rather than re-reading on every keystroke
+["classes", "returns", "maxPoints", "boundsMin", "boundsMax", "dedupe", "windowMb"].forEach(function (id) {
+	$(id).addEventListener("input", function () { if (cloud) $("readHint").classList.remove("hidden"); });
+});
 $("pointSize").addEventListener("input", function () { viewer.setPointSize(Number($("pointSize").value) || 2); });
 $("drawCapText").textContent = fmt(DRAW_CAP);
 $("writeCapText").textContent = fmt(WRITE_CAP);
