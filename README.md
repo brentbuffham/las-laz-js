@@ -12,7 +12,8 @@ runs in the browser and in Node — and built for files far larger than memory.
 - LAZ: point formats 0–3 and 6–8, with extra bytes, read exactly like LAS — the same calls, the
   same options, decoded chunk by chunk in plain JavaScript (no WebAssembly).
 - Big files: a 1.1 GB, 34-million-point LAS reads in under a second in Node, and a 10-million-point
-  LAZ decodes at about 1.8 million points a second; neither is ever held in memory whole.
+  LAZ decodes at about 1.8 million points a second; neither is held in memory whole (see LAZ below
+  for the one exception).
 - Also: a ready-made module Worker (`las-laz-js/worker`) and a
   [Three.js demo](https://brentbuffham.github.io/las-laz-js/).
 - Not yet: writing LAZ (0.3.0).
@@ -80,8 +81,9 @@ most files) is decompressed into the plain LAS records it holds, then decoded ex
 window is — so every option above works the same, and reading a LAZ gives the same columns as
 reading the LAS it was compressed from.
 
-- Read: point formats 0–3 (LASzip point-wise, item version 2) and 6–8 (layered, versions 3 and 4),
-  with extra bytes.
+- Read: point formats 0–3 (LASzip point-wise, item version 2) and 6–8 (layered, item version 3),
+  with extra bytes. Item version 4 follows laz-rs but has not been checked against a real file
+  (it differs from 3 only with several scanner channels).
 - Not read: wave-packet items (formats 4, 5, 9, 10 in LAZ), item version 1 (LASzip before 2011),
   and files without a chunk table (an unfinished write). Each is refused with `UNSUPPORTED`,
   naming what it found — never garbage points.
@@ -91,7 +93,9 @@ reading the LAS it was compressed from.
 
 `openLas` reads only the header and the VLRs. Points are read in windows (64 MiB of records by
 default, `openLas(file, { windowSize })`; for LAZ, whole chunks adding up to about that much
-decompressed), so memory holds one window plus what you keep.
+decompressed), so memory holds one window plus what you keep. One exception: a LAZ written
+point-wise without chunks (LASzip before 2.0, rare) is one chunk, so its window is the whole
+decompressed file.
 
 ```js
 for await (var chunk of las.chunks({ fields: ["x", "y", "z"] })) {

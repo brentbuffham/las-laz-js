@@ -2,7 +2,11 @@
 //==========================================================
 // TEST-ONLY LASzip arithmetic ENCODER and integer compressor, so the
 // decoder can be checked by round trips. Ported from laz-rs
-// src/encoders.rs and src/compressors.rs (Apache-2.0; see NOTICE), but
+// src/encoders.rs and src/compressors.rs (https://github.com/laz-rs/laz-rs),
+// itself a port of LASzip by rapidlasso. (c) 2007-2014 martin isenburg,
+// rapidlasso; (c) 2014 Uday Verma, Hobu, Inc.; (c) 2019 Thomas Montaigu.
+// Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE and
+// NOTICE). Changes: translated from Rust to JavaScript, Brent Buffham 2026;
 // written into a growable byte array instead of laz-rs's ring buffer.
 // The models are the library's: the encoder and decoder must share
 // them, as LASzip's do. Ships nowhere (test/ is not in the package).

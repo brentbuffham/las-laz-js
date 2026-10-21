@@ -4,7 +4,7 @@
 
 Reads LAZ.
 
-- LAZ (LASzip) point formats 0–3 and 6–8, with extra bytes, are read by `openLas` /
+- LAZ (LASzip) point formats 0–3 and 6–8 (item versions 2 and 3; version 4 unchecked), with extra bytes, are read by `openLas` /
   `readPoints` / `chunks` / `readPointsToScratch` and the worker exactly as LAS is: each chunk
   is decompressed into plain LAS records, then decoded by the same code, so every option works
   the same. Plain JavaScript, translated from laz-rs (Apache-2.0); the package licence is now

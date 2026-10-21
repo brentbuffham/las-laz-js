@@ -80,7 +80,9 @@ replaced by compressed chunks. The `laszip encoded` VLR (record 22204) says how:
 | chunk size | usually 50,000 points; 0 or 0xFFFFFFFF means variable (the table then carries point counts) |
 | items | one record = the items in order (Point10, GpsTime11, RGB12, Byte / Point14, RGB14, RGBNIR14, Byte14), each with size and coder version |
 
-Point data starts with an i64 offset to the **chunk table**; chunk 0 starts 8 bytes later. The
+In a chunked file (compressors 2 and 3), point data starts with an i64 offset to the
+**chunk table**; chunk 0 starts 8 bytes later (a point-wise compressor 1 file has neither: one
+stream starts at the point data and runs to the end). The
 table (u32 version, u32 count, then arithmetic-coded byte counts, and point counts if variable) is
 written last, so a streaming writer leaves -1 at the start and repeats the offset in the file's
 final 8 bytes.
