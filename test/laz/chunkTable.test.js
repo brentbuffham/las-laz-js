@@ -56,7 +56,9 @@ test("the LASzip VLR: compressor, chunk size and items", function () {
 	assert.equal(vlr.variableChunks, false);
 	assert.deepEqual(vlr.items, [{ type: 6, size: 20, version: 2 }, { type: 7, size: 8, version: 2 }, { type: 8, size: 6, version: 2 }]);
 	assert.deepEqual(vlr.version, { major: 3, minor: 4, revision: 3 });
-	assert.equal(parseLazVlr(vlrBytes(3, 0, [[10, 30, 3]])).variableChunks, true);   // 0 = variable
+	var variable = parseLazVlr(vlrBytes(3, 0, [[10, 30, 3]]));                       // 0 = variable
+	assert.equal(variable.variableChunks, true);
+	assert.equal(variable.chunkSize, 0xFFFFFFFF);
 	assert.equal(findLazVlr([{ userId: "laszip encoded", recordId: 22204, bytes: vlrBytes(2, 1, [[6, 20, 2]]) }]).chunkSize, 1);
 	assert.equal(findLazVlr([{ userId: "LASF_Projection", recordId: 34735, bytes: new Uint8Array(8) }]), null);
 	assert.throws(function () { parseLazVlr(new Uint8Array(20)); }, { code: "BAD_VLR" });

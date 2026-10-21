@@ -11,8 +11,9 @@
 //
 // From laz-rs src/laszip/chunk_table.rs (https://github.com/laz-rs/laz-rs),
 // itself from LASzip by rapidlasso. (c) 2007-2015 martin isenburg,
-// rapidlasso; (c) 2019-2023 Thomas Montaigu. Licensed under the Apache
-// License, Version 2.0 (see LICENSE-APACHE and NOTICE). Changes: written
+// rapidlasso; (c) 2019-2023 Thomas Montaigu.
+// Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE and
+// NOTICE). Changes: written
 // in JavaScript over an async byte source, Brent Buffham 2026.
 //==========================================================
 
@@ -48,10 +49,9 @@ export function decodeChunkTable(bytes, withPointCounts) {
 	for (var i = 0; i < n; i++) {
 		var points = withPointCounts ? ic.decompress(dec, prevPoints, 0) : 0;
 		var size = ic.decompress(dec, prevBytes, 1);
-		// stored as u32 in an i32 coder: read back unsigned
-		points = points >>> 0; size = size >>> 0;
-		out.push({ pointCount: points, byteCount: size });
-		prevPoints = points | 0; prevBytes = size | 0;
+		// coded as i32 predictions of u32 counts: the i32 is the prediction, the u32 the count
+		prevPoints = points; prevBytes = size;
+		out.push({ pointCount: points < 0 ? points + 4294967296 : points, byteCount: size < 0 ? size + 4294967296 : size });
 	}
 	return out;
 }

@@ -9,8 +9,9 @@
 //
 // Layout from laz-rs src/laszip/vlr.rs (https://github.com/laz-rs/laz-rs),
 // itself from LASzip by rapidlasso. (c) 2007-2015 martin isenburg,
-// rapidlasso; (c) 2019-2023 Thomas Montaigu. Licensed under the Apache
-// License, Version 2.0 (see LICENSE-APACHE and NOTICE). Changes: written
+// rapidlasso; (c) 2019-2023 Thomas Montaigu.
+// Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE and
+// NOTICE). Changes: written
 // in JavaScript from that layout, Brent Buffham 2026.
 //==========================================================
 
