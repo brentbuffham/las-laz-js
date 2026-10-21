@@ -63,12 +63,15 @@ export function decodeRgb(dec, m, last) {
 	last[0] = r; last[1] = g; last[2] = b;
 }
 
-/** RGB12 v2 decompressor: one per chunk. */
-export function Rgb12Decompressor() {
-	this.size = 6;
-	this.models = new RgbModels();
-	this.last = new Uint16Array(3);
+// The state and models both halves start a chunk with
+function initRgb12(self) {
+	self.size = 6;
+	self.models = new RgbModels();
+	self.last = new Uint16Array(3);
 }
+
+/** RGB12 v2 decompressor: one per chunk. */
+export function Rgb12Decompressor() { initRgb12(this); }
 
 Rgb12Decompressor.prototype.first = function (src, s, view, o) {
 	for (var i = 0; i < 6; i++) view.setUint8(o + i, src[s + i]);
@@ -111,9 +114,7 @@ export function encodeRgb(enc, m, last, cur) {
 
 /** RGB12 v2 compressor: one per chunk, the mirror of Rgb12Decompressor. */
 export function Rgb12Compressor() {
-	this.size = 6;
-	this.models = new RgbModels();
-	this.last = new Uint16Array(3);
+	initRgb12(this);
 	this.cur = new Uint16Array(3);
 }
 

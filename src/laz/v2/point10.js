@@ -69,23 +69,33 @@ function models(n, symbols) { var out = []; for (var i = 0; i < n; i++) out.push
 function lazyModel(table, i) { return table[i] || (table[i] = new ArithmeticModel(256)); }
 function medians() { var out = []; for (var i = 0; i < 16; i++) out.push(new StreamingMedian()); return out; }
 
+// The Y and Z coder contexts, from the bit lengths of the X (and Y) corrections just coded
+function yContext(single, icDx) { var k = icDx.k; return single + (k < 20 ? k & 0xFFFFFFFE : 20); }
+function zContext(single, icDx, icDy) { var k = Math.floor((icDx.k + icDy.k) / 2); return single + (k < 18 ? k & 0xFFFFFFFE : 18); }
+
+// The state and models both halves start a chunk with; IC is the integer coder
+// (IntegerCompressor or IntegerDecompressor), so each side gets the same widths and contexts
+function initPoint10(self, IC) {
+	self.size = 20;
+	self.lastIntensity = new Uint16Array(16);
+	self.xMedian = medians();
+	self.yMedian = medians();
+	self.lastHeight = new Int32Array(8);
+	self.changedValues = new ArithmeticModel(64);
+	self.scanAngleRank = models(2, 256);
+	self.bitByte = new Array(256);
+	self.classification = new Array(256);
+	self.userData = new Array(256);
+	self.icIntensity = new IC(16, 4);
+	self.icPointSourceId = new IC(16, 1);
+	self.icDx = new IC(32, 2);
+	self.icDy = new IC(32, 22);
+	self.icZ = new IC(32, 20);
+}
+
 /** Point10 v2 decompressor: one per chunk. */
 export function Point10Decompressor() {
-	this.size = 20;
-	this.lastIntensity = new Uint16Array(16);
-	this.xMedian = medians();
-	this.yMedian = medians();
-	this.lastHeight = new Int32Array(8);
-	this.changedValues = new ArithmeticModel(64);
-	this.scanAngleRank = models(2, 256);
-	this.bitByte = new Array(256);
-	this.classification = new Array(256);
-	this.userData = new Array(256);
-	this.icIntensity = new IntegerDecompressor(16, 4);
-	this.icPointSourceId = new IntegerDecompressor(16, 1);
-	this.icDx = new IntegerDecompressor(32, 2);
-	this.icDy = new IntegerDecompressor(32, 22);
-	this.icZ = new IntegerDecompressor(32, 20);
+	initPoint10(this, IntegerDecompressor);
 }
 
 /** The first point of a chunk is stored raw. */
@@ -128,12 +138,10 @@ Point10Decompressor.prototype.next = function (dec, view, o) {
 	var diff = this.icDx.decompress(dec, this.xMedian[m].get(), single);
 	this.x = (this.x + diff) | 0;
 	this.xMedian[m].add(diff);
-	var kx = this.icDx.k;
-	diff = this.icDy.decompress(dec, this.yMedian[m].get(), single + (kx < 20 ? kx & 0xFFFFFFFE : 20));
+	diff = this.icDy.decompress(dec, this.yMedian[m].get(), yContext(single, this.icDx));
 	this.y = (this.y + diff) | 0;
 	this.yMedian[m].add(diff);
-	var kz = Math.floor((this.icDx.k + this.icDy.k) / 2);
-	this.z = this.icZ.decompress(dec, this.lastHeight[l], single + (kz < 18 ? kz & 0xFFFFFFFE : 18));
+	this.z = this.icZ.decompress(dec, this.lastHeight[l], zContext(single, this.icDx, this.icDy));
 	this.lastHeight[l] = this.z;
 	view.setInt32(o, this.x, LE); view.setInt32(o + 4, this.y, LE); view.setInt32(o + 8, this.z, LE);
 	view.setUint16(o + 12, this.intensity, LE);
@@ -152,21 +160,7 @@ function viewOf(item, src) {
 
 /** Point10 v2 compressor: one per chunk, the mirror of Point10Decompressor. */
 export function Point10Compressor() {
-	this.size = 20;
-	this.lastIntensity = new Uint16Array(16);
-	this.xMedian = medians();
-	this.yMedian = medians();
-	this.lastHeight = new Int32Array(8);
-	this.changedValues = new ArithmeticModel(64);
-	this.scanAngleRank = models(2, 256);
-	this.bitByte = new Array(256);
-	this.classification = new Array(256);
-	this.userData = new Array(256);
-	this.icIntensity = new IntegerCompressor(16, 4);
-	this.icPointSourceId = new IntegerCompressor(16, 1);
-	this.icDx = new IntegerCompressor(32, 2);
-	this.icDy = new IntegerCompressor(32, 22);
-	this.icZ = new IntegerCompressor(32, 20);
+	initPoint10(this, IntegerCompressor);
 	this._src = null;
 	this._view = null;
 }
@@ -206,12 +200,10 @@ Point10Compressor.prototype.next = function (enc, src, s) {
 	var diff = (x - this.x) | 0;              // i32 wrapping_sub
 	this.icDx.compress(enc, this.xMedian[m].get(), diff, single);
 	this.xMedian[m].add(diff);
-	var kx = this.icDx.k;
 	diff = (y - this.y) | 0;
-	this.icDy.compress(enc, this.yMedian[m].get(), diff, single + (kx < 20 ? kx & 0xFFFFFFFE : 20));
+	this.icDy.compress(enc, this.yMedian[m].get(), diff, yContext(single, this.icDx));
 	this.yMedian[m].add(diff);
-	var kz = Math.floor((this.icDx.k + this.icDy.k) / 2);
-	this.icZ.compress(enc, this.lastHeight[l], z, single + (kz < 18 ? kz & 0xFFFFFFFE : 18));
+	this.icZ.compress(enc, this.lastHeight[l], z, zContext(single, this.icDx, this.icDy));
 	this.lastHeight[l] = z;
 	this.x = x; this.y = y; this.z = z;
 	this.bits = bits; this.cls = cls; this.angle = angle; this.user = user; this.psid = psid;

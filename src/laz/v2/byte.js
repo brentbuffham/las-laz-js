@@ -14,13 +14,16 @@
 
 import { ArithmeticModel } from "../models.js";
 
-/** Byte v2 decompressor for `count` extra bytes: one per chunk. */
-export function ByteDecompressor(count) {
-	this.size = count;
-	this.last = new Uint8Array(count);
-	this.models = [];
-	for (var i = 0; i < count; i++) this.models.push(new ArithmeticModel(256));
+// The state and models both halves start a chunk with: the last bytes and one model per byte
+function initByte(self, count) {
+	self.size = count;
+	self.last = new Uint8Array(count);
+	self.models = [];
+	for (var i = 0; i < count; i++) self.models.push(new ArithmeticModel(256));
 }
+
+/** Byte v2 decompressor for `count` extra bytes: one per chunk. */
+export function ByteDecompressor(count) { initByte(this, count); }
 
 ByteDecompressor.prototype.first = function (src, s, view, o) {
 	for (var i = 0; i < this.size; i++) { this.last[i] = src[s + i]; view.setUint8(o + i, src[s + i]); }
@@ -34,12 +37,7 @@ ByteDecompressor.prototype.next = function (dec, view, o) {
 };
 
 /** Byte v2 compressor for `count` extra bytes: one per chunk, the mirror of ByteDecompressor. */
-export function ByteCompressor(count) {
-	this.size = count;
-	this.last = new Uint8Array(count);
-	this.models = [];
-	for (var i = 0; i < count; i++) this.models.push(new ArithmeticModel(256));
-}
+export function ByteCompressor(count) { initByte(this, count); }
 
 ByteCompressor.prototype.first = function (src, s) { this.last.set(src.subarray(s, s + this.size)); };
 

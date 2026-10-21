@@ -26,18 +26,39 @@ var MULTI_UNCHANGED = MULTI - MULTI_MINUS + 1;   // 511
 var MULTI_CODE_FULL = MULTI - MULTI_MINUS + 2;   // 512
 var MULTI_TOTAL = MULTI - MULTI_MINUS + 6;       // 516
 
+// The state and models both halves start a chunk with; IC is the integer coder
+// (IntegerCompressor or IntegerDecompressor)
+function initGps(self, IC) {
+	self.size = 8;
+	self.multiModel = new ArithmeticModel(MULTI_TOTAL);
+	self.zeroDiffModel = new ArithmeticModel(6);
+	self.ic = new IC(32, 9);
+	self.last = 0;
+	self.nextSeq = 0;
+	self.hi = new Int32Array(4);
+	self.lo = new Float64Array(4);              // u32 values, held exactly
+	self.diffs = new Int32Array(4);
+	self.extremes = new Int32Array(4);
+}
+
+// A full time (hi, lo) starts the next of the four sequences, with no difference yet
+function startSequence(self, hi, lo) {
+	self.nextSeq = (self.nextSeq + 1) & 3;
+	self.hi[self.nextSeq] = hi;
+	self.lo[self.nextSeq] = lo;
+	self.last = self.nextSeq;
+	self.diffs[self.last] = 0;
+	self.extremes[self.last] = 0;
+}
+
+// After three extreme differences in a row, the latest becomes the new reference
+function extreme(self, d) {
+	if (++self.extremes[self.last] > 3) { self.diffs[self.last] = d; self.extremes[self.last] = 0; }
+}
+
 /** GpsTime11 v2 decompressor: one per chunk. */
 export function GpsTime11Decompressor() {
-	this.size = 8;
-	this.multiModel = new ArithmeticModel(MULTI_TOTAL);
-	this.zeroDiffModel = new ArithmeticModel(6);
-	this.ic = new IntegerDecompressor(32, 9);
-	this.last = 0;
-	this.nextSeq = 0;
-	this.hi = new Int32Array(4);
-	this.lo = new Float64Array(4);              // u32 values, held exactly
-	this.diffs = new Int32Array(4);
-	this.extremes = new Int32Array(4);
+	initGps(this, IntegerDecompressor);
 }
 
 GpsTime11Decompressor.prototype._add = function (i, d) {
@@ -48,17 +69,8 @@ GpsTime11Decompressor.prototype._add = function (i, d) {
 };
 
 GpsTime11Decompressor.prototype._full = function (dec) {
-	this.nextSeq = (this.nextSeq + 1) & 3;
-	this.hi[this.nextSeq] = this.ic.decompress(dec, this.hi[this.last], 8);
-	this.lo[this.nextSeq] = dec.readInt();
-	this.last = this.nextSeq;
-	this.diffs[this.last] = 0;
-	this.extremes[this.last] = 0;
-};
-
-// After three extreme differences in a row, the latest becomes the new reference
-GpsTime11Decompressor.prototype._extreme = function (d) {
-	if (++this.extremes[this.last] > 3) { this.diffs[this.last] = d; this.extremes[this.last] = 0; }
+	var hi = this.ic.decompress(dec, this.hi[this.last], 8);
+	startSequence(this, hi, dec.readInt());
 };
 
 GpsTime11Decompressor.prototype.first = function (src, s, view, o) {
@@ -90,19 +102,19 @@ GpsTime11Decompressor.prototype.next = function (dec, view, o) {
 			} else if (multi < MULTI_UNCHANGED) {
 				if (multi === 0) {
 					d = this.ic.decompress(dec, 0, 7);
-					this._extreme(d);
+					extreme(this, d);
 				} else if (multi < MULTI) {
 					d = this.ic.decompress(dec, Math.imul(multi, this.diffs[L]), multi < 10 ? 2 : 3);
 				} else if (multi === MULTI) {
 					d = this.ic.decompress(dec, Math.imul(MULTI, this.diffs[L]), 4);
-					this._extreme(d);
+					extreme(this, d);
 				} else {
 					multi = MULTI - multi;
 					if (multi > MULTI_MINUS) {
 						d = this.ic.decompress(dec, Math.imul(multi, this.diffs[L]), 5);
 					} else {
 						d = this.ic.decompress(dec, Math.imul(MULTI_MINUS, this.diffs[L]), 6);
-						this._extreme(d);
+						extreme(this, d);
 					}
 				}
 				this._add(L, d);
@@ -138,16 +150,7 @@ function viewOf(item, src) {
 
 /** GpsTime11 v2 compressor: one per chunk, the mirror of GpsTime11Decompressor. */
 export function GpsTime11Compressor() {
-	this.size = 8;
-	this.multiModel = new ArithmeticModel(MULTI_TOTAL);
-	this.zeroDiffModel = new ArithmeticModel(6);
-	this.ic = new IntegerCompressor(32, 9);
-	this.last = 0;
-	this.nextSeq = 0;
-	this.hi = new Int32Array(4);
-	this.lo = new Float64Array(4);              // u32 values, held exactly
-	this.diffs = new Int32Array(4);
-	this.extremes = new Int32Array(4);
+	initGps(this, IntegerCompressor);
 	this._src = null;
 	this._view = null;
 }
@@ -172,14 +175,7 @@ GpsTime11Compressor.prototype._other = function (hi, lo) {
 GpsTime11Compressor.prototype._full = function (enc, hi, lo) {
 	this.ic.compress(enc, this.hi[this.last], hi, 8);
 	enc.writeInt(lo);
-	this.nextSeq = (this.nextSeq + 1) & 3;
-	this.last = this.nextSeq;
-	this.diffs[this.last] = 0;
-	this.extremes[this.last] = 0;
-};
-
-GpsTime11Compressor.prototype._extreme = function (d) {
-	if (++this.extremes[this.last] > 3) { this.diffs[this.last] = d; this.extremes[this.last] = 0; }
+	startSequence(this, hi, lo);
 };
 
 GpsTime11Compressor.prototype.first = function (src, s) {
@@ -226,7 +222,7 @@ GpsTime11Compressor.prototype.next = function (enc, src, s) {
 				} else {
 					enc.encodeSymbol(this.multiModel, MULTI);
 					this.ic.compress(enc, Math.imul(MULTI, this.diffs[L]), d, 4);
-					this._extreme(d);
+					extreme(this, d);
 				}
 			} else if (multi < 0) {
 				if (multi > MULTI_MINUS) {
@@ -235,12 +231,12 @@ GpsTime11Compressor.prototype.next = function (enc, src, s) {
 				} else {
 					enc.encodeSymbol(this.multiModel, MULTI - MULTI_MINUS);
 					this.ic.compress(enc, Math.imul(MULTI_MINUS, this.diffs[L]), d, 6);
-					this._extreme(d);
+					extreme(this, d);
 				}
 			} else {
 				enc.encodeSymbol(this.multiModel, 0);
 				this.ic.compress(enc, 0, d, 7);
-				this._extreme(d);
+				extreme(this, d);
 			}
 		} else if ((j = this._other(hi, lo))) {
 			enc.encodeSymbol(this.multiModel, MULTI_CODE_FULL + j);
