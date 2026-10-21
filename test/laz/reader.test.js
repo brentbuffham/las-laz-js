@@ -27,9 +27,9 @@ function same(a, b, what) {
 	});
 }
 
-var POINTWISE = LAZ_FIXTURES.filter(function (fx) { return fx.pointFormat <= 5; });
+var ALL_FIXTURES = LAZ_FIXTURES;
 
-POINTWISE.forEach(function (fx) {
+ALL_FIXTURES.forEach(function (fx) {
 	test(fx.name + ": readPoints of the LAZ equals readPoints of its LAS, every field", async function () {
 		var laz = await openLas(fixtureBytes(fx.name));
 		var las = await openLas(fixtureLas(fx));
@@ -113,6 +113,8 @@ function withItem(name, k, type, version) {
 test("LASzip item version 1 and wave-packet items are UNSUPPORTED, by name", async function () {
 	await assert.rejects((await openLas(withItem("f0", 0, null, 1))).readPoints({ fields: ["x"] }), function (e) { return e.code === "UNSUPPORTED" && /Point10 version 1/.test(e.message); });
 	await assert.rejects((await openLas(withItem("f1", 1, 9, 2))).readPoints({ fields: ["x"] }), function (e) { return e.code === "UNSUPPORTED" && /WavePacket13/.test(e.message); });
+	await assert.rejects((await openLas(withItem("f6", 0, null, 2))).readPoints({ fields: ["x"] }), function (e) { return e.code === "UNSUPPORTED" && /Point14 version 2/.test(e.message); });
+	await assert.rejects((await openLas(withItem("f7", 1, 13, 3))).readPoints({ fields: ["x"] }), function (e) { return e.code === "UNSUPPORTED" && /WavePacket14/.test(e.message); });
 });
 
 test("reader.laz describes the compression; a LAS file has none", async function () {
@@ -121,4 +123,22 @@ test("reader.laz describes the compression; a LAS file has none", async function
 	assert.equal(laz.laz.chunkSize, 50000);
 	assert.deepEqual(laz.laz.items.map(function (i) { return i.type; }), [6, 7, 8]);
 	assert.equal((await openLas(fixtureLas(LAZ_FIXTURES[3]))).laz, null);
+});
+
+test("LAS 1.4 layered LAZ: filters and windows on format 7 give what they give on its LAS", async function () {
+	var fx = LAZ_FIXTURES.find(function (f) { return f.name === "f7"; });
+	var opts = { fields: ["x", "z", "gpsTime", "red", "scannerChannel", "classification"], classes: [2, 9], maxPoints: 2000 };
+	var a = await (await openLas(fixtureBytes("f7"), { windowSize: 1000 })).readPoints(opts);
+	var b = await (await openLas(fixtureLas(fx))).readPoints(opts);
+	assert.equal(a.count, 2000);
+	same(a, b, "f7 filtered");
+	assert.deepEqual(Array.from(new Set(b.scannerChannel)).sort(), [0, 1, 2, 3]);
+});
+
+test("a layered chunk cut short is TRUNCATED", async function () {
+	var bytes = fixtureBytes("f6").slice();
+	var las = await openLas(bytes);
+	var start = las.header.offsetToPointData + 8 + 30 + 4;   // first record raw, then the point count, then layer sizes
+	new DataView(bytes.buffer).setUint32(start + 4, 0x7FFFFFFF, true);   // the Z layer claims 2 GB
+	await assert.rejects((await openLas(bytes)).readPoints({ fields: ["z"] }), { code: "TRUNCATED" });
 });

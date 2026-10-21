@@ -57,7 +57,10 @@ export function fixturePoints(fx) {
 		green = Math.max(0, Math.min(65535, green + Math.round((r() - 0.5) * 900)));
 		blue = Math.max(0, Math.min(65535, blue + Math.round((r() - 0.5) * 900)));
 		nir = Math.max(0, Math.min(65535, nir + Math.round((r() - 0.5) * 900)));
-		for (var k = 1; k <= returns && i < n; k++, i++) {
+		// a 3-return pulse sometimes loses its middle return (return number jumps 1 -> 3)
+		var skip = returns === 3 && r() < 0.15 ? 2 : 0;
+		for (var k = 1; k <= returns && i < n; k++) {
+			if (k === skip) continue;
 			pts.push({
 				x: Math.round((bx + (k - 1) * 0.01) * 1000) / 1000, y: Math.round(by * 1000) / 1000,
 				z: Math.round((bz - (k - 1) * 1.5) * 1000) / 1000,
@@ -66,14 +69,16 @@ export function fixturePoints(fx) {
 				scanDirection: (i >> 7) & 1, edgeOfFlightLine: !quiet && i % 997 === 0 ? 1 : 0,
 				classification: k === returns ? cls : 1,
 				classificationFlags: !quiet && r() < 0.01 ? (ext ? 5 : 1) : 0,
-				scannerChannel: ext ? (i < n / 2 ? 0 : 1) : 0,
+				// channels in blocks that come back (0, 1, 0, 2, 1, 3, 0 ...): every context switch path
+				scannerChannel: ext ? [0, 1, 0, 2, 1, 3, 0][Math.floor(i / 700) % 7] : 0,
 				scanAngle: ext ? Math.round(angle / 0.006) * 0.006 : Math.round(angle),
 				userData: Math.floor(i / 5000),
 				pointSourceId: i < n / 2 ? 101 : 102,
-				gpsTime: t + (k - 1) * 0.0000001,
+				gpsTime: t,                            // the returns of one pulse share its time
 				// grey (r = g = b) in the quiet stretch, as many scanners write: LASzip's one-channel path
 				red: red, green: quiet ? red : green, blue: quiet ? red : blue, nir: nir
 			});
+			i++;
 		}
 	}
 	return pts;

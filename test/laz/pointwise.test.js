@@ -20,7 +20,7 @@ function near(a, b, what) { assert.ok(Math.abs(a - b) < 0.0005, what + ": " + a 
 
 var MANIFEST = LAZ_MANIFEST;
 
-LAZ_FIXTURES.filter(function (fx) { return fx.pointFormat <= 5; }).forEach(function (fx) {
+LAZ_FIXTURES.forEach(function (fx) {
 	test(fx.name + " (format " + fx.pointFormat + (fx.extra ? " + " + fx.extra + " extra bytes" : "") + ", " + fx.points + " points): records equal PDAL's decompression", async function () {
 		var r = await decompressAll(fixtureBytes(fx.name));
 		var m = MANIFEST[fx.name];
