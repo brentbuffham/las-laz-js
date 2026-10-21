@@ -6,7 +6,8 @@
 // offset must point at our own table. Beyond the fixtures: round
 // trips through openLas against the LAS writer's output, batches of
 // any size and unawaited writePoints calls giving the one-shot bytes,
-// the 0-point file PDAL writes, and the refusals.
+// the 0-point file PDAL writes, the refusals, and threads: the worker
+// pool's bytes are the threads-1 bytes, whatever order chunks finish in.
 //==========================================================
 /* prettier-ignore-file */
 import { test } from "node:test";
@@ -18,6 +19,9 @@ import { MemorySource } from "../../src/io/MemorySource.js";
 import { LASZIP_USER_ID, LASZIP_RECORD_ID } from "../../src/laz/LazVlr.js";
 import { LAZ_MANIFEST, fixtureBytes, decompressAll } from "../helpers/lazFixtureFiles.js";
 import { LAZ_FIXTURES, fixturePoints } from "../helpers/lazFixtureData.js";
+import { createLazPool, defaultThreads } from "../../src/laz/pool.js";
+import { createChunkCompressor } from "../../src/laz/compressChunk.js";
+import { LasError, ERROR_CODES } from "../../src/errors.js";
 
 var ALL = ["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scannerChannel", "scanAngle", "userData", "pointSourceId", "gpsTime", "red", "green", "blue", "nir"];
 var TYPES = { x: Float64Array, y: Float64Array, z: Float64Array, intensity: Uint16Array, returnNumber: Uint8Array, numberOfReturns: Uint8Array, scanDirection: Uint8Array, edgeOfFlightLine: Uint8Array, classification: Uint8Array, classificationFlags: Uint8Array, scannerChannel: Uint8Array, scanAngle: Float32Array, userData: Uint8Array, pointSourceId: Uint16Array, gpsTime: Float64Array, red: Uint16Array, green: Uint16Array, blue: Uint16Array, nir: Uint16Array };
@@ -225,4 +229,216 @@ test("chunkSize without compress is ignored: the LAS bytes are unchanged", async
 	assert.deepEqual(await writeLas(src, Object.assign({ chunkSize: 0 }, opts)), plain);
 	assert.deepEqual(await writeLas(src, Object.assign({ compress: false, chunkSize: 1000 }, opts)), plain);
 	assert.equal(parseHeader(new MemorySource(plain)).compressed, false);
+});
+
+//==========================================================
+// threads: compression on the worker pool. Chunks compress independently,
+// so any thread count must give the threads-1 bytes; chunks that finish
+// out of order are still written in order; the pool is always closed.
+//==========================================================
+
+var THROWS = new URL("../fixtures/workers/throwsOnLoad.js", import.meta.url);
+
+function fixtureOpts(fx) {
+	return { compress: true, chunkSize: 1000, version: fx.version, pointFormat: fx.pointFormat, scale: SCALE, offset: OFFSET, date: DATE };
+}
+
+// Real pools, counted: the size of each one made, and how often one was closed
+function countedPools() {
+	var c = { made: [], closed: 0 };
+	c.create = function (n) {
+		return createLazPool(n).then(function (p) {
+			assert.ok(p, "no pool: the parallel writer tests would quietly run on one thread");
+			c.made.push(n);
+			var close = p.close;
+			p.close = function () { c.closed++; return close.call(p); };
+			return p;
+		});
+	};
+	return c;
+}
+
+// A pool on this thread whose task t finishes after delayOf(t) ms (so later tasks can
+// finish first), or fails if t is failAt; it records what the writer asks of it
+function fakePool(n, delayOf, failAt) {
+	var log = { tasks: 0, inFlight: 0, maxInFlight: 0, maxChunks: 0, finished: [], closed: 0 };
+	log.pool = {
+		size: n,
+		compress: function (task) {
+			var t = log.tasks++;
+			log.inFlight++;
+			log.maxInFlight = Math.max(log.maxInFlight, log.inFlight);
+			log.maxChunks = Math.max(log.maxChunks, task.counts.length);
+			return new Promise(function (resolve, reject) {
+				setTimeout(function () {
+					log.inFlight--;
+					log.finished.push(t);
+					if (t === failAt) return reject(new LasError(ERROR_CODES.UNSUPPORTED, "a LAZ worker failed: test failure"));
+					// compressed when the delay is up, so the delays, not the work, set the finishing order
+					var one = createChunkCompressor(task.vlr, task.recordLength), recs = new Uint8Array(task.records);
+					var p = 0, parts = task.counts.map(function (count) { var ch = one(recs, p, count); p += count * task.recordLength; return ch; });
+					var bytes = new Uint8Array(parts.reduce(function (s, c) { return s + c.length; }, 0)), o = 0;
+					parts.forEach(function (c) { bytes.set(c, o); o += c.length; });
+					resolve({ bytes: bytes, sizes: parts.map(function (c) { return c.length; }) });
+				}, delayOf(t));
+			});
+		},
+		close: function () { log.closed++; }
+	};
+	log.create = function (m) { log.asked = m; return Promise.resolve(log.pool); };
+	return log;
+}
+
+function outOfOrder(finished) { return finished.some(function (t, i) { return i > 0 && t < finished[i - 1]; }); }
+
+async function streamed(all, opts, batch, unawaited) {
+	var sink = memorySink(64);
+	var w = await createLasWriter(sink, opts);
+	var calls = [];
+	for (var a = 0; a < all.count; a += batch) {
+		var job = w.writePoints(slice(all, a, Math.min(all.count, a + batch)));
+		if (unawaited) calls.push(job); else await job;
+	}
+	assert.deepEqual(await w.close(), { count: all.count });
+	await Promise.all(calls);
+	return sink.bytes();
+}
+
+["f3", "f7"].forEach(function (name) {
+	var fx = LAZ_FIXTURES.find(function (f) { return f.name === name; });
+	test(name + ", chunkSize 1000 (51 chunks): threads 2 = threads 1, byte for byte (writeLas and createLasWriter)", async function () {
+		var all = toColumns(fixturePoints(fx)), opts = fixtureOpts(fx);
+		var one = await writeLas(all, Object.assign({ threads: 1 }, opts));
+		assert.equal((await decompressAll(one)).chunks.length, 51);
+		var pools = countedPools();
+		var two = await writeLas(all, Object.assign({ threads: 2, _createPool: pools.create }, opts));
+		assert.deepEqual(pools.made, [2]);
+		assert.equal(pools.closed, 1, "writeLas closes its pool");
+		assert.deepEqual(two, one);
+		// streaming, 7777 points a call, awaited and not
+		assert.deepEqual(await streamed(all, Object.assign({ threads: 2, _createPool: pools.create }, opts), 7777), one, "awaited batches");
+		assert.deepEqual(await streamed(all, Object.assign({ threads: 2, _createPool: pools.create }, opts), 7777, true), one, "unawaited batches");
+		assert.deepEqual(pools.made, [2, 2, 2]);
+		assert.equal(pools.closed, 3, "close() closes the pool");
+		assert.deepEqual(await streamed(all, Object.assign({ threads: 1 }, opts), 7777), one, "threads 1 streaming");
+	});
+});
+
+test("no workers: a pool that cannot start means the same bytes on this thread", async function () {
+	var fx = LAZ_FIXTURES.find(function (f) { return f.name === "f3"; });
+	var all = toColumns(fixturePoints(fx)), opts = fixtureOpts(fx);
+	var one = await writeLas(all, Object.assign({ threads: 1 }, opts));
+	var asked = 0;
+	var none = function () { asked++; return createLazPool(2, THROWS); };
+	assert.equal(await none(), null);
+	assert.deepEqual(await writeLas(all, Object.assign({ threads: 2, _createPool: none }, opts)), one);
+	assert.deepEqual(await streamed(all, Object.assign({ threads: 2, _createPool: none }, opts), 7777), one);
+	assert.equal(asked, 3);
+	// a pool hook that fails outright: this thread too
+	var broken = function () { return Promise.reject(new Error("no workers here")); };
+	assert.deepEqual(await writeLas(all, Object.assign({ threads: 2, _createPool: broken }, opts)), one);
+});
+
+test("chunks that finish out of order (later ones first) are written in chunk order", async function () {
+	var fx = LAZ_FIXTURES.find(function (f) { return f.name === "f7"; });
+	var all = toColumns(fixturePoints(fx)), opts = fixtureOpts(fx);
+	var one = await writeLas(all, Object.assign({ threads: 1 }, opts));
+	var reversed = function (t) { return 5 + 10 * (7 - (t % 8)); };   // in each run of 8 tasks the last finishes first
+	var fake = fakePool(4, reversed);
+	assert.deepEqual(await writeLas(all, Object.assign({ threads: 4, _createPool: fake.create }, opts)), one);
+	assert.equal(fake.asked, 4);
+	assert.ok(outOfOrder(fake.finished), "completion order must differ from submission order: " + fake.finished);
+	assert.equal(fake.maxChunks, 4, "chunks go in groups of up to 4");
+	assert.equal(fake.tasks, 13);
+	assert.ok(fake.maxInFlight <= 2 * 4, "bounded: at most two tasks per worker in flight (" + fake.maxInFlight + ")");
+	assert.equal(fake.closed, 1);
+	// streaming, unawaited calls, to a slow sink as well
+	fake = fakePool(4, reversed);
+	var sink = memorySink(one.length);
+	var slow = { write: function (bytes, position) { return new Promise(function (res) { setTimeout(function () { sink.write(bytes, position); res(); }, 3); }); } };
+	var w = await createLasWriter(slow, Object.assign({ threads: 4, _createPool: fake.create }, opts));
+	var calls = [];
+	for (var a = 0; a < all.count; a += 7777) calls.push(w.writePoints(slice(all, a, Math.min(all.count, a + 7777))));
+	await w.close();
+	await Promise.all(calls);
+	assert.deepEqual(sink.bytes(), one);
+	assert.ok(outOfOrder(fake.finished), "streaming: out of order too: " + fake.finished);
+	assert.equal(fake.closed, 1);
+});
+
+test("a worker failing mid-write rejects writeLas / writePoints / close with its error, and the pool is closed", async function () {
+	var fx = LAZ_FIXTURES.find(function (f) { return f.name === "f3"; });
+	var all = toColumns(fixturePoints(fx)), opts = fixtureOpts(fx);
+	var fake = fakePool(2, function () { return 1; }, 2);
+	await assert.rejects(writeLas(all, Object.assign({ threads: 2, _createPool: fake.create }, opts)), { code: "UNSUPPORTED", message: /test failure/ });
+	assert.equal(fake.closed, 1);
+	fake = fakePool(2, function () { return 1; }, 2);
+	var w = await createLasWriter(memorySink(64), Object.assign({ threads: 2, _createPool: fake.create }, opts));
+	var err = null;
+	try {
+		for (var a = 0; a < all.count; a += 7777) await w.writePoints(slice(all, a, Math.min(all.count, a + 7777)));
+		await w.close();
+	} catch (e) { err = e; }
+	assert.ok(err && /test failure/.test(err.message), "the worker's error: " + err);
+	assert.equal(fake.closed, 1);
+	// the writer stays failed: later calls give the same error
+	await assert.rejects(w.writePoints(slice(all, 0, 10)), { message: /test failure/ });
+	await assert.rejects(w.close(), { message: /test failure/ });
+	assert.equal(fake.closed, 1);
+});
+
+test("a bad point (int32 overflow) mid-write closes the pool too", async function () {
+	var fx = LAZ_FIXTURES.find(function (f) { return f.name === "f3"; });
+	var all = toColumns(fixturePoints(fx)), opts = fixtureOpts(fx);
+	all.x[40000] = 1e12;
+	var fake = fakePool(2, function () { return 1; });
+	await assert.rejects(writeLas(all, Object.assign({ threads: 2, _createPool: fake.create }, opts)), { code: "INVALID_ARGUMENT" });
+	assert.equal(fake.closed, 1);
+	fake = fakePool(2, function () { return 1; });
+	var w = await createLasWriter(memorySink(64), Object.assign({ threads: 2, _createPool: fake.create }, opts));
+	await w.writePoints(slice(all, 0, 7777));
+	await assert.rejects(w.writePoints(slice(all, 7777, all.count)), { code: "INVALID_ARGUMENT" });
+	assert.equal(fake.closed, 1);
+	await assert.rejects(w.close(), { code: "INVALID_ARGUMENT" });
+});
+
+test("threads, automatic: writeLas uses a pool from 4 chunks, createLasWriter from its 4th full chunk; threads 1 never", async function () {
+	var auto = await defaultThreads();
+	var src = columns(4000), opts = Object.assign({}, STREAM);
+	var fake = fakePool(2, function () { return 0; });
+	await writeLas(slice(src, 0, 3000), Object.assign({ _createPool: fake.create }, opts));
+	assert.equal(fake.asked, undefined, "3 chunks: this thread");
+	var bytes = await writeLas(src, Object.assign({ _createPool: fake.create }, opts));
+	assert.equal(fake.asked, auto >= 2 ? Math.min(auto, 4) : undefined, "4 chunks: a pool of min(default threads, chunks)");
+	assert.deepEqual(bytes, await writeLas(src, opts));
+	fake = fakePool(2, function () { return 0; });
+	await writeLas(columns(51000), Object.assign({ threads: 1, _createPool: fake.create }, opts));
+	assert.equal(fake.asked, undefined, "threads 1: this thread");
+	await writeLas(slice(src, 0, 2000), Object.assign({ threads: 3, _createPool: fake.create }, opts));
+	assert.equal(fake.asked, 2, "explicit threads, at most one per chunk");
+	fake = fakePool(2, function () { return 0; });
+	await writeLas(slice(src, 0, 1000), Object.assign({ threads: 3, _createPool: fake.create }, opts));
+	assert.equal(fake.asked, undefined, "one chunk: nothing to share");
+	// streaming: automatic waits for the 4th full chunk; explicit starts at the first
+	fake = fakePool(2, function () { return 0; });
+	var w = await createLasWriter(memorySink(64), Object.assign({ _createPool: fake.create }, opts));
+	for (var c = 0; c < 3; c++) await w.writePoints(slice(src, c * 1000, c * 1000 + 1000));
+	assert.equal(fake.asked, undefined, "3 full chunks: this thread");
+	await w.writePoints(slice(src, 3000, 4000));
+	assert.equal(fake.asked, auto >= 2 ? auto : undefined, "the 4th full chunk starts the pool");
+	await w.close();
+	assert.equal(fake.closed, auto >= 2 ? 1 : 0);
+	fake = fakePool(2, function () { return 0; });
+	w = await createLasWriter(memorySink(64), Object.assign({ threads: 3, _createPool: fake.create }, opts));
+	await w.writePoints(slice(src, 0, 999));
+	assert.equal(fake.asked, undefined);
+	await w.writePoints(slice(src, 999, 1000));
+	assert.equal(fake.asked, 3, "explicit threads: from the first full chunk");
+	await w.close();
+	assert.equal(fake.closed, 1);
+	fake = fakePool(2, function () { return 0; });
+	w = await createLasWriter(memorySink(64), Object.assign({ threads: 1, _createPool: fake.create }, opts));
+	await w.writePoints(src);
+	await w.close();
+	assert.equal(fake.asked, undefined, "threads 1 streaming: this thread");
 });

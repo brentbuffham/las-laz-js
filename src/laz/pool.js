@@ -1,13 +1,14 @@
 // src/laz/pool.js
 //==========================================================
-// A pool of workers that decode LAZ chunks in parallel (chunks are
-// independent, so N cores decode about N times as fast). Browser module
-// Workers or Node worker_threads, running src/laz/chunkWorker.js. Tasks
-// queue and go to the next free worker; results come back as transferred
-// buffers. close() terminates every worker and fails what is still
-// queued, so nothing outlives a read. When workers cannot start (no
+// A pool of workers that decode and compress LAZ chunks in parallel
+// (chunks are independent, so N cores do about N times the work).
+// Browser module Workers or Node worker_threads, running
+// src/laz/chunkWorker.js. Tasks queue and go to the next free worker;
+// their buffers go there, and the results come back, transferred.
+// close() terminates every worker and fails what is still queued, so
+// nothing outlives a read or a write. When workers cannot start (no
 // Worker, a blocked or failing script), createLazPool returns null and
-// the reader decodes on its own thread.
+// the reader or writer works on its own thread.
 //
 // Uses the chunk decoder translated from laz-rs (https://github.com/laz-rs/laz-rs),
 // itself a port of LASzip by rapidlasso. (c) 2007-2015 martin isenburg,
@@ -23,7 +24,7 @@ var NODE_OS = ["node", "os"].join(":");
 var MAX_THREADS = 16;
 
 /**
- * How many decode workers to use by default: one fewer than the cores, at most 16.
+ * How many LAZ workers to use by default: one fewer than the cores, at most 16.
  * @returns {Promise<number>}
  */
 export async function defaultThreads() {
@@ -81,14 +82,14 @@ async function spawn(onMessage, onFail, nodeUrl) {
 /**
  * @param {number} n - workers to start (2 or more)
  * @param {URL} [nodeUrl] - a Node worker entry in place of chunkWorker.js (tests)
- * @returns {Promise<{size:number, decode:function(object): Promise<Uint8Array>, close:function(): void}|null>}
+ * @returns {Promise<{size:number, decode:function(object): Promise<Uint8Array>, compress:function(object): Promise<{bytes:Uint8Array, sizes:number[]}>, close:function(): void}|null>}
  */
 export async function createLazPool(n, nodeUrl) {
 	var workers = [], idle = [], queue = [], waiting = new Map(), nextId = 1, closed = false;
 
 	function fail(err) {
 		// a worker that dies takes the pool with it: every waiting task fails
-		var e = err instanceof LasError ? err : new LasError(ERROR_CODES.UNSUPPORTED, "a LAZ decode worker failed: " + (err && err.message ? err.message : String(err)));
+		var e = err instanceof LasError ? err : new LasError(ERROR_CODES.UNSUPPORTED, "a LAZ worker failed: " + (err && err.message ? err.message : String(err)));
 		waiting.forEach(function (job) { job.reject(e); });
 		waiting.clear();
 		queue.forEach(function (job) { job.reject(e); });
@@ -101,7 +102,7 @@ export async function createLazPool(n, nodeUrl) {
 			job.worker = w;
 			waiting.set(job.msg.id, job);
 			if (w.hold) w.hold();
-			w.post(job.msg, [job.msg.packed]);
+			w.post(job.msg, job.transfer);
 		}
 	}
 
@@ -112,7 +113,7 @@ export async function createLazPool(n, nodeUrl) {
 		if (job.worker.release) job.worker.release();
 		idle.push(job.worker);
 		if (m.error) job.reject(new LasError(m.error.code || ERROR_CODES.UNSUPPORTED, m.error.message, m.error.offset));
-		else job.resolve(new Uint8Array(m.records));
+		else job.resolve(job.result(m));
 		pump();
 	}
 
@@ -127,6 +128,14 @@ export async function createLazPool(n, nodeUrl) {
 	}
 	idle = workers.slice();
 
+	function run(msg, transfer, result) {
+		if (closed) return Promise.reject(new LasError(ERROR_CODES.ABORTED, "the LAZ pool is closed"));
+		return new Promise(function (resolve, reject) {
+			queue.push({ msg: Object.assign({ id: nextId++ }, msg), transfer: transfer, result: result, resolve: resolve, reject: reject });
+			pump();
+		});
+	}
+
 	return {
 		size: n,
 		/**
@@ -135,16 +144,21 @@ export async function createLazPool(n, nodeUrl) {
 		 * @returns {Promise<Uint8Array>} the chunks' raw LAS records, in order
 		 */
 		decode: function (task) {
-			if (closed) return Promise.reject(new LasError(ERROR_CODES.ABORTED, "the LAZ decode pool is closed"));
-			return new Promise(function (resolve, reject) {
-				queue.push({ msg: Object.assign({ id: nextId++ }, task), resolve: resolve, reject: reject });
-				pump();
-			});
+			return run(task, [task.packed], function (m) { return new Uint8Array(m.records); });
+		},
+		/**
+		 * Compress whole chunks from their own copy of the raw records (transferred).
+		 * @param {{vlr:object, recordLength:number, records:ArrayBuffer, counts:number[]}} task
+		 *   counts: each chunk's points, the chunks back to back from the start of records
+		 * @returns {Promise<{bytes:Uint8Array, sizes:number[]}>} the chunks, back to back, and each one's length
+		 */
+		compress: function (task) {
+			return run(Object.assign({ op: "compress" }, task), [task.records], function (m) { return { bytes: new Uint8Array(m.chunks), sizes: m.sizes }; });
 		},
 		close: function () {
 			if (closed) return;
 			closed = true;
-			fail(new LasError(ERROR_CODES.ABORTED, "the read stopped"));
+			fail(new LasError(ERROR_CODES.ABORTED, "the LAZ pool was closed"));
 			workers.forEach(function (w) { w.close(); });
 		}
 	};
