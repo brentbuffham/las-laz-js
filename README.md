@@ -135,6 +135,7 @@ import { writeLas, createLasWriter } from "las-laz-js";
 
 var bytes = await writeLas(pts, { version: "1.2", pointFormat: 3, crs: { epsg: 28350 } });
 var v14 = await writeLas(pts, { version: "1.4", pointFormat: 7, crs: { wkt: las.crs.wkt } });
+var laz = await writeLas(pts, { compress: true, pointFormat: 3 });   // LAZ
 
 var w = await createLasWriter(sink, { version: "1.2", pointFormat: 3, scale, offset });
 // sink: an OPFS writer from openScratchSyncWriter, a Node FileHandle, or any { write(bytes, position) }
@@ -146,7 +147,12 @@ A version and point format that do not go together (format 6 in LAS 1.2) are ref
 silently changed. Scale and offset are chosen from the bounds when not given. `crs.epsg`
 writes a GeoKey record; `crs.wkt` a WKT record. Point formats 6–10 must carry WKT (LAS 1.4), so
 an EPSG code alone is refused for them — the library has no projection database to turn a code
-into WKT. Writing LAZ arrives in 0.3.0.
+into WKT.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `compress` | `false` | write LAZ (LASzip, point formats 0–3); formats 4, 5, 9, 10 are refused (`UNSUPPORTED`) |
+| `chunkSize` | `50000` | points per LAZ chunk, a whole number ≥ 1; only with `compress` (ignored without it) |
 
 ## In a Worker
 

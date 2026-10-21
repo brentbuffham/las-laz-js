@@ -6,6 +6,12 @@
 // file handle) and patches the header totals on close. Both share
 // one header builder, so they produce identical bytes.
 //
+// With compress: true both write LAZ (point formats 0-3): the same
+// records, compressed chunkSize points at a time (LASzip's 50,000 by
+// default), after a LASzip VLR; the point data is an 8-byte offset to
+// the chunk table, the chunks, then the table — laid out as LAZperf
+// (PDAL) writes it.
+//
 // Ported from Kirra's LASWriter, with two changes: an invalid
 // version / format pair is REFUSED (Kirra silently downgraded the
 // format), and the coordinate system is written (GeoKey EPSG
@@ -16,9 +22,15 @@ import { LasError, ERROR_CODES } from "../errors.js";
 import { POINT_FORMATS } from "../format/PointFormats.js";
 import { chooseScaleOffset } from "./scaleOffset.js";
 import { encodeRecords } from "./encodeRecords.js";
+import { lazVlrFor, LASZIP_USER_ID, LASZIP_RECORD_ID } from "../laz/LazVlr.js";
+import { createChunkCompressor } from "../laz/compressChunk.js";
+import { encodeChunkTable } from "../laz/chunkTable.js";
 
 var LE = true;
 var HEADER_SIZE = { "1.0": 227, "1.1": 227, "1.2": 227, "1.3": 235, "1.4": 375 };
+var DEFAULT_CHUNK_SIZE = 50000;
+// 0xFFFFFFFF in the VLR's chunk size field means variable-size chunks
+var MAX_CHUNK_SIZE = 4294967294;
 
 function ascii(v, pos, text, max) {
 	for (var i = 0; i < max; i++) v.setUint8(pos + i, i < text.length ? text.charCodeAt(i) & 0x7F : 0); // bits-ok
@@ -68,7 +80,20 @@ function settle(points, opts) {
 	var minor = Number(version.split(".")[1]);
 	if (fmt >= 6 && minor < 4) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point format " + fmt + " needs LAS 1.4 (asked for " + version + ")");
 	if ((fmt === 4 || fmt === 5) && minor < 3) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point format " + fmt + " needs LAS 1.3 or later (asked for " + version + ")");
-	return { version: version, minor: minor, fmt: fmt, opts: opts };
+	return { version: version, minor: minor, fmt: fmt, opts: opts, laz: lazSetup(fmt, opts) };
+}
+
+// compress: the LASzip VLR and the chunk compressor. chunkSize is ignored without compress.
+function lazSetup(fmt, opts) {
+	if (!opts.compress) return null;
+	var chunkSize = opts.chunkSize == null ? DEFAULT_CHUNK_SIZE : opts.chunkSize;
+	if (!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK_SIZE) {
+		throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "chunkSize must be a whole number of points from 1 to " + MAX_CHUNK_SIZE + " (got " + chunkSize + ")");
+	}
+	var len = POINT_FORMATS[fmt].size;
+	var made = lazVlrFor(fmt, len, chunkSize);   // UNSUPPORTED for formats 4, 5, 9, 10
+	// createChunkCompressor refuses 6-8 (UNSUPPORTED) until layered compression is written
+	return { chunkSize: chunkSize, vlrBytes: made.bytes, compress: createChunkCompressor(made.vlr, len) };
 }
 
 function freshTotals() {
@@ -80,6 +105,7 @@ function headerBytes(s, so, totals) {
 	var o = s.opts;
 	var headerSize = HEADER_SIZE[s.version];
 	var vlrs = crsRecords(o.crs, s.fmt);
+	if (s.laz) vlrs.push({ userId: LASZIP_USER_ID, recordId: LASZIP_RECORD_ID, description: "http://laszip.org", bytes: s.laz.vlrBytes });
 	var vlrSize = vlrs.reduce(function (n, r) { return n + 54 + r.bytes.length; }, 0);
 	var out = new Uint8Array(headerSize + vlrSize);
 	var v = new DataView(out.buffer);
@@ -101,7 +127,7 @@ function headerBytes(s, so, totals) {
 	v.setUint16(94, headerSize, LE);
 	v.setUint32(96, headerSize + vlrSize, LE);
 	v.setUint32(100, vlrs.length, LE);
-	v.setUint8(104, s.fmt);
+	v.setUint8(104, s.laz ? s.fmt + 128 : s.fmt);   // bit 7: compressed
 	v.setUint16(105, fmt.size, LE);
 	var legacyOk = s.fmt < 6 && totals.count < 4294967296;
 	v.setUint32(107, legacyOk ? totals.count : 0, LE);
@@ -144,9 +170,10 @@ function boundsOfPoints(points, origin) {
 }
 
 /**
- * Write a whole LAS file.
+ * Write a whole LAS file, or LAZ with compress: true (point formats 0-3).
  * @param {object} points - PointColumns (world coordinates, or relative to opts.localOrigin)
- * @param {object} [opts] - version, pointFormat, scale, offset, crs {epsg|wkt}, software, systemId, date, localOrigin, as ("bytes" | "blob")
+ * @param {object} [opts] - version, pointFormat, scale, offset, crs {epsg|wkt}, software, systemId, date, localOrigin, as ("bytes" | "blob"),
+ *   compress (write LAZ), chunkSize (points per LAZ chunk, default 50000; only with compress)
  * @returns {Promise<Uint8Array|Blob>}
  */
 export async function writeLas(points, opts) {
@@ -156,6 +183,10 @@ export async function writeLas(points, opts) {
 	if (o.scale && !o.offset) so = { scale: o.scale, offset: chooseScaleOffset(boundsOfPoints(points, o.localOrigin)).offset };
 	var len = POINT_FORMATS[s.fmt].size;
 	var totals = freshTotals();
+	if (s.laz) {
+		var parts = lazParts(points, s, so, len, totals);
+		return o.as === "blob" ? new Blob(parts, { type: "application/octet-stream" }) : joinParts(parts);
+	}
 	// One buffer: records are encoded in place after the header, whose
 	// size does not depend on the totals; the header is filled in last
 	var headLength = headerBytes(s, so, totals).length;
@@ -164,6 +195,53 @@ export async function writeLas(points, opts) {
 	totals.count = points.count;
 	out.set(headerBytes(s, so, totals), 0);
 	return o.as === "blob" ? new Blob([out], { type: "application/octet-stream" }) : out;
+}
+
+// Columns a..b of a PointColumns (views where the columns are typed arrays)
+function rangeOf(cols, a, b) {
+	if (a === 0 && b === cols.count) return cols;
+	var out = { count: b - a };
+	for (var k in cols) {
+		var c = cols[k];
+		if (k !== "count" && c && typeof c.length === "number") out[k] = typeof c.subarray === "function" ? c.subarray(a, b) : c.slice(a, b);
+	}
+	return out;
+}
+
+function joinParts(parts) {
+	var total = parts.reduce(function (n, p) { return n + p.length; }, 0);
+	var out = new Uint8Array(total), at = 0;
+	parts.forEach(function (p) { out.set(p, at); at += p.length; });
+	return out;
+}
+
+// The i64 offset to the chunk table (an absolute file position), as two u32 halves
+function tableOffsetBytes(tablePos) {
+	var b = new Uint8Array(8);
+	setU64(new DataView(b.buffer), 0, tablePos);
+	return b;
+}
+
+// A whole LAZ file as parts: header + VLRs, table offset, chunks, chunk table.
+// One chunk of records at a time is encoded into a reused buffer and compressed.
+function lazParts(points, s, so, len, totals) {
+	var size = s.laz.chunkSize;
+	var buf = new Uint8Array(Math.min(size, points.count) * len), view = new DataView(buf.buffer);
+	var parts = [null, null], chunks = [];
+	var tablePos = headerBytes(s, so, totals).length + 8;   // the header's size does not depend on the totals
+	for (var a = 0; a < points.count; a += size) {
+		var n = Math.min(size, points.count - a);
+		encodeRecords(rangeOf(points, a, a + n), s.fmt, len, so, s.opts.localOrigin, view, 0, totals);
+		var chunk = s.laz.compress(buf, 0, n);
+		parts.push(chunk);
+		chunks.push({ pointCount: n, byteCount: chunk.length });
+		tablePos += chunk.length;
+	}
+	parts.push(encodeChunkTable(chunks, false));
+	totals.count = points.count;
+	parts[0] = headerBytes(s, so, totals);
+	parts[1] = tableOffsetBytes(tablePos);
+	return parts;
 }
 
 // One positioned write for any sink: an OPFS scratch writer (writeAt),
@@ -184,8 +262,60 @@ function positionedWrite(sink) {
 	throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "createLasWriter needs a sink with writeAt(bytes, position) or write(bytes, position)");
 }
 
+// The streaming LAZ writer. Records fill a chunk buffer; a full chunk is
+// compressed and its place reserved at the running position before
+// writePoints' first await, so calls made without waiting for each other
+// keep their order. close() flushes the partial chunk, writes the chunk
+// table after it, then patches the table offset and the header totals.
+async function createLazWriter(s, so, len, totals, put, start) {
+	var size = s.laz.chunkSize;
+	var buf = new Uint8Array(0), view = null, filled = 0;
+	var pos = start + 8, chunks = [], pending = [];
+	// until close(), the table offset is LASzip's "not written yet" (-1)
+	await put(joinParts([headerBytes(s, so, totals), new Uint8Array(8).fill(255)]), 0);
+	// grow the chunk buffer to hold n records (doubling, at most one chunk)
+	function room(n) {
+		if (buf.length >= n * len) return;
+		var grown = new Uint8Array(Math.max(n, Math.min(size, 2 * buf.length / len)) * len);
+		grown.set(buf.subarray(0, filled * len));
+		buf = grown;
+		view = new DataView(buf.buffer);
+	}
+	function flush() {
+		var chunk = s.laz.compress(buf, 0, filled);
+		chunks.push({ pointCount: filled, byteCount: chunk.length });
+		pending.push(put(chunk, pos));
+		pos += chunk.length;
+		filled = 0;
+	}
+	return {
+		writePoints: async function (points) {
+			var from = pending.length;
+			for (var a = 0; a < points.count;) {
+				var n = Math.min(size - filled, points.count - a);
+				room(filled + n);
+				encodeRecords(rangeOf(points, a, a + n), s.fmt, len, so, s.opts.localOrigin, view, filled * len, totals);
+				filled += n;
+				a += n;
+				totals.count += n;
+				if (filled === size) flush();
+			}
+			await Promise.all(pending.slice(from));
+		},
+		close: async function () {
+			if (filled) flush();
+			var tablePos = pos;
+			pending.push(put(encodeChunkTable(chunks, false), tablePos));
+			await Promise.all(pending);
+			await put(tableOffsetBytes(tablePos), start);
+			await put(headerBytes(s, so, totals), 0);
+			return { count: totals.count };
+		}
+	};
+}
+
 /**
- * Stream a LAS file to a sink. Header totals are patched on close().
+ * Stream a LAS (or, with compress: true, LAZ) file to a sink. Header totals are patched on close().
  * @param {object} sink - an OPFS scratch writer (openScratchSyncWriter), a Node
  *   FileHandle, or any { write(bytes, position) }
  * @param {object} opts - as writeLas; scale and offset are required (the bounds are not known yet)
@@ -200,6 +330,7 @@ export async function createLasWriter(sink, opts) {
 	var totals = freshTotals();
 	var put = positionedWrite(sink);
 	var start = headerBytes(s, so, totals).length;
+	if (s.laz) return createLazWriter(s, so, len, totals, put, start);
 	var pending = [];
 	await put(headerBytes(s, so, totals), 0);
 	return {
