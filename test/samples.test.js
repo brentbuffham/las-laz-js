@@ -14,19 +14,27 @@
 //  - with LAS_PDAL=<path to pdal> set, each .laz also equals PDAL's own
 //    decompression of it, field by field (opt-in: it writes a temporary
 //    LAS as big as the decompressed file)
+//  - (0.4.0) each sample is compressed to LAZ with its own version, point
+//    format, scale and offset (writeLas; createLasWriter streaming to a
+//    temporary file when the points are over 200 MB decompressed), and
+//    reading that back gives the original's points, field by field (a
+//    streamed SHA-256 per field). The size ratio and compression time
+//    are logged. With LAS_PDAL set, PDAL decompresses our file too and
+//    must find the same points
 // Skipped, loudly, when there are no samples.
 //==========================================================
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { FIELD_TYPES } from "../src/read/decodeRecords.js";
 import { openLas } from "../src/LasReader.js";
+import { writeLas, createLasWriter } from "../src/write/writeLas.js";
 import { findSamples } from "./helpers/samples.js";
+import { fieldDigests, EVERY_FIELD } from "./helpers/fieldDigests.js";
 
 var samples = findSamples();
 
@@ -60,27 +68,6 @@ samples.forEach(function (s) {
 	});
 });
 
-// One SHA-256 per field over every point, streamed window by window
-// Every field the format holds (fields it lacks are dropped by the reader)
-var EVERY_FIELD = Object.keys(FIELD_TYPES);
-
-async function fieldDigests(path, fields) {
-	var las = await openLas(path);
-	var h0 = las.header;
-	fields = fields.filter(function (f) { return f !== "gpsTime" || h0.pointFormat === 1 || h0.pointFormat >= 3; });
-	var hashes = {};
-	fields.forEach(function (f) { hashes[f] = createHash("sha256"); });
-	var n = 0;
-	for await (var c of las.chunks({ fields: fields })) {
-		fields.forEach(function (f) { if (c[f]) hashes[f].update(new Uint8Array(c[f].buffer, c[f].byteOffset, c[f].byteLength)); });
-		n += c.count;
-	}
-	await las.close();
-	var out = { count: n };
-	fields.forEach(function (f) { out[f] = hashes[f].digest("hex"); });
-	return out;
-}
-
 async function headerOf(path) { var l = await openLas(path); var h = l.header; await l.close(); return h; }
 
 var twins = [];
@@ -94,8 +81,55 @@ samples.filter(function (s) { return s.laz; }).forEach(function (z) {
 twins.forEach(function (pair) {
 	var z = pair[0], l = pair[1];
 	test(z.id + " (LAZ) decodes to exactly the points of its twin " + l.id + " (LAS), every field", { timeout: 1800000 }, async function () {
-		var a = await fieldDigests(z.path, EVERY_FIELD), b = await fieldDigests(l.path, EVERY_FIELD);
+		var a = await fieldDigests(z.path), b = await fieldDigests(l.path);
 		assert.deepEqual(a, b);
+	});
+});
+
+// Compress every sample and read it back (formats 4, 5, 9, 10 cannot be compressed and are skipped)
+var BIG = 200 * 1048576;
+samples.forEach(function (s) {
+	var h = s.header, fmt = h.pointFormat;
+	var skip = (fmt === 4 || fmt === 5 || fmt === 9 || fmt === 10) ? "point format " + fmt + " cannot be compressed" : false;
+	var size = h.pointCount * h.recordLength;
+	test(s.id + " (" + (s.laz ? "LAZ" : "LAS") + ", format " + fmt + ", " + Math.round(size / 1048576) + " MB of points) compresses to LAZ and reads back to the same points, every field" + (size > BIG ? " (streamed)" : ""), { skip: skip, timeout: 3600000 }, async function (t) {
+		var dir = mkdtempSync(join(tmpdir(), "las-laz-write-"));
+		try {
+			var out = join(dir, "ours.laz");
+			var opts = { compress: true, version: "1." + h.versionMinor, pointFormat: fmt, scale: h.scale, offset: h.offset };
+			var started = Date.now();
+			var src = await openLas(s.path);
+			if (size > BIG) {
+				// never two copies in memory: window by window from the reader to a file
+				var file = await open(out, "w");
+				try {
+					var w = await createLasWriter(file, opts);
+					for await (var c of src.chunks({ fields: EVERY_FIELD })) await w.writePoints(c);
+					await w.close();
+				} finally {
+					await file.close();
+				}
+			} else {
+				var all = await src.readPoints({ fields: EVERY_FIELD });
+				writeFileSync(out, await writeLas(all, opts));
+			}
+			var took = Date.now() - started;
+			await src.close();
+			var ours = await openLas(out);
+			assert.equal(ours.compressed, true);
+			assert.equal(ours.header.pointCount, h.pointCount);
+			assert.equal(ours.header.pointFormat, fmt);
+			await ours.close();
+			t.diagnostic(s.id + ": " + (s.size / 1048576).toFixed(1) + " MB -> " + (statSync(out).size / 1048576).toFixed(1) + " MB LAZ (" + (statSync(out).size / s.size).toFixed(3) + " of the original), compressed in " + took + " ms");
+			assert.deepEqual(await fieldDigests(out), await fieldDigests(s.path));
+			if (process.env.LAS_PDAL) {
+				var back = join(dir, "pdal.las");
+				execFileSync(process.env.LAS_PDAL, ["translate", out, back, "--writers.las.forward=all"], { stdio: "pipe" });
+				assert.deepEqual(await fieldDigests(back), await fieldDigests(s.path));
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -106,7 +140,7 @@ if (process.env.LAS_PDAL) {
 			try {
 				var out = join(dir, "pdal.las");
 				execFileSync(process.env.LAS_PDAL, ["translate", z.path, out, "--writers.las.forward=all", "--writers.las.extra_dims=all"], { stdio: "pipe" });
-				assert.deepEqual(await fieldDigests(z.path, EVERY_FIELD), await fieldDigests(out, EVERY_FIELD));
+				assert.deepEqual(await fieldDigests(z.path), await fieldDigests(out));
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}

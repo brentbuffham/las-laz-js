@@ -1,7 +1,7 @@
 las-laz-js
 Copyright (c) 2026 Brent Buffham (https://kirra-design.com). MIT licence (see LICENSE).
 
-The LAZ decoder in src/laz/ is a JavaScript translation of laz-rs
+The LAZ decoder and encoder in src/laz/ are a JavaScript translation of laz-rs
 (https://github.com/laz-rs/laz-rs), which is itself a Rust port of LASzip
 (https://laszip.org) by rapidlasso. Those files are licensed under the
 Apache License, Version 2.0 (see LICENSE-APACHE), not the MIT licence:

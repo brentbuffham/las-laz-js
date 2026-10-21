@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0 (2026-10-22)
+
+Writes LAZ.
+
+- `writeLas(points, { compress: true })` and `createLasWriter(sink, { compress: true })` write LAZ:
+  point formats 0–3 (point-wise) and 6–8 (layered), with a LASzip VLR, 50,000-point chunks and a
+  chunk table, as PDAL (LAZperf) lays it out. Plain JavaScript, translated from laz-rs
+  (Apache-2.0), like the decoders. Formats 4, 5, 9, 10 cannot be compressed (`UNSUPPORTED`).
+- `chunkSize`: points per chunk, a whole number 1 to 4294967294 (default 50,000); ignored without
+  `compress`.
+- `threads`: chunks compress on the worker pool the LAZ reader uses, written in chunk order, so the
+  bytes are the same for any thread count. Automatic by default (from 4 chunks up), `1` is the
+  calling thread. A 10-million-point format 3 file: `writeLas` 5961 ms on one thread, 1604 ms
+  with 16 workers (3.7×); `createLasWriter` 5856 ms, 1678 ms. Gains flatten after about 4 workers.
+- With `threads`, up to about 2 tasks of 4 chunks per worker of records are in flight. That holds
+  across awaited `writePoints` calls; unawaited calls, or one huge batch, submit at once. In a
+  browser, pass `threads` to bound memory on big exports; an abandoned writer keeps its workers
+  until `close()`.
+- A streaming LAZ writer stops at its first error: `writePoints` and `close` keep rejecting.
+  Start a new writer.
+- Extra bytes are not written yet (as for LAS); they arrive with 0.7.0.
+- Checked against PDAL 2.10: the committed fixtures' chunks, chunk tables and LASzip VLRs are
+  PDAL's bytes; PDAL reads what we write (`pdal info`, `pdal translate`) and finds the same points
+  field by field. Real files compress and read back to the same points: a 1.1 GB, 34-million-point
+  LAS streams to a 155 MB LAZ (0.14 of its size) in 6.4 s; a 10-million-point LAZ recompresses to
+  the same size in 2.7 s. That file, written by PDAL 1.6 in 2019, comes back as LAS 1.2 format 3 with
+  the original's point data byte for byte, and opens in CloudCompare as LAS 1.2 format 3 and as
+  LAS 1.4 format 7.
+- Docs: README "Writing LAZ"; the demo says LAZ is read and written.
+
 ## 0.3.1 (2026-10-21)
 
 Worker fixes.

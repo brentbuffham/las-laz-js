@@ -1,6 +1,6 @@
 # las-laz-js
 
-A JavaScript reader and writer for ASPRS **LAS** point clouds, and a reader for **LAZ**
+A JavaScript reader and writer for ASPRS **LAS** point clouds and **LAZ**
 (LASzip-compressed LAS), published on npm as `las-laz-js`. Plain ES modules, no dependencies,
 runs in the browser and in Node — and built for files far larger than memory.
 
@@ -8,15 +8,15 @@ runs in the browser and in Node — and built for files far larger than memory.
 
 - Working: `openLas` reads the header, VLRs / EVLRs and coordinate system of LAS 1.0–1.4;
   `readPoints` and `chunks` decode every point format (0–10) a window at a time, with filters
-  and thinning; `colourize` colours points; `writeLas` writes LAS 1.0–1.4.
-- LAZ: point formats 0–3 and 6–8, with extra bytes, read exactly like LAS — the same calls, the
-  same options, decoded chunk by chunk in plain JavaScript (no WebAssembly).
+  and thinning; `colourize` colours points; `writeLas` and `createLasWriter` write LAS 1.0–1.4.
+- LAZ: point formats 0–3 and 6–8, read exactly like LAS — the same calls, the same options,
+  decoded chunk by chunk in plain JavaScript (no WebAssembly) — and written with
+  `compress: true`, byte for byte what PDAL (LAZperf) writes, compressed on every core.
 - Big files: a 1.1 GB, 34-million-point LAS reads in under a second in Node, and a 10-million-point
   LAZ decodes on every core (a 10-million-point file in about 0.6 s); neither is held in memory
   whole (see LAZ below for the one exception).
 - Also: a ready-made module Worker (`las-laz-js/worker`) and a
   [Three.js demo](https://brentbuffham.github.io/las-laz-js/).
-- Not yet: writing LAZ (0.3.0).
 
 ## Install
 
@@ -151,8 +151,34 @@ into WKT.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `compress` | `false` | write LAZ (LASzip, point formats 0–3 and 6–8); formats 4, 5, 9, 10 are refused (`UNSUPPORTED`) |
-| `chunkSize` | `50000` | points per LAZ chunk, a whole number ≥ 1; only with `compress` (ignored without it) |
+| `compress` | `false` | write LAZ (LASzip) instead of LAS: point formats 0–3 and 6–8; formats 4, 5, 9, 10 are refused (`UNSUPPORTED`) |
+| `chunkSize` | `50000` | points per LAZ chunk, a whole number from 1 to 4294967294; ignored without `compress` |
+| `threads` | automatic | workers that compress chunks, as in `openLas`: automatic by default, `1` compresses on the calling thread, `n` asks for n workers; only with `compress` |
+
+### Writing LAZ
+
+`writeLas(pts, { compress: true })` and `createLasWriter(sink, { compress: true, ... })` write the
+same records as the LAS writers, compressed `chunkSize` points at a time (LASzip's 50,000 by
+default) behind a LASzip VLR, with the chunk table at the end of the point data. The layout and
+the compressed bytes are those PDAL (LAZperf) writes: for the same points, version, format, scale
+and offset, the point data is identical to PDAL's. Point formats 0–3 are written point-wise (LASzip item version 2),
+6–8 layered (item version 3).
+
+- **Speed.** Chunks are independent, so they compress on the same pool of workers that decode
+  LAZ, and are written strictly in chunk order: the bytes are the same for any `threads`. A
+  10-million-point format 3 file writes in about 1.6 s on a 24-core machine (about 6 s on one
+  thread); gains flatten after about four workers. With `threads` automatic, a write of under four
+  chunks (200,000 points) stays on one thread, where workers would cost more than they save. If
+  workers cannot start, it falls back to one thread.
+- **Memory.** With `threads`, up to about 2 tasks of 4 chunks per worker are in flight at once.
+  That bound holds across awaited `writePoints` calls; calls made without waiting, or one huge
+  batch, submit all at once. In a browser, pass `threads` to bound memory on big exports. A
+  writer that is abandoned without `close()` keeps its workers in a browser until it is closed.
+- **Errors.** A streaming LAZ writer stops for good at its first error: `writePoints` and
+  `close` keep rejecting with it. Start a new writer.
+- **Extra bytes** are not written (the writers have never written them): a file read with
+  extra bytes is written without them. They arrive with 0.7.0.
+- The streaming writer needs `scale` and `offset` up front, as for LAS.
 
 ## In a Worker
 
@@ -188,11 +214,12 @@ COPC, EPT and E57 are not read.
 ## Provenance
 
 The LAS reader, writer and big-file handling come from [Kirra](https://kirra-design.com),
-Brent Buffham's blast-design app, rewritten as a standalone library. The LAZ decoder in
-`src/laz/` is a JavaScript translation of [laz-rs](https://github.com/laz-rs/laz-rs) by Thomas
+Brent Buffham's blast-design app, rewritten as a standalone library. The LAZ decoder and encoder in
+`src/laz/` are a JavaScript translation of [laz-rs](https://github.com/laz-rs/laz-rs) by Thomas
 Montaigu, itself a Rust port of [LASzip](https://laszip.org) by Martin Isenburg (rapidlasso).
-It is checked against an independent encoder: the test fixtures were compressed by
-[PDAL](https://pdal.io), and every record must equal PDAL's own decompression.
+It is checked against an independent implementation: the test fixtures were compressed by
+[PDAL](https://pdal.io), every record must equal PDAL's own decompression, and what this
+library compresses must equal PDAL's bytes and be read by PDAL.
 Formats are written to the ASPRS LAS 1.4 R15 specification; see `docs/LAS_FORMAT_NOTES.md`.
 
 ## Development
@@ -206,12 +233,14 @@ node _dev/makeLazFixtures.mjs   # remake test/fixtures/laz with PDAL (needs PDAL
 ```
 
 Private sample files go in the gitignored `samples/` folder, or are listed by path in
-`samples/paths.txt`; the sample tests compare each file with its own header, and each LAZ with a
-LAS twin (same count and bounds) field by field.
+`samples/paths.txt`; the sample tests compare each file with its own header, each LAZ with a
+LAS twin (same count and bounds) field by field, and compress each file to LAZ and read it back.
+Set `LAS_PDAL=<path to pdal>` to also have PDAL read what this library writes
+(`test/laz/pdalWrite.test.js` and the sample tests).
 
 ## Licence
 
-`MIT AND Apache-2.0`. The library is MIT © Brent Buffham (`LICENSE`). The LAZ decoder in
+`MIT AND Apache-2.0`. The library is MIT © Brent Buffham (`LICENSE`). The LAZ decoder and encoder in
 `src/laz/`, translated from laz-rs / LASzip, is under the Apache License 2.0 (`LICENSE-APACHE`,
 `NOTICE`). Both are permissive: use, change and ship it in open or closed software, keeping the
 notices.
