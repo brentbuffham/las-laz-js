@@ -11,15 +11,19 @@ Writes LAZ.
 - `chunkSize`: points per chunk, a whole number 1 to 4294967294 (default 50,000); ignored without
   `compress`.
 - `threads`: chunks compress on the worker pool the LAZ reader uses, written in chunk order, so the
-  bytes are the same for any thread count. Automatic by default (from 4 chunks up), `1` is the
-  calling thread. A 10-million-point format 3 file: `writeLas` 5961 ms on one thread, 1604 ms
-  with 16 workers (3.7×); `createLasWriter` 5856 ms, 1678 ms. Gains flatten after about 4 workers.
-- With `threads`, up to about 2 tasks of 4 chunks per worker of records are in flight. That holds
-  across awaited `writePoints` calls; unawaited calls, or one huge batch, submit at once. In a
-  browser, pass `threads` to bound memory on big exports; an abandoned writer keeps its workers
-  until `close()`.
-- A streaming LAZ writer stops at its first error: `writePoints` and `close` keep rejecting.
-  Start a new writer.
+  bytes are the same for any thread count. Automatic by default: from 4 chunks up, with at most 4
+  workers, as gains flatten after about 4 (explicit `threads` are honoured); `1` is the calling
+  thread. A 10 M-point LAZ (format 3) rewritten: `writeLas` 7166 ms on one thread, 1708 ms
+  automatic (4 workers, 4.2×), 1624 ms with 16; `createLasWriter` 7109 ms, 2033–2246 ms, 1657 ms.
+- With workers, up to about 2 tasks of 4 chunks per worker of records are in flight: about 55 MB
+  at the automatic 4 workers with 50,000-point format 3 chunks. That holds across awaited
+  `writePoints` calls; unawaited calls, or one huge batch, submit at once. An abandoned writer
+  keeps its workers until `close()`.
+- A streaming LAZ writer stops at its first error (a chunk, a sink write, `close()`):
+  `writePoints` and `close` keep rejecting. Start a new writer. After `close()`, both reject
+  (`ABORTED`).
+- The compressed bytes are PDAL's (LAZperf's) with one lossless exception: in formats 6–8 a GPS
+  time of −0 following +0 is coded as a change (LAZperf finds the doubles equal).
 - Extra bytes are not written yet (as for LAS); they arrive with 0.7.0.
 - Checked against PDAL 2.10: the committed fixtures' chunks, chunk tables and LASzip VLRs are
   PDAL's bytes; PDAL reads what we write (`pdal info`, `pdal translate`) and finds the same points
