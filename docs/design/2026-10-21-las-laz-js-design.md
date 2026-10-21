@@ -17,7 +17,8 @@ Decisions (Brent, 2026-10-20/21):
 - LAZ decoder **ported from laz-rs**. Correction (2026-10-21): laz-rs is **Apache-2.0 only** (relicensed
   from LGPL in 2022, following LASzip), not MIT / Apache dual. The ported files keep Apache-2.0 with
   their notice; the rest of the library stays MIT (package licence `MIT AND Apache-2.0`). Brent to confirm.
-- Releases: **0.1.0** read + write LAS · **0.2.0** read LAZ · **0.3.0** write LAZ.
+- Releases: **0.1.0** read + write LAS · **0.2.0** read LAZ · **0.3.0** parallel LAZ decoding ·
+  **0.4.0** write LAZ · then point operations (§6; roadmap revised 2026-10-21).
 - **Kirra switches to the library at 0.2.0** (one migration, proven by identical output).
 - Every library ships a demo; this one is a **Three.js** viewer (demo spec).
 
@@ -139,13 +140,28 @@ ecw-js's `EcwError` (changed from three classes when planning, 2026-10-21). Code
   Brent's `.laz` files decodes to exactly the records of its `.las` twin (a 1 M-point pair and
   a 28 M-point pair, kept private). README credits laz-rs. Kirra adopts the library here: its LAS
   import / export call `las-laz-js`; Kirra's output before and after must match.
-- **0.3.0 — write LAZ.** Encoders for the same formats; oracle: round trip through the 0.2.0
-  reader, and the files open in CloudCompare / PDAL.
+- **0.3.0 — speed.** LAZ chunks decode in parallel on a worker pool (shipped; 0.3.1 fixed worker
+  start-up and exit).
+- **0.4.0 — write LAZ.** Formats 0–3 and 6–8; spec `2026-10-21-laz-write-0.4.0-design.md`.
+
+Roadmap revised 2026-10-21 (Brent): the library grows from format I/O into zero-dependency
+operations on point columns. 0.4.0 and 0.5.0 come first (Kirra needs them); each release gets
+its own spec.
+- **0.5.0 — selections and column operations.** Crop by box / polygon, keep or delete by point
+  indices, split / merge, class filters, the pre-transform (#131), the thinning selector
+  exported, original-index tracking, interleaved local-origin output into caller buffers.
+- **0.6.0 — voxel index.** Nearest-point and radius queries on a flat typed-array grid;
+  `dedupe` with an index map; GCP registration, then ICP-style scan-to-surface alignment.
+- **0.7.0 — facets and joint sets** (as CloudCompare's facet tool): normals, planar region
+  growing, dip / dip direction per facet, families by orientation; per-point facet and family
+  columns ("tags"), facet and family tables, written back as LAS 1.4 extra bytes.
 
 ## 7. Out of scope
 
 Reprojection (callers do it), waveform data packets (formats 4/5/9/10 point fields are read;
-the waveform payload is not), COPC / EPT tiling, E57.
+the waveform payload is not), COPC / EPT tiling, E57. Tessellation (meshing points) belongs
+in trimesh-boolean, which consumes this library's columns; stereonets and CSV / shapefile
+export belong in Kirra.
 
 ## 8. Notes
 
