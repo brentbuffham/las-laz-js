@@ -25,16 +25,26 @@ import { Rgb14Decompressor, Nir14Decompressor, Byte14Decompressor } from "./v3/l
 
 var NAMES = { 0: "Byte", 6: "Point10", 7: "GpsTime11", 8: "RGB12", 9: "WavePacket13", 10: "Point14", 11: "RGB14", 12: "RGBNIR14", 13: "WavePacket14", 14: "Byte14" };
 
-function pointwiseItem(it) {
+/**
+ * Refuse a point-wise item this library cannot code (the compressor shares the check).
+ * @param {{type:number, size:number, version:number}} it
+ */
+export function checkPointwiseItem(it) {
 	if (it.version !== 2 && !(it.type === ITEM.BYTE && it.version === 1)) {
 		throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ item " + (NAMES[it.type] || it.type) + " version " + it.version + " is not supported (version 2 is; version 1 is from LASzip before 2011)");
 	}
+	if (it.type !== ITEM.POINT10 && it.type !== ITEM.GPSTIME11 && it.type !== ITEM.RGB12 && it.type !== ITEM.BYTE) {
+		throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ item " + (NAMES[it.type] || it.type) + " is not supported (wave packets are not read)");
+	}
+}
+
+function pointwiseItem(it) {
+	checkPointwiseItem(it);
 	switch (it.type) {
 		case ITEM.POINT10: return function () { return new Point10Decompressor(); };
 		case ITEM.GPSTIME11: return function () { return new GpsTime11Decompressor(); };
 		case ITEM.RGB12: return function () { return new Rgb12Decompressor(); };
-		case ITEM.BYTE: return function () { return new ByteDecompressor(it.size); };
-		default: throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ item " + (NAMES[it.type] || it.type) + " is not supported (wave packets are not read)");
+		default: return function () { return new ByteDecompressor(it.size); };
 	}
 }
 
@@ -82,6 +92,18 @@ function layeredChunk(makers, recordLength, layerWords) {
 }
 
 /**
+ * Check that a LASzip VLR's items make the header's records, with the one coder there is
+ * (the compressor shares the check).
+ * @param {object} vlr - parseLazVlr
+ * @param {number} recordLength - header record length
+ */
+export function checkChunkVlr(vlr, recordLength) {
+	var size = vlr.items.reduce(function (s, it) { return s + it.size; }, 0);
+	if (size !== recordLength) throw new LasError(ERROR_CODES.BAD_VLR, "the LASzip items make " + size + "-byte records but the header says " + recordLength);
+	if (vlr.coder !== 0) throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ coder " + vlr.coder + " (only the arithmetic coder, 0, exists)");
+}
+
+/**
  * Check a LASzip VLR against the file and build the chunk decoder.
  * @param {object} vlr - parseLazVlr
  * @param {number} recordLength - header record length
@@ -90,9 +112,7 @@ function layeredChunk(makers, recordLength, layerWords) {
  *   base is the file offset of bytes[0], for error offsets
  */
 export function createChunkDecoder(vlr, recordLength) {
-	var size = vlr.items.reduce(function (s, it) { return s + it.size; }, 0);
-	if (size !== recordLength) throw new LasError(ERROR_CODES.BAD_VLR, "the LASzip items make " + size + "-byte records but the header says " + recordLength);
-	if (vlr.coder !== 0) throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ coder " + vlr.coder + " (only the arithmetic coder, 0, exists)");
+	checkChunkVlr(vlr, recordLength);
 	if (vlr.compressor === COMPRESSOR.LAYERED_CHUNKED) {
 		var words = vlr.items.reduce(function (s, it) { return s + (it.type === ITEM.POINT14 ? 9 : it.type === ITEM.RGBNIR14 ? 2 : it.type === ITEM.BYTE14 ? it.size : 1); }, 0);
 		return layeredChunk(vlr.items.map(layeredItem), recordLength, words);

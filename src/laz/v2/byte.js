@@ -8,7 +8,8 @@
 // itself a port of LASzip by rapidlasso. (c) 2007-2014 martin isenburg,
 // rapidlasso; (c) 2014 Uday Verma, Hobu, Inc.; (c) 2019 Thomas Montaigu.
 // Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE and
-// NOTICE). Changes: translated from Rust to JavaScript, Brent Buffham 2026.
+// NOTICE). Changes: translated from Rust to JavaScript, Brent Buffham 2026;
+// the compressor (ByteCompressor) added beside the decompressor.
 //==========================================================
 
 import { ArithmeticModel } from "../models.js";
@@ -29,5 +30,22 @@ ByteDecompressor.prototype.next = function (dec, view, o) {
 	for (var i = 0; i < this.size; i++) {
 		this.last[i] = (this.last[i] + dec.decodeSymbol(this.models[i])) & 255;
 		view.setUint8(o + i, this.last[i]);
+	}
+};
+
+/** Byte v2 compressor for `count` extra bytes: one per chunk, the mirror of ByteDecompressor. */
+export function ByteCompressor(count) {
+	this.size = count;
+	this.last = new Uint8Array(count);
+	this.models = [];
+	for (var i = 0; i < count; i++) this.models.push(new ArithmeticModel(256));
+}
+
+ByteCompressor.prototype.first = function (src, s) { this.last.set(src.subarray(s, s + this.size)); };
+
+ByteCompressor.prototype.next = function (enc, src, s) {
+	for (var i = 0; i < this.size; i++) {
+		enc.encodeSymbol(this.models[i], (src[s + i] - this.last[i]) & 255);   // u8 wrapping_sub
+		this.last[i] = src[s + i];
 	}
 };
