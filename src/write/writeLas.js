@@ -35,8 +35,11 @@ var HEADER_SIZE = { "1.0": 227, "1.1": 227, "1.2": 227, "1.3": 235, "1.4": 375 }
 var DEFAULT_CHUNK_SIZE = 50000;
 // 0xFFFFFFFF in the VLR's chunk size field means variable-size chunks
 var MAX_CHUNK_SIZE = 4294967294;
-// threads, automatic: a pool once a write has this many chunks (as openLas)
+// threads, automatic: a pool once a write has this many chunks (as openLas),
+// of at most AUTO_MAX_THREADS workers — gains flatten there, while the records
+// in flight grow with every worker (an explicit threads is honoured as given)
 var AUTO_MIN_CHUNKS = 4;
+var AUTO_MAX_THREADS = 4;
 // chunks per pool task, and tasks in flight per worker (one working, one queued)
 var CHUNKS_PER_TASK = 4;
 var TASKS_PER_WORKER = 2;
@@ -182,7 +185,7 @@ function boundsOfPoints(points, origin) {
  * @param {object} points - PointColumns (world coordinates, or relative to opts.localOrigin)
  * @param {object} [opts] - version, pointFormat, scale, offset, crs {epsg|wkt}, software, systemId, date, localOrigin, as ("bytes" | "blob"),
  *   compress (write LAZ), chunkSize (points per LAZ chunk, default 50000; only with compress),
- *   threads (LAZ compression workers, as openLas: default automatic, 1 = this thread)
+ *   threads (LAZ compression workers: default automatic, from 4 chunks and at most 4 workers; 1 = this thread; n = n workers)
  * @returns {Promise<Uint8Array|Blob>}
  */
 export async function writeLas(points, opts) {
@@ -234,9 +237,10 @@ function tableOffsetBytes(tablePos) {
 // threads as openLas: 0 = automatic
 function threadsOf(opts) { return opts.threads > 0 ? Math.floor(opts.threads) : 0; }
 
-// A pool of up to `most` workers (one per chunk at most, when the count is known), or null
+// A pool of up to `most` workers (one per chunk at most, when the count is known), or null;
+// automatic: at most AUTO_MAX_THREADS
 async function startPool(opts, most) {
-	var n = Math.min(threadsOf(opts) || await defaultThreads(), most);
+	var n = Math.min(threadsOf(opts) || Math.min(AUTO_MAX_THREADS, await defaultThreads()), most);
 	if (n < 2) return null;
 	return opts._createPool ? opts._createPool(n) : createLazPool(n);
 }
@@ -247,15 +251,17 @@ async function startPool(opts, most) {
 // at a time (or, with no pool, still to this thread). place(bytes) gets
 // each task's chunks, back to back, strictly in chunk order: a task that
 // finishes early waits for the ones before it. Records are encoded before
-// writePoints' first await, so calls made without waiting keep their
-// order. writePoints returns once fewer than TASKS_PER_WORKER tasks per
+// write()'s first await, so calls made without waiting keep their
+// order. write() returns once fewer than TASKS_PER_WORKER tasks per
 // worker are in flight (on this thread, once its chunks are placed), so
-// memory is bounded. Any error stops the loop for good and closes the
-// pool, as finish() does once it has placed the last chunk.
+// memory is bounded. Any error — on a worker, on this thread, in place()
+// or reported through fail(err) — stops the loop for good and closes the
+// pool, as finish() does once it has placed the last chunk; after
+// finish() is called, write() refuses more points (ABORTED).
 function lazChunks(s, so, len, totals, place, poolAt, makePool) {
 	var size = s.laz.chunkSize;
 	var buf = new Uint8Array(0), view = null, filled = 0, full = 0;
-	var pooled = null, closing = false, failure = null;
+	var pooled = null, closing = false, failure = null, ended = false;
 	var order = Promise.resolve(), inflight = [], chunks = [];
 
 	// grow the buffer to hold n records (doubling; one chunk on this thread, a task's on the pool)
@@ -276,16 +282,26 @@ function lazChunks(s, so, len, totals, place, poolAt, makePool) {
 		if (!failure) failure = err;
 		shut();
 	}
+	function refuse() {
+		if (failure) throw failure;
+		if (ended) throw new LasError(ERROR_CODES.ABORTED, "the LAZ writer is closed");
+	}
 	function onThisThread(records, counts) {
 		var parts = [], p = 0;
 		counts.forEach(function (n) { parts.push(s.laz.compress(records, p, n)); p += n * len; });
 		return { bytes: parts.length === 1 ? parts[0] : joinParts(parts), sizes: parts.map(function (c) { return c.length; }) };
 	}
 	function submit(records, counts) {
-		// on this thread now (its buffer is reused); on the pool from records the task then owns
-		var task = !pooled ? Promise.resolve(onThisThread(records, counts)) : pooled.then(function (pool) {
-			return pool ? pool.compress({ vlr: s.laz.vlr, recordLength: len, records: records.buffer, counts: counts }) : onThisThread(records, counts);
-		});
+		// on this thread now (its buffer is reused); on the pool from records the task then owns.
+		// An error on this thread rejects the task, as a worker's does, so it stops the loop below
+		var task;
+		if (!pooled) {
+			try { task = Promise.resolve(onThisThread(records, counts)); } catch (err) { task = Promise.reject(err); }
+		} else {
+			task = pooled.then(function (pool) {
+				return pool ? pool.compress({ vlr: s.laz.vlr, recordLength: len, records: records.buffer, counts: counts }) : onThisThread(records, counts);
+			});
+		}
 		task.catch(function () {});              // tasks after a failure are never waited for
 		var placed = order.then(function () { return task; }).then(function (r) {
 			r.sizes.forEach(function (n, i) { chunks.push({ pointCount: counts[i], byteCount: n }); });
@@ -312,13 +328,14 @@ function lazChunks(s, so, len, totals, place, poolAt, makePool) {
 		else if (filled === CHUNKS_PER_TASK * size) submitBuffer();
 	}
 	return {
-		writePoints: async function (points) {
-			if (failure) throw failure;
+		// points, the first of which is point `first` of the caller's (for error messages)
+		write: async function (points, first) {
+			refuse();
 			try {
 				for (var a = 0; a < points.count;) {
 					var n = Math.min(size - filled % size, points.count - a);
 					room(filled + n);
-					encodeRecords(rangeOf(points, a, a + n), s.fmt, len, so, s.opts.localOrigin, view, filled * len, totals);
+					encodeRecords(rangeOf(points, a, a + n), s.fmt, len, so, s.opts.localOrigin, view, filled * len, totals, first + a);
 					filled += n;
 					a += n;
 					totals.count += n;
@@ -333,11 +350,18 @@ function lazChunks(s, so, len, totals, place, poolAt, makePool) {
 			while (inflight.length && inflight.length >= limit) await inflight.shift();
 		},
 		finish: async function () {
-			if (failure) throw failure;
-			if (filled) submitBuffer();
-			try { await order; } finally { shut(); }
+			refuse();
+			ended = true;
+			try {
+				if (filled) submitBuffer();
+				await order;
+			} catch (err) {
+				stop(err);
+				throw err;
+			} finally { shut(); }
 			return chunks;
-		}
+		},
+		fail: stop
 	};
 }
 
@@ -350,7 +374,7 @@ async function lazParts(points, s, so, len, totals) {
 	var poolAt = t === 1 || (!t && count < AUTO_MIN_CHUNKS) ? Infinity : 1;
 	var loop = lazChunks(s, so, len, totals, function (bytes) { parts.push(bytes); }, poolAt, function () { return startPool(s.opts, count); });
 	var step = CHUNKS_PER_TASK * size;
-	for (var a = 0; a < points.count; a += step) await loop.writePoints(rangeOf(points, a, Math.min(points.count, a + step)));
+	for (var a = 0; a < points.count; a += step) await loop.write(rangeOf(points, a, Math.min(points.count, a + step)), a);
 	var chunks = await loop.finish();
 	// the header's size does not depend on the totals
 	var tablePos = chunks.reduce(function (n, c) { return n + c.byteCount; }, headerBytes(s, so, totals).length + 8);
@@ -380,7 +404,9 @@ function positionedWrite(sink) {
 
 // The streaming LAZ writer: the chunk loop, placing chunks at the running
 // position. close() places the partial chunk, writes the chunk table after
-// it, then patches the table offset and the header totals.
+// it, then patches the table offset and the header totals. A failed write
+// there fails the loop too, so later calls keep rejecting (ruling R11); once
+// close() has begun, writePoints and close reject (ABORTED).
 async function createLazWriter(s, so, len, totals, put, start) {
 	var pos = start + 8, t = threadsOf(s.opts);
 	// until close(), the table offset is LASzip's "not written yet" (-1)
@@ -392,13 +418,18 @@ async function createLazWriter(s, so, len, totals, put, start) {
 		return put(bytes, at);
 	}, poolAt, function () { return startPool(s.opts, Infinity); });
 	return {
-		writePoints: loop.writePoints,
+		writePoints: function (points) { return loop.write(points, 0); },
 		close: async function () {
 			var chunks = await loop.finish();
 			var tablePos = pos;
-			await put(encodeChunkTable(chunks, false), tablePos);
-			await put(tableOffsetBytes(tablePos), start);
-			await put(headerBytes(s, so, totals), 0);
+			try {
+				await put(encodeChunkTable(chunks, false), tablePos);
+				await put(tableOffsetBytes(tablePos), start);
+				await put(headerBytes(s, so, totals), 0);
+			} catch (err) {
+				loop.fail(err);
+				throw err;
+			}
 			return { count: totals.count };
 		}
 	};
@@ -409,7 +440,7 @@ async function createLazWriter(s, so, len, totals, put, start) {
  * @param {object} sink - an OPFS scratch writer (openScratchSyncWriter), a Node
  *   FileHandle, or any { write(bytes, position) }
  * @param {object} opts - as writeLas; scale and offset are required (the bounds are not known yet).
- *   With compress and threads automatic, the pool starts at the 4th full chunk
+ *   With compress and threads automatic, the pool (at most 4 workers) starts at the 4th full chunk
  * @returns {Promise<{writePoints: function(object): Promise, close: function(): Promise<{count:number}>}>}
  */
 export async function createLasWriter(sink, opts) {

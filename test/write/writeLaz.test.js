@@ -21,6 +21,7 @@ import { LAZ_MANIFEST, fixtureBytes, decompressAll } from "../helpers/lazFixture
 import { LAZ_FIXTURES, fixturePoints } from "../helpers/lazFixtureData.js";
 import { createLazPool, defaultThreads } from "../../src/laz/pool.js";
 import { createChunkCompressor } from "../../src/laz/compressChunk.js";
+import { ArithmeticEncoder } from "../../src/laz/ArithmeticEncoder.js";
 import { LasError, ERROR_CODES } from "../../src/errors.js";
 
 var ALL = ["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scannerChannel", "scanAngle", "userData", "pointSourceId", "gpsTime", "red", "green", "blue", "nir"];
@@ -425,7 +426,7 @@ test("threads, automatic: writeLas uses a pool from 4 chunks, createLasWriter fr
 	for (var c = 0; c < 3; c++) await w.writePoints(slice(src, c * 1000, c * 1000 + 1000));
 	assert.equal(fake.asked, undefined, "3 full chunks: this thread");
 	await w.writePoints(slice(src, 3000, 4000));
-	assert.equal(fake.asked, auto >= 2 ? auto : undefined, "the 4th full chunk starts the pool");
+	assert.equal(fake.asked, auto >= 2 ? Math.min(auto, 4) : undefined, "the 4th full chunk starts the pool (automatic: at most 4 workers)");
 	await w.close();
 	assert.equal(fake.closed, auto >= 2 ? 1 : 0);
 	fake = fakePool(2, function () { return 0; });
@@ -441,4 +442,119 @@ test("threads, automatic: writeLas uses a pool from 4 chunks, createLasWriter fr
 	await w.writePoints(src);
 	await w.close();
 	assert.equal(fake.asked, undefined, "threads 1 streaming: this thread");
+});
+
+// threads, automatic (ruling R15): at most 4 workers — gains flatten there, while records in flight
+// grow with every worker. Explicit threads are honoured as given.
+test("threads, automatic: at most 4 compression workers; explicit threads as asked", async function () {
+	var auto = await defaultThreads();
+	var src = columns(20000), opts = Object.assign({}, STREAM);   // 20 chunks
+	var fake = fakePool(2, function () { return 0; });
+	await writeLas(src, Object.assign({ _createPool: fake.create }, opts));
+	assert.equal(fake.asked, auto >= 2 ? Math.min(auto, 4) : undefined, "writeLas, automatic: min(default threads, 4)");
+	assert.ok(!(fake.asked > 4));
+	fake = fakePool(2, function () { return 0; });
+	var w = await createLasWriter(memorySink(64), Object.assign({ _createPool: fake.create }, opts));
+	await w.writePoints(src);
+	await w.close();
+	assert.equal(fake.asked, auto >= 2 ? Math.min(auto, 4) : undefined, "createLasWriter, automatic: min(default threads, 4)");
+	fake = fakePool(2, function () { return 0; });
+	await writeLas(src, Object.assign({ threads: 16, _createPool: fake.create }, opts));
+	assert.equal(fake.asked, 16, "explicit threads: as asked");
+	fake = fakePool(2, function () { return 0; });
+	w = await createLasWriter(memorySink(64), Object.assign({ threads: 6, _createPool: fake.create }, opts));
+	await w.writePoints(src);
+	await w.close();
+	assert.equal(fake.asked, 6, "explicit threads, streaming: as asked");
+});
+
+//==========================================================
+// Fail-stop and closed (rulings R11): a streaming LAZ writer that failed — in a
+// chunk, in close()'s own writes, or on this thread — keeps rejecting, and a
+// closed one refuses more points: either would otherwise finish a corrupt file.
+//==========================================================
+
+// A sink that rejects its failAt-th write (1 = the header written at creation)
+function failingSink(failAt) {
+	var sink = memorySink(64), writes = 0, write = sink.write;
+	sink.write = function (bytes, position) {
+		if (++writes === failAt) return Promise.reject(new Error("disk full: write " + writes));
+		write(bytes, position);
+		return Promise.resolve();
+	};
+	return sink;
+}
+
+test("a sink write failing in close() (last chunk, chunk table, table offset, header): close() keeps rejecting", async function () {
+	var all = columns(2500), opts = Object.assign({ threads: 1 }, STREAM);
+	// writes: 1 header, 2-3 the full chunks, then in close(): 4 the partial chunk, 5 the table, 6 the offset, 7 the header
+	for (var failAt = 4; failAt <= 7; failAt++) {
+		var w = await createLasWriter(failingSink(failAt), opts);
+		await w.writePoints(all);
+		await assert.rejects(w.close(), { message: "disk full: write " + failAt }, "write " + failAt);
+		await assert.rejects(w.close(), { message: "disk full: write " + failAt }, "write " + failAt + ": a second close()");
+		await assert.rejects(w.writePoints(slice(all, 0, 10)), { message: "disk full: write " + failAt }, "write " + failAt + ": writePoints");
+	}
+});
+
+test("a compressor error on this thread, in close() or writePoints: the writer stays failed", async function () {
+	var all = columns(2500);
+	var done = ArithmeticEncoder.prototype.done;
+	function failing(fn) {
+		ArithmeticEncoder.prototype.done = function () { throw new Error("encoder broke"); };
+		var p;
+		try { p = fn(); } finally { ArithmeticEncoder.prototype.done = done; }
+		return p;
+	}
+	for (var threads of [1, 0]) {   // 0: automatic (under 4 full chunks: this thread)
+		var opts = Object.assign({ threads: threads }, STREAM);
+		var w = await createLasWriter(memorySink(64), opts);
+		await w.writePoints(all);
+		// the partial chunk compresses in close(), synchronously, after its records left the buffer
+		await assert.rejects(failing(function () { return w.close(); }), { message: "encoder broke" });
+		await assert.rejects(w.close(), { message: "encoder broke" }, "a second close()");
+		await assert.rejects(w.writePoints(slice(all, 0, 10)), { message: "encoder broke" });
+		w = await createLasWriter(memorySink(64), opts);
+		await assert.rejects(failing(function () { return w.writePoints(all); }), { message: "encoder broke" });
+		await assert.rejects(w.writePoints(slice(all, 0, 10)), { message: "encoder broke" });
+		await assert.rejects(w.close(), { message: "encoder broke" });
+	}
+	// writeLas too
+	await assert.rejects(failing(function () { return writeLas(all, Object.assign({ threads: 1 }, STREAM)); }), { message: "encoder broke" });
+});
+
+test("after close(), writePoints and close() reject (ABORTED) and the file is untouched; threads 1 and 2", async function () {
+	var all = columns(2500);
+	for (var threads of [1, 2]) {
+		var fake = fakePool(2, function () { return 1; });
+		var opts = Object.assign({ threads: threads, _createPool: fake.create }, STREAM);
+		var sink = memorySink(64);
+		var w = await createLasWriter(sink, opts);
+		await w.writePoints(all);
+		assert.deepEqual(await w.close(), { count: 2500 });
+		var file = sink.bytes();
+		await assert.rejects(w.writePoints(slice(all, 0, 1000)), { code: "ABORTED", message: /the LAZ writer is closed/ }, "threads " + threads);
+		await assert.rejects(w.close(), { code: "ABORTED", message: /the LAZ writer is closed/ }, "threads " + threads + ": a second close()");
+		assert.deepEqual(sink.bytes(), file, "threads " + threads + ": the finished file is untouched");
+		assert.deepEqual(file, await writeLas(all, Object.assign({ threads: 1 }, STREAM)));
+		assert.equal(fake.closed, threads === 2 ? 1 : 0);
+		// points sent while close() runs are refused too
+		w = await createLasWriter(memorySink(64), opts);
+		await w.writePoints(all);
+		var closing = w.close();
+		await assert.rejects(w.writePoints(slice(all, 0, 1000)), { code: "ABORTED" });
+		assert.deepEqual(await closing, { count: 2500 });
+	}
+});
+
+test("int32 overflow: the LAZ writers name the point's index in the caller's points, as the LAS writer does", async function () {
+	var all = columns(6000);
+	all.x[4321] = 1e12;   // past the first chunk and past writeLas's first 4-chunk step
+	var opts = Object.assign({ threads: 1 }, STREAM);
+	await assert.rejects(writeLas(all, { version: "1.2", pointFormat: 3, scale: SCALE, offset: OFFSET }), { code: "INVALID_ARGUMENT", message: /^point 4321 / }, "LAS");
+	await assert.rejects(writeLas(all, opts), { code: "INVALID_ARGUMENT", message: /^point 4321 / }, "writeLas, LAZ");
+	var w = await createLasWriter(memorySink(64), opts);
+	await w.writePoints(slice(all, 0, 500));
+	// the batch starts half way into a chunk; the bad point is its 3821st
+	await assert.rejects(w.writePoints(slice(all, 500, 6000)), { code: "INVALID_ARGUMENT", message: /^point 3821 / }, "createLasWriter, LAZ");
 });

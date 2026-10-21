@@ -25,8 +25,9 @@ function col(cols, name) { var c = cols[name]; return c ? function (i) { return 
  * @param {DataView} out
  * @param {number} at
  * @param {object} totals - updated: bounds (quantised world values) and byReturn counts
+ * @param {number} [first=0] - the index of cols' first point in the caller's points (named in errors)
  */
-export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, at, totals) {
+export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, at, totals, first) {
 	var fmt = POINT_FORMATS[pointFormat];
 	var F = fmt.fields;
 	var ox = origin && isFinite(origin.x) ? origin.x : 0;
@@ -41,7 +42,7 @@ export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, 
 		var Y = Math.round((cols.y[i] + oy - so.offset.y) / so.scale.y);
 		var Z = Math.round(((cols.z ? cols.z[i] : 0) + oz - so.offset.z) / so.scale.z);
 		if (X > INT32_MAX || X < INT32_MIN || Y > INT32_MAX || Y < INT32_MIN || Z > INT32_MAX || Z < INT32_MIN) {
-			throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point " + i + " does not fit the scale and offset (int32 overflow); use a coarser scale");
+			throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point " + ((first || 0) + i) + " does not fit the scale and offset (int32 overflow); use a coarser scale");
 		}
 		out.setInt32(p, X, LE); out.setInt32(p + 4, Y, LE); out.setInt32(p + 8, Z, LE);
 		var wx = X * so.scale.x + so.offset.x, wy = Y * so.scale.y + so.offset.y, wz = Z * so.scale.z + so.offset.z;
