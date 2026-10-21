@@ -1,7 +1,7 @@
 // test/write/writeLaz.test.js
 //==========================================================
 // writeLas / createLasWriter with compress: true (LAZ, point
-// formats 0-3). Oracle: the PDAL 2.10 (LAZperf) fixtures — our
+// formats 0-3 and 6-8). Oracle: the PDAL 2.10 (LAZperf) fixtures — our
 // chunks and chunk table must be PDAL's bytes, and our 8-byte table
 // offset must point at our own table. Beyond the fixtures: round
 // trips through openLas against the LAS writer's output, batches of
@@ -65,11 +65,11 @@ function memorySink(size) {
 	return sink;
 }
 
-// Ruling R4: every format 0-3 fixture whose records PDAL kept. The writer has no extra-bytes
-// columns, so it cannot produce a fixture's extra bytes: those fixtures (f3x) keep the
-// chunk-level byte test (test/laz/compress.test.js) only.
+// Ruling R4: every fixture whose records PDAL kept (not f8: PDAL padded its records). The writer
+// has no extra-bytes columns, so it cannot produce a fixture's extra bytes: those fixtures (f3x,
+// f7x) keep the chunk-level byte test (test/laz/compress.test.js) only.
 Object.keys(LAZ_MANIFEST).filter(function (name) {
-	return LAZ_MANIFEST[name].pointFormat <= 3 && LAZ_MANIFEST[name].pdalKeptRecords;
+	return LAZ_MANIFEST[name].pdalKeptRecords;
 }).forEach(function (name) {
 	var fx = LAZ_FIXTURES.find(function (f) { return f.name === name; });
 	var skip = fx.extra ? "the writer has no extra-bytes columns, so it cannot write " + name + "'s " + fx.extra + " extra bytes (chunk-level test only)" : false;
@@ -123,6 +123,21 @@ test("round trips: 0, 1, 50000 and 50001 points, formats 0-3; a custom chunkSize
 	assert.equal((await decompressAll(laz)).chunks.length, 3);
 	// scale / offset chosen from the bounds, as for LAS
 	await checkAgainstLas(columns(300), { pointFormat: 1 }, "chosen scale and offset");
+});
+
+// Formats 6-8 with the scanner channel in blocks that come back (every context-switch path)
+test("round trips: 0, 1, 50000 and 50001 points, formats 6-8 (LAS 1.4, layered)", async function () {
+	for (var n of [0, 1, 50000, 50001]) {
+		var src = columns(n);
+		for (var i = 0; i < n; i++) src.scannerChannel[i] = [0, 1, 0, 2, 1, 3, 0][Math.floor(i / 700) % 7];
+		for (var f = 6; f <= 8; f++) {
+			src.nir = f === 8 ? Uint16Array.from(src.red, function (r) { return 65535 - r; }) : new Uint16Array(n);
+			await checkAgainstLas(src, { version: "1.4", pointFormat: f, scale: SCALE, offset: OFFSET, date: DATE }, n + " points, format " + f);
+		}
+	}
+	var laz = await checkAgainstLas(columns(2500), { version: "1.4", pointFormat: 8, scale: SCALE, offset: OFFSET, chunkSize: 1000 }, "format 8, chunkSize 1000");
+	assert.equal((await decompressAll(laz)).chunks.length, 3);
+	assert.equal((await openLas(laz)).laz.compressor, 3);
 });
 
 test("the header: compressed bit, uncompressed record length, LASzip VLR after the CRS records", async function () {
@@ -184,9 +199,9 @@ test("unawaited writePoints calls keep their order", async function () {
 	assert.deepEqual(sink.bytes(), oneShot);
 });
 
-test("refusals: compress with formats 4, 5, 9, 10 (and 6-8 until layered compression) is UNSUPPORTED", async function () {
+test("refusals: compress with formats 4, 5, 9, 10 is UNSUPPORTED", async function () {
 	var src = columns(3);
-	for (var c of [["1.3", 4], ["1.3", 5], ["1.4", 9], ["1.4", 10], ["1.4", 6], ["1.4", 7], ["1.4", 8]]) {
+	for (var c of [["1.3", 4], ["1.3", 5], ["1.4", 9], ["1.4", 10]]) {
 		await assert.rejects(writeLas(src, { compress: true, version: c[0], pointFormat: c[1] }), { code: "UNSUPPORTED" }, c.join(" "));
 		await assert.rejects(createLasWriter(memorySink(8), { compress: true, version: c[0], pointFormat: c[1], scale: SCALE, offset: OFFSET }), { code: "UNSUPPORTED" }, c.join(" "));
 	}

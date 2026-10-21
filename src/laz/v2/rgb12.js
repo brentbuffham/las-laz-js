@@ -89,6 +89,7 @@ Rgb12Decompressor.prototype.next = function (dec, view, o) {
  * @param {RgbModels} m
  * @param {Uint16Array} last - [r, g, b] of the last point (not changed)
  * @param {Uint16Array} cur - [r, g, b] of this point
+ * @returns {number} the symbol coded: which bytes changed, and bit 6 when it is not grey
  */
 export function encodeRgb(enc, m, last, cur) {
 	var lr = last[0], lg = last[1], lb = last[2], r = cur[0], g = cur[1], b = cur[2];
@@ -110,6 +111,7 @@ export function encodeRgb(enc, m, last, cur) {
 			enc.encodeSymbol(m.highBlue, ((b >>> 8) - clamp8(diffH + (lb >>> 8))) & 255);
 		}
 	}
+	return sym;
 }
 
 /** RGB12 v2 compressor: one per chunk, the mirror of Rgb12Decompressor. */
@@ -118,7 +120,8 @@ export function Rgb12Compressor() {
 	this.cur = new Uint16Array(3);
 }
 
-function readRgb(out, src, s) {
+/** [r, g, b] of the record bytes at s, into out (RGB14 reads them the same way). */
+export function readRgb(out, src, s) {
 	out[0] = src[s] + src[s + 1] * 256; out[1] = src[s + 2] + src[s + 3] * 256; out[2] = src[s + 4] + src[s + 5] * 256;
 }
 

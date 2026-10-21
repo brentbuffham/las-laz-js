@@ -151,7 +151,7 @@ into WKT.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `compress` | `false` | write LAZ (LASzip, point formats 0–3); formats 4, 5, 9, 10 are refused (`UNSUPPORTED`) |
+| `compress` | `false` | write LAZ (LASzip, point formats 0–3 and 6–8); formats 4, 5, 9, 10 are refused (`UNSUPPORTED`) |
 | `chunkSize` | `50000` | points per LAZ chunk, a whole number ≥ 1; only with `compress` (ignored without it) |
 
 ## In a Worker

@@ -13,7 +13,8 @@
 // Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE and
 // NOTICE). Changes: translated from Rust to JavaScript, i64 as two u32
 // halves, Brent Buffham 2026; the compressor (GpsTime11Compressor) added
-// beside the decompressor, rounding its multiplier as LAZperf does.
+// beside the decompressor, rounding its multiplier as LAZperf does; its
+// multiplier and 64-bit difference shared with the Point14 compressor.
 //==========================================================
 
 import { ArithmeticModel } from "../models.js";
@@ -136,7 +137,7 @@ GpsTime11Decompressor.prototype.next = function (dec, view, o) {
 // laz-rs add 0.5f in f32 instead, which differs only within an f32 step of a
 // half; the fixtures' oracle is LAZperf. The one quotient past i32 (2^31, a last
 // difference of +-1) converts as x86 does, to -2^31. Either choice decodes the same.
-function quantizeMulti(curr, last) {
+export function quantizeMulti(curr, last) {
 	var q = Math.fround(Math.fround(curr) / Math.fround(last));
 	var m = q >= 0 ? Math.floor(q + 0.5) : -Math.floor(0.5 - q);
 	return m > 2147483647 ? -2147483648 : m;
@@ -156,15 +157,19 @@ export function GpsTime11Compressor() {
 }
 
 
-// (hi, lo) minus sequence i as an i32, or null when the 64-bit difference does not fit
-GpsTime11Compressor.prototype._diff = function (i, hi, lo) {
-	var dl = lo - this.lo[i], dh = hi - this.hi[i];
+// (hi, lo) - (hi0, lo0) as an i32, or null when the 64-bit difference does not fit
+// (hi signed, lo unsigned; shared with the Point14 compressor's GPS time)
+export function diff32(hi, lo, hi0, lo0) {
+	var dl = lo - lo0, dh = hi - hi0;
 	if (dl < 0) { dl += 4294967296; dh -= 1; }
 	dh = dh | 0;                                 // the high word of the i64 wrapping_sub
 	if (dh === 0 && dl < 2147483648) return dl;
 	if (dh === -1 && dl >= 2147483648) return dl - 4294967296;
 	return null;
-};
+}
+
+// (hi, lo) minus sequence i as an i32, or null when the 64-bit difference does not fit
+GpsTime11Compressor.prototype._diff = function (i, hi, lo) { return diff32(hi, lo, this.hi[i], this.lo[i]); };
 
 // The first other sequence (1-3 on from the last) this time is within i32 of, or 0
 GpsTime11Compressor.prototype._other = function (hi, lo) {

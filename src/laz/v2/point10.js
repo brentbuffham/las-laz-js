@@ -70,8 +70,9 @@ function lazyModel(table, i) { return table[i] || (table[i] = new ArithmeticMode
 function medians() { var out = []; for (var i = 0; i < 16; i++) out.push(new StreamingMedian()); return out; }
 
 // The Y and Z coder contexts, from the bit lengths of the X (and Y) corrections just coded
-function yContext(single, icDx) { var k = icDx.k; return single + (k < 20 ? k & 0xFFFFFFFE : 20); }
-function zContext(single, icDx, icDy) { var k = Math.floor((icDx.k + icDy.k) / 2); return single + (k < 18 ? k & 0xFFFFFFFE : 18); }
+// (Point14 uses them too)
+export function yContext(single, icDx) { var k = icDx.k; return single + (k < 20 ? k & 0xFFFFFFFE : 20); }
+export function zContext(single, icDx, icDy) { var k = Math.floor((icDx.k + icDy.k) / 2); return single + (k < 18 ? k & 0xFFFFFFFE : 18); }
 
 // The state and models both halves start a chunk with; IC is the integer coder
 // (IntegerCompressor or IntegerDecompressor), so each side gets the same widths and contexts

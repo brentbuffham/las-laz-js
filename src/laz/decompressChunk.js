@@ -48,18 +48,28 @@ function pointwiseItem(it) {
 	}
 }
 
-// Layered (LAS 1.4) items, versions 3 and 4: each makes one or more field decoders
-function layeredItem(it) {
+/**
+ * Refuse a layered (LAS 1.4) item this library cannot code (the compressor shares the check).
+ * @param {{type:number, size:number, version:number}} it
+ */
+export function checkLayeredItem(it) {
 	if (it.version !== 3 && it.version !== 4) {
 		throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ item " + (NAMES[it.type] || it.type) + " version " + it.version + " is not supported in a layered file (versions 3 and 4 are)");
 	}
+	if (it.type !== ITEM.POINT14 && it.type !== ITEM.RGB14 && it.type !== ITEM.RGBNIR14 && it.type !== ITEM.BYTE14) {
+		throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ item " + (NAMES[it.type] || it.type) + " is not supported (wave packets are not read)");
+	}
+}
+
+// Layered (LAS 1.4) items, versions 3 and 4: each makes one or more field decoders
+function layeredItem(it) {
+	checkLayeredItem(it);
 	var v = it.version;
 	switch (it.type) {
 		case ITEM.POINT14: return function () { return [new Point14Decompressor(v)]; };
 		case ITEM.RGB14: return function () { return [new Rgb14Decompressor(v)]; };
 		case ITEM.RGBNIR14: return function () { return [new Rgb14Decompressor(v), new Nir14Decompressor(v)]; };
-		case ITEM.BYTE14: return function () { return [new Byte14Decompressor(it.size, v)]; };
-		default: throw new LasError(ERROR_CODES.UNSUPPORTED, "LAZ item " + (NAMES[it.type] || it.type) + " is not supported (wave packets are not read)");
+		default: return function () { return [new Byte14Decompressor(it.size, v)]; };
 	}
 }
 

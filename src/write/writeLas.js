@@ -6,7 +6,7 @@
 // file handle) and patches the header totals on close. Both share
 // one header builder, so they produce identical bytes.
 //
-// With compress: true both write LAZ (point formats 0-3): the same
+// With compress: true both write LAZ (point formats 0-3 and 6-8): the same
 // records, compressed chunkSize points at a time (LASzip's 50,000 by
 // default), after a LASzip VLR; the point data is an 8-byte offset to
 // the chunk table, the chunks, then the table — laid out as LAZperf
@@ -92,7 +92,6 @@ function lazSetup(fmt, opts) {
 	}
 	var len = POINT_FORMATS[fmt].size;
 	var made = lazVlrFor(fmt, len, chunkSize);   // UNSUPPORTED for formats 4, 5, 9, 10
-	// createChunkCompressor refuses 6-8 (UNSUPPORTED) until layered compression is written
 	return { chunkSize: chunkSize, vlrBytes: made.bytes, compress: createChunkCompressor(made.vlr, len) };
 }
 
@@ -170,7 +169,7 @@ function boundsOfPoints(points, origin) {
 }
 
 /**
- * Write a whole LAS file, or LAZ with compress: true (point formats 0-3).
+ * Write a whole LAS file, or LAZ with compress: true (point formats 0-3 and 6-8).
  * @param {object} points - PointColumns (world coordinates, or relative to opts.localOrigin)
  * @param {object} [opts] - version, pointFormat, scale, offset, crs {epsg|wkt}, software, systemId, date, localOrigin, as ("bytes" | "blob"),
  *   compress (write LAZ), chunkSize (points per LAZ chunk, default 50000; only with compress)
