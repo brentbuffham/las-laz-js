@@ -22,11 +22,13 @@ import { windows, lazWindows } from "./read/windows.js";
 import { findLazVlr } from "./laz/LazVlr.js";
 import { readChunks } from "./laz/chunkTable.js";
 import { createChunkDecoder } from "./laz/decompressChunk.js";
+import { createLazPool, defaultThreads } from "./laz/pool.js";
 import { makeKeep, countKept } from "./filter/filters.js";
 import { dedupe } from "./filter/dedupe.js";
 import { openScratchSyncWriter } from "./io/ScratchBinaryFile.js";
 
 var DEFAULT_WINDOW = 64 * 1024 * 1024;
+var AUTO_MIN_CHUNKS = 4;
 
 function memorySource(bytes) {
 	return { size: bytes.length, read: async function (a, b) {
@@ -62,7 +64,8 @@ async function toSource(source) {
 /**
  * Open a LAS (or LAZ) file and read its header and VLRs.
  * @param {*} source
- * @param {{windowSize?: number}} [opts]
+ * @param {{windowSize?: number, threads?: number}} [opts] - threads: LAZ decode workers
+ *   (default automatic: cores - 1, at most 16; 1 = decode on this thread)
  * @returns {Promise<LasReader>}
  */
 export async function openLas(source, opts) {
@@ -79,7 +82,9 @@ export async function openLas(source, opts) {
 	if (header.numberOfEvlrs > 0 && header.evlrStart > 0 && header.evlrStart < src.size) {
 		evlrs = await walkEvlrs(src, header.evlrStart, header.numberOfEvlrs);
 	}
-	return new LasReader(src, header, vlrs, evlrs, (opts && opts.windowSize) || DEFAULT_WINDOW);
+	var reader = new LasReader(src, header, vlrs, evlrs, (opts && opts.windowSize) || DEFAULT_WINDOW);
+	reader._threads = opts && opts.threads > 0 ? Math.floor(opts.threads) : 0;   // 0 = automatic
+	return reader;
 }
 
 // EVLRs sit after the points and can be huge (waveform data): read each
@@ -153,7 +158,19 @@ LasReader.prototype._plan = async function () {
 				var view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 				win.chunks.forEach(function (c) { decode(packed, c.start - win.start, c.end - win.start, c.count, view, (c.firstRecord - win.firstRecord) * len, win.start); });
 				return buf.subarray(0, win.count * len);
-			}
+			},
+			// The same records, each chunk decoded by a pool worker from its own copy of the bytes
+			parallel: async function (win, pool) {
+				var packed = await src.read(win.start, win.end);
+				var out = new Uint8Array(win.count * len);
+				await Promise.all(win.chunks.map(function (c) {
+					var piece = packed.slice(c.start - win.start, c.end - win.start);
+					return pool.decode({ vlr: vlr, recordLength: len, packed: piece.buffer, chunks: [{ s: 0, e: piece.length, count: c.count }], base: c.start })
+						.then(function (rec) { out.set(rec, (c.firstRecord - win.firstRecord) * len); });
+				}));
+				return out;
+			},
+			chunkCount: lazList.reduce(function (n, w) { return n + w.chunks.length; }, 0)
 		};
 	}
 	this._planned = plan;
@@ -179,32 +196,62 @@ LasReader.prototype._scan = async function* (opts, into) {
 	var keep = makeKeep(opts, h);
 	var fields = resolveFields(h, opts.fields);
 	var list = plan.list;
-	var buf = plan.bufferSize ? new Uint8Array(plan.bufferSize) : null;
-	var thin = null;
-	if (opts.maxPoints > 0) {
-		// Thin the points that pass the filters; with filters set, count them first (a second read)
-		var passing = keep ? await this._countPassing(plan, buf, keep, opts.signal) : h.pointCount;
-		if (passing > opts.maxPoints) thin = { total: passing, target: opts.maxPoints, acc: 0 };
-	}
-	var kept = 0;
-	for (var w = 0; w < list.length; w++) {
+	var pool = await this._pool(plan);
+	try {
+		var buf = !pool && plan.bufferSize ? new Uint8Array(plan.bufferSize) : null;
+		var thin = null;
+		if (opts.maxPoints > 0) {
+			// Thin the points that pass the filters; with filters set, count them first (a second read)
+			var passing = keep ? await this._countPassing(plan, pool, buf, keep, opts.signal) : h.pointCount;
+			if (passing > opts.maxPoints) thin = { total: passing, target: opts.maxPoints, acc: 0 };
+		}
+		var kept = 0, w = 0;
+		for await (var bytes of windowBytes(plan, pool, buf, opts.signal)) {
+			var win = list[w];
+			var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, into: into ? into(win) : null });
+			kept += cols.count;
+			w++;
+			if (typeof opts.onProgress === "function") opts.onProgress(w / list.length, "read " + kept + " points");
+			yield cols;
+		}
 		if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
-		var win = list[w];
-		var bytes = await plan.records(win, buf);
-		var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, into: into ? into(win) : null });
-		kept += cols.count;
-		if (typeof opts.onProgress === "function") opts.onProgress((w + 1) / list.length, "read " + kept + " points");
-		yield cols;
+	} finally {
+		if (pool) pool.close();
 	}
-	if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
 };
 
-LasReader.prototype._countPassing = async function (plan, buf, keep, signal) {
-	var n = 0;
-	for (var w = 0; w < plan.list.length; w++) {
-		if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
-		n += countKept(await plan.records(plan.list[w], buf), this.header.recordLength, keep);
+// Each window's raw records in order. With a pool the next window is already
+// decoding while this one is used; without one, one buffer is reused.
+async function* windowBytes(plan, pool, buf, signal) {
+	var list = plan.list;
+	function fetch(i) {
+		var p = plan.parallel(list[i], pool);
+		p.catch(function () {});                 // a prefetch abandoned by an abort must not go unhandled
+		return p;
 	}
+	var next = pool && list.length ? fetch(0) : null;
+	for (var w = 0; w < list.length; w++) {
+		if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
+		if (!pool) { yield await plan.records(list[w], buf); continue; }
+		var current = next;
+		next = w + 1 < list.length ? fetch(w + 1) : null;
+		yield await current;
+	}
+}
+
+// A decode pool for this scan, or null: LAS, threads: 1, one chunk, or no workers available
+LasReader.prototype._pool = async function (plan) {
+	if (!plan.parallel || this._threads === 1) return null;
+	// automatic: only when there is enough to share (starting workers costs about as much as
+	// decoding a few chunks); an explicit thread count is always honoured
+	if (!this._threads && plan.chunkCount < AUTO_MIN_CHUNKS) return null;
+	var n = Math.min(this._threads || await defaultThreads(), plan.chunkCount);
+	return n >= 2 ? createLazPool(n) : null;
+};
+
+LasReader.prototype._countPassing = async function (plan, pool, buf, keep, signal) {
+	var n = 0;
+	for await (var bytes of windowBytes(plan, pool, buf, signal)) n += countKept(bytes, this.header.recordLength, keep);
 	return n;
 };
 
