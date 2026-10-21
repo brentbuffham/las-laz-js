@@ -58,12 +58,15 @@
 					<label>Returns <input type="text" id="returns" placeholder="all (e.g. 1)"></label>
 					<label>Max points <input type="number" id="maxPoints" value="5000000" min="0" step="100000" title="0 = every point"></label>
 					<label>Window (MB) <input type="number" id="windowMb" value="64" min="1" max="1024"></label>
+					<label>Bounds min <input type="text" id="boundsMin" placeholder="x y z (blank = none)" title="World coordinates; leave a value blank for no limit"></label>
+					<label>Bounds max <input type="text" id="boundsMax" placeholder="x y z (blank = none)" title="World coordinates; leave a value blank for no limit"></label>
+					<label>Dedupe (m) <input type="number" id="dedupe" value="0" min="0" step="0.01" title="Drop points within this XY distance of one already kept; 0 = off. Reads with readPoints (all at once), not chunks"></label>
 				</div>
 				<div class="row">
 					<button class="button" id="readButton" disabled>Read points</button>
 					<button class="button" id="abortButton" disabled>Stop</button>
 				</div>
-				<p class="muted small">The viewer draws at most <span id="drawCapText">20,000,000</span> points; Max points thins the read evenly (every n-th point).</p>
+				<p class="muted small">The viewer draws at most <span id="drawCapText">20,000,000</span> points; Max points keeps that many of the points that pass the filters, spread evenly over the file.</p>
 			</div>
 
 			<div class="tab-body hidden" id="tab-colour">
@@ -81,6 +84,8 @@
 						<option value="greyscale">Greyscale</option>
 					</select>
 				</label>
+				<label class="field">Range min <input type="number" id="rangeMin" placeholder="auto" title="Colour ramp start (elevation in world Z, or intensity); blank = automatic"></label>
+				<label class="field">Range max <input type="number" id="rangeMax" placeholder="auto" title="Colour ramp end; blank = automatic"></label>
 				<label class="field">Point size (px)
 					<input type="number" id="pointSize" value="2" min="1" max="10">
 				</label>
@@ -92,10 +97,14 @@
 				<table class="kv" id="statsTable"></table>
 				<h3>Classification</h3>
 				<table class="grid-table" id="classTable"></table>
+				<h3>Return number</h3>
+				<table class="grid-table" id="returnTable"></table>
+				<h3>Intensity</h3>
+				<table class="grid-table" id="intensityTable"></table>
 			</div>
 
 			<div class="tab-body hidden" id="tab-write">
-				<p class="muted">Writes the points read (with every field the format holds) as a new LAS file with <code>writeLas</code>, then reads it back to check the round trip.</p>
+				<p class="muted">Writes the points read (with every field the format holds) as a new LAS file with <code>writeLas</code>, then reads it back to check the round trip. A browser page holds at most <span id="writeCapText">5,000,000</span> points for this, thinned evenly; to write more, stream with <code>createLasWriter</code>.</p>
 				<label class="field">LAS version
 					<select id="writeVersion"><option>1.2</option><option>1.4</option></select>
 				</label>

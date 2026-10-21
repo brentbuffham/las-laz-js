@@ -78,7 +78,7 @@ function showHeader() {
 	v.innerHTML = "<tr><th>User</th><th>Record</th><th>Bytes</th><th>Description</th></tr>";
 	info.vlrs.concat(info.evlrs).forEach(function (r) {
 		var tr = v.insertRow();
-		[r.userId, r.recordId, r.bytes.length, r.description].forEach(function (c) { tr.insertCell().textContent = c; });
+		[r.userId, r.recordId, r.length, r.description].forEach(function (c) { tr.insertCell().textContent = c; });
 	});
 	var sel = $("writeFormat");
 	sel.innerHTML = "";
@@ -88,42 +88,77 @@ function showHeader() {
 }
 
 // --- read --------------------------------------------------------------------
+// "x y z" with blanks -> [x, y, z], a blank or bad value becoming `fill`
+function triple(text, fill) {
+	var p = text.trim() ? text.trim().split(/[\s,]+/) : [];
+	return [0, 1, 2].map(function (i) { var v = p[i] === undefined || p[i] === "" ? NaN : Number(p[i]); return isFinite(v) ? v : fill; });
+}
+function boundsFilter() {
+	if (!$("boundsMin").value.trim() && !$("boundsMax").value.trim()) return undefined;
+	var lo = triple($("boundsMin").value, -Infinity), hi = triple($("boundsMax").value, Infinity);
+	return { minX: lo[0], minY: lo[1], minZ: lo[2], maxX: hi[0], maxY: hi[1], maxZ: hi[2] };
+}
+function colourOpts() {
+	var by = $("colourBy").value, o = { by: by, ramp: $("ramp").value };
+	var lo = $("rangeMin").value.trim(), hi = $("rangeMax").value.trim();
+	if (lo !== "" && hi !== "" && (by === "elevation" || by === "intensity")) {
+		var shift = by === "elevation" ? origin.z : 0;   // points are read relative to the local origin
+		o.range = [Number(lo) - shift, Number(hi) - shift];
+	}
+	return o;
+}
+
+var t0 = 0, fitted = false;
+
+// One set of columns (a chunk, or the whole deduplicated read) into the viewer and the stats
+function take(c) {
+	var n = c.count;
+	if (!n) return;
+	var pos = new Float32Array(n * 3);
+	for (var i = 0; i < n; i++) { pos[i * 3] = c.x[i]; pos[i * 3 + 1] = c.y[i]; pos[i * 3 + 2] = c.z[i]; }
+	// Only chunks the viewer draws are kept, so hover indexes match and nothing past the cap is held
+	if (viewer.addChunk(pos, c.colours, DRAW_CAP) > 0) chunks.push(c);
+	for (var j = 0; j < n; j++) {
+		stats.classes[c.classification[j]] = (stats.classes[c.classification[j]] || 0) + 1;
+		stats.returns[c.returnNumber[j]] = (stats.returns[c.returnNumber[j]] || 0) + 1;
+		stats.intensity[c.intensity[j]]++;
+		if (c.z[j] < stats.minZ) stats.minZ = c.z[j];
+		if (c.z[j] > stats.maxZ) stats.maxZ = c.z[j];
+	}
+	stats.count += n;
+	if (!fitted) { viewer.fit(); fitted = true; }
+	var secs = (performance.now() - t0) / 1000;
+	$("stats").textContent = fmt(stats.count) + " / " + fmt(info.header.pointCount) + " points · " + secs.toFixed(1) + " s · " + fmt(Math.round(stats.count / Math.max(secs, 0.001))) + " pts/s";
+	setStatus("Reading…");
+}
+
 async function read() {
 	if (!info || info.compressed) return;
 	if (readJob) await stop();
 	viewer.clear();
 	chunks = [];
-	stats = { count: 0, classes: {}, minZ: Infinity, maxZ: -Infinity, first: 0 };
+	stats = { count: 0, classes: {}, returns: {}, intensity: new Uint32Array(65536), minZ: Infinity, maxZ: -Infinity };
 	$("viewerEmpty").classList.add("hidden");
 	$("readButton").disabled = true; $("abortButton").disabled = false;
 	await call("open", { blob: file, windowSize: Number($("windowMb").value) * 1048576 }).promise;
-	var t0 = performance.now(), fitted = false;
-	readJob = call("chunks", {
+	t0 = performance.now(); fitted = false;
+	var payload = {
 		fields: ["x", "y", "z", "classification", "intensity", "returnNumber"],
-		classes: list($("classes").value), returns: list($("returns").value),
+		classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(),
 		maxPoints: Number($("maxPoints").value) || 0,
 		localOrigin: origin, float32: true,
-		colour: { by: $("colourBy").value, ramp: $("ramp").value }
-	}, function (m) {
+		colour: colourOpts()
+	};
+	var tol = Number($("dedupe").value) || 0;
+	var onEvent = function (m) {
 		if (m.type === "progress") { $("progress").value = m.fraction; return; }
-		var c = m.chunk, n = c.count, pos = new Float32Array(n * 3);
-		for (var i = 0; i < n; i++) { pos[i * 3] = c.x[i]; pos[i * 3 + 1] = c.y[i]; pos[i * 3 + 2] = c.z[i]; }
-		viewer.addChunk(pos, c.colours, DRAW_CAP);
-		chunks.push(c);
-		for (var j = 0; j < n; j++) {
-			stats.classes[c.classification[j]] = (stats.classes[c.classification[j]] || 0) + 1;
-			if (c.z[j] < stats.minZ) stats.minZ = c.z[j];
-			if (c.z[j] > stats.maxZ) stats.maxZ = c.z[j];
-			if (c.returnNumber[j] === 1) stats.first++;
-		}
-		stats.count += n;
-		if (!fitted) { viewer.fit(); fitted = true; }
-		var secs = (performance.now() - t0) / 1000;
-		$("stats").textContent = fmt(stats.count) + " / " + fmt(info.header.pointCount) + " points · " + secs.toFixed(1) + " s · " + fmt(Math.round(stats.count / Math.max(secs, 0.001))) + " pts/s";
-		setStatus("Reading…");
-	});
+		take(m.chunk);
+	};
+	// dedupe needs every point at once, so it reads with readPoints; otherwise stream with chunks
+	readJob = tol > 0 ? call("readPoints", Object.assign({ dedupe: tol }, payload), onEvent) : call("chunks", payload, onEvent);
 	try {
-		await readJob.promise;
+		var result = await readJob.promise;
+		if (tol > 0) take(result);
 		viewer.fit();
 		var drawn = viewer.drawnCount();
 		setStatus("Read " + fmt(stats.count) + " points" + (drawn < stats.count ? " (showing " + fmt(drawn) + " of " + fmt(stats.count) + ")" : ""));
@@ -144,43 +179,68 @@ async function stop() {
 	try { await readJob.promise; } catch (e) { /* stopped */ }
 }
 
+function table(id, head, rows) {
+	var t = $(id);
+	t.innerHTML = "<tr>" + head.map(function (h) { return "<th>" + h + "</th>"; }).join("") + "</tr>";
+	rows.forEach(function (r) { var tr = t.insertRow(); r.forEach(function (v) { tr.insertCell().textContent = v; }); });
+}
+function share(n) { return (100 * n / stats.count).toFixed(1) + " %"; }
+
 function showStats() {
 	var t = $("statsTable");
 	$("statsEmpty").classList.add("hidden");
 	t.innerHTML = "";
 	row(t, "Points read", fmt(stats.count));
-	row(t, "First returns", fmt(stats.first));
-	row(t, "Z range", (stats.minZ + origin.z).toFixed(3) + " … " + (stats.maxZ + origin.z).toFixed(3));
-	var c = $("classTable");
-	c.innerHTML = "<tr><th>Class</th><th>Points</th><th>Share</th></tr>";
-	Object.keys(stats.classes).sort(function (a, b) { return a - b; }).forEach(function (k) {
-		var tr = c.insertRow();
-		[k, fmt(stats.classes[k]), (100 * stats.classes[k] / stats.count).toFixed(1) + " %"].forEach(function (v) { tr.insertCell().textContent = v; });
-	});
+	row(t, "Z range", stats.count ? (stats.minZ + origin.z).toFixed(3) + " … " + (stats.maxZ + origin.z).toFixed(3) : "—");
+	var keys = function (o) { return Object.keys(o).sort(function (a, b) { return a - b; }); };
+	table("classTable", ["Class", "Points", "Share"], keys(stats.classes).map(function (k) { return [k, fmt(stats.classes[k]), share(stats.classes[k])]; }));
+	table("returnTable", ["Return", "Points", "Share"], keys(stats.returns).map(function (k) { return [k, fmt(stats.returns[k]), share(stats.returns[k])]; }));
+	// 16 equal bins over the intensities actually present
+	var h = stats.intensity, lo = 0, hi = 65535;
+	while (lo < 65535 && !h[lo]) lo++;
+	while (hi > 0 && !h[hi]) hi--;
+	var rows = [];
+	if (stats.count && lo <= hi) {
+		var width = Math.max(1, Math.ceil((hi - lo + 1) / 16));
+		for (var b = lo; b <= hi; b += width) {
+			var n = 0, top = Math.min(hi, b + width - 1);
+			for (var v = b; v <= top; v++) n += h[v];
+			rows.push([b + " … " + top, fmt(n), share(n)]);
+		}
+	}
+	table("intensityTable", ["Intensity", "Points", "Share"], rows);
 }
 
 // --- write -------------------------------------------------------------------
+var WRITE_CAP = 5000000;   // every field of 5 M points is ~0.5 GB in a page; stream more with createLasWriter
+
 async function save() {
+	var h = info.header, F = POINT_FORMATS[h.pointFormat].fields;
+	var wf = Number($("writeFormat").value);
+	var limit = Math.min(Number($("maxPoints").value) || h.pointCount, WRITE_CAP);
 	$("writeResult").textContent = "Reading every field…";
+	$("writeResult").className = "muted small";
 	try {
 		var cols = await call("readPoints", {
 			fields: ["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scanAngle", "userData", "pointSourceId"]
-				.concat(POINT_FORMATS[info.header.pointFormat].fields.gpsTime ? ["gpsTime"] : [])
-				.concat(POINT_FORMATS[info.header.pointFormat].fields.red ? ["red", "green", "blue"] : [])
-				.concat(POINT_FORMATS[info.header.pointFormat].fields.nir ? ["nir"] : []),
-			classes: list($("classes").value), returns: list($("returns").value), maxPoints: Number($("maxPoints").value) || 0
+				.concat(F.gpsTime ? ["gpsTime"] : []).concat(F.red ? ["red", "green", "blue"] : []).concat(F.nir ? ["nir"] : []),
+			classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(), maxPoints: limit
 		}).promise;
-		var crs = info.crs.epsg ? { epsg: info.crs.epsg } : (info.crs.wkt ? { wkt: info.crs.wkt } : undefined);
-		var bytes = await writeLas(cols, { version: $("writeVersion").value, pointFormat: Number($("writeFormat").value), scale: info.header.scale, offset: info.header.offset, crs: crs, software: "las-laz-js demo" });
-		var check = await (await openLas(bytes)).readPoints({ fields: ["x"] });
+		// Formats 6-10 carry the CRS as WKT only (LAS 1.4); an EPSG code alone cannot go there
+		var crs, note = "";
+		if (info.crs.wkt || (info.crs.epsg && wf < 6)) crs = { wkt: info.crs.wkt, epsg: info.crs.epsg };
+		else if (info.crs.epsg) note = " The source has only an EPSG code, which point formats 6–10 cannot carry (they need WKT), so no coordinate system was written.";
+		var blob = await writeLas(cols, { version: $("writeVersion").value, pointFormat: wf, scale: h.scale, offset: h.offset, crs: crs, software: "las-laz-js demo", as: "blob" });
+		var check = await (await openLas(blob)).readPoints({ fields: ["x"] });
 		var ok = check.count === cols.count;
 		var name = file.name.replace(/\.[^.]*$/, "") + "-las-laz-js.las";
 		var a = document.createElement("a");
-		a.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+		a.href = URL.createObjectURL(blob);
 		a.download = name;
 		a.click();
 		setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
-		$("writeResult").textContent = "Saved " + name + " (" + fmt(bytes.length) + " bytes, " + fmt(cols.count) + " points). Round trip: " + (ok ? "OK, same count read back." : "MISMATCH (" + fmt(check.count) + " read back)");
+		var thinned = cols.count < h.pointCount && limit === WRITE_CAP ? " (thinned to the page's " + fmt(WRITE_CAP) + "-point limit)" : "";
+		$("writeResult").textContent = "Saved " + name + " (" + fmt(blob.size) + " bytes, " + fmt(cols.count) + " points" + thinned + "). Round trip: " + (ok ? "OK, same count read back." : "MISMATCH (" + fmt(check.count) + " read back)") + note;
 		$("writeResult").className = ok ? "muted small" : "error small";
 	} catch (err) {
 		$("writeResult").textContent = err.message;
@@ -220,6 +280,7 @@ $("colourBy").addEventListener("change", read);
 $("ramp").addEventListener("change", read);
 $("pointSize").addEventListener("input", function () { viewer.setPointSize(Number($("pointSize").value) || 2); });
 $("drawCapText").textContent = fmt(DRAW_CAP);
+$("writeCapText").textContent = fmt(WRITE_CAP);
 window.addEventListener("dragover", function (e) { e.preventDefault(); $("dropOverlay").classList.remove("hidden"); });
 window.addEventListener("dragleave", function (e) { if (!e.relatedTarget) $("dropOverlay").classList.add("hidden"); });
 window.addEventListener("drop", function (e) {
