@@ -112,3 +112,57 @@ test("variable-size chunk counts that do not add up to the header's count are BA
 	var huge = fakeFile(300, [10], tableBytes([[2000000000, 10]], true));               // a corrupt count must not size a buffer
 	await assert.rejects(readChunks(huge, { offsetToPointData: 300, pointCount: 10 }, { compressor: 3, chunkSize: 0xFFFFFFFF, variableChunks: true }), { code: "BAD_HEADER" });
 });
+
+// ---- writing: encodeChunkTable and lazVlrFor ----
+import { encodeChunkTable } from "../../src/laz/chunkTable.js";
+import { lazVlrFor } from "../../src/laz/LazVlr.js";
+import { openLas } from "../../src/LasReader.js";
+import { LAZ_MANIFEST, fixtureBytes, decompressAll } from "../helpers/lazFixtureFiles.js";
+
+Object.keys(LAZ_MANIFEST).forEach(function (name) {
+	test(name + ": lazVlrFor and encodeChunkTable rebuild PDAL's VLR and chunk table", async function () {
+		var bytes = fixtureBytes(name), m = LAZ_MANIFEST[name];
+		var d = await decompressAll(bytes);
+		var las = await openLas(bytes, { threads: 1 });
+		var theirs = las.vlrs.filter(function (v) { return v.recordId === 22204; })[0];
+		var built = lazVlrFor(m.pointFormat, m.recordLength, 50000);
+		assert.deepEqual(built.bytes, theirs.bytes, "VLR payload");
+		assert.deepEqual(built.vlr, parseLazVlr(theirs.bytes), "parsed VLR");
+		var dv = new DataView(bytes.buffer, bytes.byteOffset + d.header.offsetToPointData, 8);
+		var tableAt = dv.getUint32(0, true) + dv.getUint32(4, true) * 4294967296;
+		var table = encodeChunkTable(d.chunks.map(function (c) { return { pointCount: c.count, byteCount: c.end - c.start }; }), false);
+		assert.deepEqual(table, bytes.subarray(tableAt), "chunk table");
+	});
+});
+
+test("lazVlrFor: chunk size, extra bytes, and the formats it refuses", function () {
+	var f8 = lazVlrFor(8, 40, 1000);
+	assert.equal(f8.vlr.compressor, COMPRESSOR.LAYERED_CHUNKED);
+	assert.equal(f8.vlr.chunkSize, 1000);
+	assert.deepEqual(f8.vlr.items.slice(-1), [{ type: 14, size: 2, version: 3 }]);
+	assert.equal(f8.bytes.length, 34 + 6 * f8.vlr.items.length);
+	assert.equal(lazVlrFor(0, 20, 50000).vlr.items.length, 1);              // no extra bytes, no Byte item
+	assert.deepEqual(lazVlrFor(1, 30, 50000).vlr.items.slice(-1), [{ type: 0, size: 2, version: 2 }]);
+	[4, 5, 9, 10].forEach(function (f) {
+		assert.throws(function () { lazVlrFor(f, 100, 50000); }, { code: "UNSUPPORTED" });
+	});
+	assert.throws(function () { lazVlrFor(3, 30, 50000); }, { code: "INVALID_ARGUMENT" });   // record shorter than the format
+});
+
+test("encodeChunkTable is the inverse of decodeChunkTable", function () {
+	var seed = 12345;
+	function rnd(n) { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed % n; }
+	[0, 1, 300].forEach(function (n) {
+		var chunks = [];
+		for (var i = 0; i < n; i++) chunks.push({ pointCount: i === 0 ? 4294967295 : 1 + rnd(100000), byteCount: i === 1 ? 4294967295 : rnd(4000000000) });
+		[true, false].forEach(function (withCounts) {
+			var back = decodeChunkTable(encodeChunkTable(chunks, withCounts), withCounts);
+			assert.equal(back.length, n);
+			back.forEach(function (c, j) {
+				assert.equal(c.byteCount, chunks[j].byteCount);
+				if (withCounts) assert.equal(c.pointCount, chunks[j].pointCount);
+			});
+		});
+	});
+	assert.equal(new DataView(encodeChunkTable([{ pointCount: 5, byteCount: 9 }], false).buffer).getUint32(4, true), 1);
+});

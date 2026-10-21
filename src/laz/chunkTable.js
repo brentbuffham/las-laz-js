@@ -14,12 +14,15 @@
 // rapidlasso; (c) 2019-2023 Thomas Montaigu.
 // Licensed under the Apache License, Version 2.0 (see LICENSE-APACHE and
 // NOTICE). Changes: written
-// in JavaScript over an async byte source, Brent Buffham 2026.
+// in JavaScript over an async byte source; the writing half (encodeChunkTable)
+// added, Brent Buffham 2026.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { ArithmeticDecoder } from "./ArithmeticDecoder.js";
 import { IntegerDecompressor } from "./IntegerDecompressor.js";
+import { ArithmeticEncoder } from "./ArithmeticEncoder.js";
+import { IntegerCompressor } from "./IntegerCompressor.js";
 import { COMPRESSOR } from "./LazVlr.js";
 
 // Signed i64 at `at` as a Number (an offset; > 2^53 is refused)
@@ -54,6 +57,33 @@ export function decodeChunkTable(bytes, withPointCounts, base) {
 		prevPoints = points; prevBytes = size;
 		out.push({ pointCount: points < 0 ? points + 4294967296 : points, byteCount: size < 0 ? size + 4294967296 : size });
 	}
+	return out;
+}
+
+/**
+ * Encode the chunk table body: the exact inverse of decodeChunkTable.
+ * @param {Array<{pointCount:number, byteCount:number}>} chunks
+ * @param {boolean} withPointCounts - variable-size chunks
+ * @returns {Uint8Array} u32 version 0, u32 chunk count, then the coded counts
+ */
+export function encodeChunkTable(chunks, withPointCounts) {
+	var enc = new ArithmeticEncoder();
+	var ic = new IntegerCompressor(32, 2);
+	var prevPoints = 0, prevBytes = 0;
+	for (var i = 0; i < chunks.length; i++) {
+		if (withPointCounts) {
+			ic.compress(enc, prevPoints, chunks[i].pointCount, 0);
+			prevPoints = chunks[i].pointCount;
+		}
+		ic.compress(enc, prevBytes, chunks[i].byteCount, 1);
+		prevBytes = chunks[i].byteCount;
+	}
+	var body = enc.done();
+	var out = new Uint8Array(8 + body.length);
+	var v = new DataView(out.buffer);
+	v.setUint32(0, 0, true);
+	v.setUint32(4, chunks.length, true);
+	out.set(body, 8);
 	return out;
 }
 
