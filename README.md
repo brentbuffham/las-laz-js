@@ -147,7 +147,8 @@ EPT and E57 are not read.
 
 The LAS reader, writer and big-file handling come from [Kirra](https://kirra-design.com),
 Brent Buffham's blast-design app, rewritten as a standalone library. The LAZ codec (0.2.0) is
-being ported from [laz-rs](https://github.com/laz-rs/laz-rs), used under its MIT licence.
+being ported from [laz-rs](https://github.com/laz-rs/laz-rs) (itself a port of LASzip), used under
+its Apache-2.0 licence; those files keep that licence and its notice.
 Formats are written to the ASPRS LAS 1.4 R15 specification; see `docs/LAS_FORMAT_NOTES.md`.
 
 ## Development

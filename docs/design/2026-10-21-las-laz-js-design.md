@@ -14,7 +14,9 @@ independent of Kirra, and adds a vanilla-JavaScript LAZ codec.
 Decisions (Brent, 2026-10-20/21):
 - Vanilla JavaScript, **zero dependencies**, ES modules, the **browser and Node 22+**.
 - "Clean and professional like ecw-js".
-- LAZ decoder **ported from laz-rs** (MIT / Apache-2.0 dual licence), so the library stays MIT.
+- LAZ decoder **ported from laz-rs**. Correction (2026-10-21): laz-rs is **Apache-2.0 only** (relicensed
+  from LGPL in 2022, following LASzip), not MIT / Apache dual. The ported files keep Apache-2.0 with
+  their notice; the rest of the library stays MIT (package licence `MIT AND Apache-2.0`). Brent to confirm.
 - Releases: **0.1.0** read + write LAS · **0.2.0** read LAZ · **0.3.0** write LAZ.
 - **Kirra switches to the library at 0.2.0** (one migration, proven by identical output).
 - Every library ships a demo; this one is a **Three.js** viewer (demo spec).
@@ -150,4 +152,4 @@ the waveform payload is not), COPC / EPT tiling, E57.
 - `ScratchBinaryFile` is a third copy (Kirra, ecw-js, here). Copy it now, say so in its header;
   a shared micro-package can come later.
 - The README carries a provenance section as ecw-js does: the LAS code from Kirra (Brent's own),
-  the LAZ codec ported from laz-rs under its MIT licence.
+  the LAZ codec ported from laz-rs under its Apache-2.0 licence.
