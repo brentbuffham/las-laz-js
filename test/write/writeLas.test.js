@@ -122,7 +122,7 @@ test("chooseScaleOffset: centre offset; 0.001 scale, coarsened past the int32 ra
 
 test("the streaming writer of 3 batches equals writeLas of all points, byte for byte", async function () {
 	var all = columns(12);
-	var opts = { version: "1.4", pointFormat: 7, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 }, crs: { epsg: 28350 }, date: new Date(Date.UTC(2026, 9, 21)) };
+	var opts = { version: "1.4", pointFormat: 7, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 }, crs: { wkt: "PROJCS[\"GDA94 / MGA zone 50\"]" }, date: new Date(Date.UTC(2026, 9, 21)) };
 	var oneShot = await writeLas(all, opts);
 	var buf = new Uint8Array(oneShot.length + 100);
 	var maxEnd = 0;
@@ -202,4 +202,17 @@ test("a sink that cannot write is INVALID_ARGUMENT; a file handle that stops wri
 	await assert.rejects(createLasWriter({}, STREAM_OPTS), { code: "INVALID_ARGUMENT" });
 	var stuck = { fd: 3, write: async function () { return { bytesWritten: 0 }; } };
 	await assert.rejects(createLasWriter(stuck, STREAM_OPTS), { code: "TRUNCATED" });
+});
+
+// LAS 1.4 R15: point formats 6-10 must carry their CRS as OGC WKT (GeoTIFF keys are for 0-5)
+test("formats 6-10 refuse an EPSG-only CRS, and write WKT without GeoKeys", async function () {
+	await assert.rejects(writeLas(columns(2), { version: "1.4", pointFormat: 6, crs: { epsg: 28350 } }), { code: "INVALID_ARGUMENT" });
+	var wkt = "PROJCS[\"GDA94 / MGA zone 50\"]";
+	var bytes = await writeLas(columns(2), { version: "1.4", pointFormat: 6, crs: { epsg: 28350, wkt: wkt } });
+	var las = await openLas(bytes);
+	assert.deepEqual(las.vlrs.map(function (v) { return v.recordId; }), [2112]);
+	assert.equal(las.crs.wkt, wkt);
+	assert.equal(las.header.globalEncoding & 16, 16);   // the WKT bit
+	var legacy = await openLas(await writeLas(columns(2), { version: "1.2", pointFormat: 3, crs: { epsg: 28350 } }));
+	assert.equal(legacy.crs.epsg, 28350);                // formats 0-5 keep GeoKeys
 });

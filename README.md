@@ -103,7 +103,8 @@ the usual LiDAR-viewer colours (ASPRS defines the codes, not colours).
 ```js
 import { writeLas, createLasWriter } from "las-laz-js";
 
-var bytes = await writeLas(pts, { version: "1.4", pointFormat: 7, crs: { epsg: 28350 } });
+var bytes = await writeLas(pts, { version: "1.2", pointFormat: 3, crs: { epsg: 28350 } });
+var v14 = await writeLas(pts, { version: "1.4", pointFormat: 7, crs: { wkt: las.crs.wkt } });
 
 var w = await createLasWriter(sink, { version: "1.2", pointFormat: 3, scale, offset });
 // sink: an OPFS writer from openScratchSyncWriter, a Node FileHandle, or any { write(bytes, position) }
@@ -113,7 +114,9 @@ await w.close();   // patches the header totals
 
 A version and point format that do not go together (format 6 in LAS 1.2) are refused, never
 silently changed. Scale and offset are chosen from the bounds when not given. `crs.epsg`
-writes a GeoKey record; `crs.wkt` a WKT record.
+writes a GeoKey record; `crs.wkt` a WKT record. Point formats 6–10 must carry WKT (LAS 1.4), so
+an EPSG code alone is refused for them — the library has no projection database to turn a code
+into WKT.
 
 ## In a Worker
 

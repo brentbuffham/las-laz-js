@@ -30,10 +30,16 @@ function setU64(v, pos, value) {
 
 function isGeographic(epsg) { return epsg >= 4000 && epsg < 5000; }
 
-function crsRecords(crs) {
+// LAS 1.4 R15: point formats 6-10 carry the CRS as OGC WKT only; GeoTIFF
+// keys belong to formats 0-5. The library does not turn an EPSG code into
+// WKT (that needs a projection database), so an EPSG-only CRS is refused there.
+function crsRecords(crs, fmt) {
 	var out = [];
 	if (!crs) return out;
-	if (crs.epsg) {
+	if (fmt >= 6 && !crs.wkt && crs.epsg) {
+		throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point format " + fmt + " must carry its coordinate system as WKT (LAS 1.4); pass crs.wkt — an EPSG code alone is GeoTIFF keys, which formats 6-10 do not allow");
+	}
+	if (crs.epsg && fmt < 6) {
 		var geo = isGeographic(crs.epsg);
 		var keys = [[1024, geo ? 2 : 1], [1025, 1], [geo ? 2048 : 3072, crs.epsg]];
 		var b = new Uint8Array(8 + keys.length * 8);
@@ -73,7 +79,7 @@ function freshTotals() {
 function headerBytes(s, so, totals) {
 	var o = s.opts;
 	var headerSize = HEADER_SIZE[s.version];
-	var vlrs = crsRecords(o.crs);
+	var vlrs = crsRecords(o.crs, s.fmt);
 	var vlrSize = vlrs.reduce(function (n, r) { return n + 54 + r.bytes.length; }, 0);
 	var out = new Uint8Array(headerSize + vlrSize);
 	var v = new DataView(out.buffer);
