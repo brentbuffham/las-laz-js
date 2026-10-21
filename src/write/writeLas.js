@@ -160,9 +160,28 @@ export async function writeLas(points, opts) {
 	return o.as === "blob" ? new Blob([out], { type: "application/octet-stream" }) : out;
 }
 
+// One positioned write for any sink: an OPFS scratch writer (writeAt),
+// a Node FileHandle (write(buffer, offset, length, position), which may
+// write short), or a plain { write(bytes, position) }
+function positionedWrite(sink) {
+	if (typeof sink.writeAt === "function") return async function (bytes, pos) { await sink.writeAt(bytes, pos); };
+	if (typeof sink.fd === "number" && typeof sink.write === "function") {
+		return async function (bytes, pos) {
+			for (var done = 0; done < bytes.length;) {
+				var r = await sink.write(bytes, done, bytes.length - done, pos + done);
+				if (!(r && r.bytesWritten > 0)) throw new LasError(ERROR_CODES.TRUNCATED, "the file handle stopped writing", pos + done);
+				done += r.bytesWritten;
+			}
+		};
+	}
+	if (typeof sink.write === "function") return async function (bytes, pos) { await sink.write(bytes, pos); };
+	throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "createLasWriter needs a sink with writeAt(bytes, position) or write(bytes, position)");
+}
+
 /**
  * Stream a LAS file to a sink. Header totals are patched on close().
- * @param {{write: function(Uint8Array, number): (void|Promise)}} sink
+ * @param {object} sink - an OPFS scratch writer (openScratchSyncWriter), a Node
+ *   FileHandle, or any { write(bytes, position) }
  * @param {object} opts - as writeLas; scale and offset are required (the bounds are not known yet)
  * @returns {Promise<{writePoints: function(object): Promise, close: function(): Promise<{count:number}>}>}
  */
@@ -173,17 +192,25 @@ export async function createLasWriter(sink, opts) {
 	var so = { scale: opts.scale, offset: opts.offset };
 	var len = POINT_FORMATS[s.fmt].size;
 	var totals = freshTotals();
+	var put = positionedWrite(sink);
 	var start = headerBytes(s, so, totals).length;
-	await sink.write(headerBytes(s, so, totals), 0);
+	var pending = [];
+	await put(headerBytes(s, so, totals), 0);
 	return {
 		writePoints: async function (points) {
 			var buf = new Uint8Array(points.count * len);
 			encodeRecords(points, s.fmt, len, so, opts.localOrigin, new DataView(buf.buffer), 0, totals);
-			await sink.write(buf, start + totals.count * len);
+			// Reserve this batch's place BEFORE awaiting, so calls made without
+			// waiting for each other never land on the same bytes
+			var pos = start + totals.count * len;
 			totals.count += points.count;
+			var job = put(buf, pos);
+			pending.push(job);
+			await job;
 		},
 		close: async function () {
-			await sink.write(headerBytes(s, so, totals), 0);
+			await Promise.all(pending);
+			await put(headerBytes(s, so, totals), 0);
 			return { count: totals.count };
 		}
 	};

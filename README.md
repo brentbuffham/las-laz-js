@@ -105,7 +105,8 @@ import { writeLas, createLasWriter } from "las-laz-js";
 
 var bytes = await writeLas(pts, { version: "1.4", pointFormat: 7, crs: { epsg: 28350 } });
 
-var w = await createLasWriter(sink, { version: "1.2", pointFormat: 3, scale, offset });  // sink: { write(bytes, position) }
+var w = await createLasWriter(sink, { version: "1.2", pointFormat: 3, scale, offset });
+// sink: an OPFS writer from openScratchSyncWriter, a Node FileHandle, or any { write(bytes, position) }
 await w.writePoints(batch1); await w.writePoints(batch2);
 await w.close();   // patches the header totals
 ```

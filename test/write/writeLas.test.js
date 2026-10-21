@@ -12,6 +12,12 @@ import { chooseScaleOffset } from "../../src/write/scaleOffset.js";
 import { openLas } from "../../src/LasReader.js";
 import { parseHeader } from "../../src/format/LasHeader.js";
 import { MemorySource } from "../../src/io/MemorySource.js";
+import { openScratchSyncWriter, openScratchReader } from "../../src/io/ScratchBinaryFile.js";
+import { createFakeRoot } from "../helpers/fakeOpfs.js";
+import { open } from "node:fs/promises";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 var ALL = ["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scannerChannel", "scanAngle", "userData", "pointSourceId", "gpsTime", "red", "green", "blue", "nir"];
 
@@ -141,4 +147,59 @@ test("as: \"blob\" returns a Blob", async function () {
 	var b = await writeLas(columns(2), { as: "blob" });
 	assert.ok(b instanceof Blob);
 	assert.equal((await openLas(b)).header.pointCount, 2);
+});
+
+function batches(all, cuts) {
+	var out = [];
+	for (var i = 0; i + 1 < cuts.length; i++) {
+		var c = { count: cuts[i + 1] - cuts[i] };
+		Object.keys(all).forEach(function (k) { if (k !== "count") c[k] = all[k].slice(cuts[i], cuts[i + 1]); });
+		out.push(c);
+	}
+	return out;
+}
+var STREAM_OPTS = { version: "1.4", pointFormat: 7, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 }, date: new Date(Date.UTC(2026, 9, 21)) };
+
+test("the streaming writer writes to an OPFS scratch writer (writeAt), byte for byte", async function () {
+	var all = columns(12);
+	var oneShot = await writeLas(all, STREAM_OPTS);
+	var root = createFakeRoot();
+	var sink = await openScratchSyncWriter("stream.las", { root: root });
+	var w = await createLasWriter(sink, STREAM_OPTS);
+	for (var b of batches(all, [0, 5, 12])) await w.writePoints(b);
+	await w.close();
+	sink.close();
+	var r = await openScratchReader("stream.las", { root: root });
+	var got = r.slice(0, r.length());
+	r.close();
+	assert.deepEqual(Array.from(got), Array.from(oneShot));
+});
+
+test("the streaming writer writes to a Node FileHandle, byte for byte", async function () {
+	var all = columns(12);
+	var oneShot = await writeLas(all, STREAM_OPTS);
+	var path = join(mkdtempSync(join(tmpdir(), "las-w-")), "stream.las");
+	var handle = await open(path, "w");
+	var w = await createLasWriter(handle, STREAM_OPTS);
+	for (var b of batches(all, [0, 5, 12])) await w.writePoints(b);
+	await w.close();
+	await handle.close();
+	assert.deepEqual(Array.from(readFileSync(path)), Array.from(oneShot));
+});
+
+test("writePoints calls made without waiting each get their own place in the file", async function () {
+	var all = columns(12);
+	var oneShot = await writeLas(all, STREAM_OPTS);
+	var buf = new Uint8Array(oneShot.length);
+	var sink = { write: function (bytes, position) { return new Promise(function (res) { setTimeout(function () { buf.set(bytes, position); res(); }, 5); }); } };
+	var w = await createLasWriter(sink, STREAM_OPTS);
+	await Promise.all(batches(all, [0, 4, 8, 12]).map(function (b) { return w.writePoints(b); }));
+	await w.close();
+	assert.deepEqual(Array.from(buf), Array.from(oneShot));
+});
+
+test("a sink that cannot write is INVALID_ARGUMENT; a file handle that stops writing is TRUNCATED", async function () {
+	await assert.rejects(createLasWriter({}, STREAM_OPTS), { code: "INVALID_ARGUMENT" });
+	var stuck = { fd: 3, write: async function () { return { bytesWritten: 0 }; } };
+	await assert.rejects(createLasWriter(stuck, STREAM_OPTS), { code: "TRUNCATED" });
 });
