@@ -211,3 +211,32 @@ test("filters alone (count unknown up front) grow the result past its first allo
 	assert.equal(pts.x[0], 1000);
 	assert.equal(pts.x[2499], 1000 + 9996);
 });
+
+test("a custom source that returns a short or long read is TRUNCATED, never fewer points", async function () {
+	var b = lasOf(100);
+	var short = { size: b.length, read: async function (a, e) { return b.subarray(a, e > 400 ? e - 3 : e); } };
+	var las = await openLas(short);
+	await assert.rejects(las.readPoints({ fields: ["x"] }), { code: "TRUNCATED" });
+	var long = { size: b.length, read: async function (a, e) { return b.subarray(a, Math.min(b.length, e + 5)); } };
+	await assert.rejects(openLas(long).then(function (l) { return l.readPoints({ fields: ["x"] }); }), { code: "TRUNCATED" });
+	var notBytes = { size: b.length, read: async function () { return "LASF"; } };
+	await assert.rejects(openLas(notBytes), { code: "INVALID_ARGUMENT" });   // not bytes at all
+});
+
+test("a custom source may return ArrayBuffers, offer readInto and close, and is checked the same way", async function () {
+	var b = lasOf(100);
+	var calls = { into: 0, closed: 0 };
+	var src = {
+		size: b.length,
+		read: async function (a, e) { return b.slice(a, e).buffer; },                              // ArrayBuffer
+		readInto: async function (a, e, t) { calls.into++; t.set(b.subarray(a, e)); return t.subarray(0, e - a); },
+		close: async function () { calls.closed++; }
+	};
+	var las = await openLas(src, { windowSize: 34 * 10 });
+	assert.equal((await las.readPoints({ fields: ["x"] })).x[99], 1099);
+	assert.ok(calls.into >= 10, "readInto used for every window");
+	await las.close();
+	assert.equal(calls.closed, 1);
+	var bad = Object.assign({}, src, { readInto: async function (a, e, t) { return t.subarray(0, e - a - 1); } });
+	await assert.rejects((await openLas(bad)).readPoints({ fields: ["x"] }), { code: "TRUNCATED" });
+});

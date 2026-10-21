@@ -32,12 +32,27 @@ function memorySource(bytes) {
 	} };
 }
 
+// A caller's own { size, read } source: every read must hand back exactly
+// the bytes asked for, or a short read would silently drop points
+function checkedSource(src) {
+	function check(got, a, b) {
+		if (got instanceof ArrayBuffer) got = new Uint8Array(got);
+		if (!(got instanceof Uint8Array)) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "source.read(" + a + ", " + b + ") must return a Uint8Array or ArrayBuffer");
+		if (got.length !== b - a) throw new LasError(ERROR_CODES.TRUNCATED, "source.read(" + a + ", " + b + ") returned " + got.length + " bytes, not " + (b - a), a + Math.min(got.length, b - a));
+		return got;
+	}
+	var out = { size: src.size, read: async function (a, b) { return check(await src.read(a, b), a, b); } };
+	if (typeof src.readInto === "function") out.readInto = async function (a, b, t) { return check(await src.readInto(a, b, t), a, b); };
+	if (typeof src.close === "function") out.close = function () { return src.close(); };
+	return out;
+}
+
 async function toSource(source) {
 	if (source instanceof Uint8Array) return memorySource(source);
 	if (source instanceof ArrayBuffer) return memorySource(new Uint8Array(source));
 	if (typeof source === "string") return NodeFileSource.open(source);
 	if (source && typeof source.slice === "function" && typeof source.size === "number" && typeof source.read !== "function") return new BlobSource(source);
-	if (source && typeof source.size === "number" && typeof source.read === "function") return source;
+	if (source && typeof source.size === "number" && typeof source.read === "function") return checkedSource(source);
 	throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "openLas needs a File / Blob, ArrayBuffer, Uint8Array, file path or { size, read } source");
 }
 

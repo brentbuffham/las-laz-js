@@ -60,5 +60,6 @@ test("dedupe handles 2 million points in 2D and 3D in a few seconds", { timeout:
 	assert.equal(dedupe(c, 0.01).count, n);
 	assert.equal(dedupe(c, 0.01, { z: true }).count, n);
 	var ms = performance.now() - t;
-	assert.ok(ms < 10000, "2D + 3D took " + Math.round(ms) + " ms");   // string-keyed grid: ~27,000 ms
+	// string-keyed grid: ~27,000 ms. Not timed under coverage, which instruments src about 3x slower
+	if (!process.env.NODE_V8_COVERAGE) assert.ok(ms < 10000, "2D + 3D took " + Math.round(ms) + " ms");
 });
