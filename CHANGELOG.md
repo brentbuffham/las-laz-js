@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.1 (2026-10-21)
+
+Worker fixes.
+
+- Node: a script that stopped part way through a parallel LAZ read (one `chunks()` window, then
+  done) never exited, because an idle pool kept Node running. Workers now hold Node only while
+  they have work.
+- Node: `node --input-type=module -e` scripts can decode in parallel. Workers used to inherit
+  `--input-type` and fail to start.
+- A worker that cannot start (blocked or failing script) now means one-thread decoding, as
+  documented, rather than a failed read. The pool waits for every worker to report ready.
+
 ## 0.3.0 (2026-10-21)
 
 Faster LAZ.

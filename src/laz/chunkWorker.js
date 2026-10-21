@@ -5,7 +5,8 @@
 // Runs as a browser module Worker or a Node worker_threads Worker.
 // In:  { id, vlr, recordLength, packed: ArrayBuffer, chunks: [{ s, e, count }], base }
 //      (s / e index into packed; base is packed's file offset)
-// Out: { id, records: ArrayBuffer } or { id, error: { code, message, offset } }
+// Out: { ready: true } once listening, then per task
+//      { id, records: ArrayBuffer } or { id, error: { code, message, offset } }
 //
 // Uses the chunk decoder translated from laz-rs (https://github.com/laz-rs/laz-rs),
 // itself a port of LASzip by rapidlasso. (c) 2007-2015 martin isenburg,
@@ -28,6 +29,7 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function") {
 	port = { post: function (m, t) { wt.parentPort.postMessage(m, t); } };
 	wt.parentPort.on("message", handle);
 }
+port.post({ ready: true });                    // the pool waits for this before sending work
 
 var cached = { key: null, decode: null };
 
