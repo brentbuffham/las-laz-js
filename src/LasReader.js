@@ -17,7 +17,7 @@ import { NodeFileSource } from "./io/NodeFileSource.js";
 import { parseHeader } from "./format/LasHeader.js";
 import { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 import { parseCrs } from "./format/LasCrs.js";
-import { decodeRecords, resolveFields } from "./read/decodeRecords.js";
+import { decodeRecords, resolveFields, columnType } from "./read/decodeRecords.js";
 import { windows } from "./read/windows.js";
 import { makeKeep, countKept } from "./filter/filters.js";
 import { dedupe } from "./filter/dedupe.js";
@@ -119,6 +119,12 @@ LasReader.prototype._check = function () {
 LasReader.prototype.chunks = async function* (opts) {
 	opts = opts || {};
 	if (opts.dedupe) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "dedupe needs every point at once: use readPoints, not chunks");
+	yield* this._scan(opts, null);
+};
+
+// The window loop behind chunks and readPoints. into(win, n) -> { cols, at }
+// makes decodeRecords write straight into readPoints' result columns.
+LasReader.prototype._scan = async function* (opts, into) {
 	this._check();
 	var h = this.header;
 	var keep = makeKeep(opts, h);
@@ -130,12 +136,14 @@ LasReader.prototype.chunks = async function* (opts) {
 		var passing = keep ? await this._countPassing(list, keep, opts.signal) : h.pointCount;
 		if (passing > opts.maxPoints) thin = { total: passing, target: opts.maxPoints, acc: 0 };
 	}
-	var kept = 0;
+	var kept = 0, buf = null;
 	for (var w = 0; w < list.length; w++) {
 		if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
 		var win = list[w];
-		var bytes = await this._src.read(win.start, win.end);
-		var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32 });
+		// One window buffer for the whole scan when the source can fill it (no bytes outlive a window)
+		if (typeof this._src.readInto === "function" && !buf) buf = new Uint8Array(list[0].end - list[0].start);
+		var bytes = buf ? await this._src.readInto(win.start, win.end, buf) : await this._src.read(win.start, win.end);
+		var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, into: into ? into(win) : null });
 		kept += cols.count;
 		if (typeof opts.onProgress === "function") opts.onProgress((w + 1) / list.length, "read " + kept + " points");
 		yield cols;
@@ -163,22 +171,25 @@ LasReader.prototype.readPoints = async function (opts) {
 	var chunkOpts = Object.assign({}, opts);
 	delete chunkOpts.dedupe;
 	var fields = resolveFields(h, opts.fields);
-	var acc = null, n = 0;
-	for await (var c of this.chunks(chunkOpts)) {
-		if (!acc) {
-			acc = {};
-			var guess = Math.max(c.count, 1024);
-			fields.forEach(function (f) { acc[f] = new c[f].constructor(guess); });
-		}
-		if (n + c.count > acc[fields[0]].length) {
-			var size = Math.max(n + c.count, acc[fields[0]].length * 2);
+	// Allocate once when the count is known (no filters: every point, or
+	// maxPoints of them; filters + maxPoints: at most maxPoints), so the
+	// peak is the result itself. Filters alone: grow by doubling.
+	var filtered = !!makeKeep(opts, h);
+	var cap = !filtered ? (opts.maxPoints > 0 ? Math.min(opts.maxPoints, h.pointCount) : h.pointCount)
+		: (opts.maxPoints > 0 ? Math.min(opts.maxPoints, h.pointCount) : 0);
+	var acc = {}, n = 0;
+	fields.forEach(function (f) { acc[f] = new (columnType(f, opts))(cap || 1024); });
+	function into(win) {
+		// A known cap is never exceeded, so it never grows; filters alone grow by doubling
+		if (!cap && n + win.count > acc[fields[0]].length) {
+			var size = Math.max(n + win.count, acc[fields[0]].length * 2);
 			fields.forEach(function (f) { var g = new acc[f].constructor(size); g.set(acc[f].subarray(0, n)); acc[f] = g; });
 		}
-		for (var i = 0; i < fields.length; i++) acc[fields[i]].set(c[fields[i]], n);
-		n += c.count;
+		return { cols: acc, at: n };
 	}
+	for await (var c of this._scan(chunkOpts, into)) n += c.count;
 	var out = { count: n };
-	fields.forEach(function (f) { out[f] = acc ? acc[f].slice(0, n) : new Float64Array(0); });
+	fields.forEach(function (f) { out[f] = acc[f].length === n ? acc[f] : acc[f].slice(0, n); });
 	if (opts.dedupe) out = dedupe(out, opts.dedupe, { z: !!opts.dedupeZ });
 	out.bounds = boundsOf(out, opts.localOrigin);
 	out.stats = statsOf(out);

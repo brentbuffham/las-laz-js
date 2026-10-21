@@ -201,3 +201,13 @@ test("an EVLR running past the end of the file is BAD_VLR; a missing EVLR index 
 	var las = await openLas(b);
 	await assert.rejects(las.readEvlrBytes(1), { code: "INVALID_ARGUMENT" });
 });
+
+test("filters alone (count unknown up front) grow the result past its first allocation", async function () {
+	// class 2 on every 4th of 10,000: 2,500 pass, more than the 1,024 first allocated
+	var las = await openLas(lasOf(10000), { windowSize: 34 * 300 });
+	var pts = await las.readPoints({ fields: ["x"], classes: [2] });
+	assert.equal(pts.count, 2500);
+	assert.equal(pts.x.length, 2500);
+	assert.equal(pts.x[0], 1000);
+	assert.equal(pts.x[2499], 1000 + 9996);
+});

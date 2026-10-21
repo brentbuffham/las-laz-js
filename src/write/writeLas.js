@@ -150,13 +150,13 @@ export async function writeLas(points, opts) {
 	if (o.scale && !o.offset) so = { scale: o.scale, offset: chooseScaleOffset(boundsOfPoints(points, o.localOrigin)).offset };
 	var len = POINT_FORMATS[s.fmt].size;
 	var totals = freshTotals();
-	var records = new Uint8Array(points.count * len);
-	encodeRecords(points, s.fmt, len, so, o.localOrigin, new DataView(records.buffer), 0, totals);
+	// One buffer: records are encoded in place after the header, whose
+	// size does not depend on the totals; the header is filled in last
+	var headLength = headerBytes(s, so, totals).length;
+	var out = new Uint8Array(headLength + points.count * len);
+	encodeRecords(points, s.fmt, len, so, o.localOrigin, new DataView(out.buffer), headLength, totals);
 	totals.count = points.count;
-	var head = headerBytes(s, so, totals);
-	var out = new Uint8Array(head.length + records.length);
-	out.set(head, 0);
-	out.set(records, head.length);
+	out.set(headerBytes(s, so, totals), 0);
 	return o.as === "blob" ? new Blob([out], { type: "application/octet-stream" }) : out;
 }
 

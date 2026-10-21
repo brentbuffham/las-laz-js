@@ -72,7 +72,9 @@ export function resolveFields(header, fields) {
  * Decode a window of whole point records.
  * @param {Uint8Array} bytes - whole records, the first at bytes[0].
  * @param {object} header - from parseHeader.
- * @param {object} [opts] - { fields, keep, thin, localOrigin, float32 }
+ * @param {object} [opts] - { fields, keep, thin, localOrigin, float32, into }
+ *   into: { cols, at } decodes straight into existing columns from index at
+ *   (each sized for every record that can be kept) and returns only { count }
  * @returns {object} PointColumns: { count, <field>: TypedArray, ... }
  */
 export function decodeRecords(bytes, header, opts) {
@@ -90,12 +92,9 @@ export function decodeRecords(bytes, header, opts) {
 	var oz = origin && isFinite(origin.z) ? origin.z : 0;
 	var f32 = !!(opts.float32 && origin);
 
-	var cols = {};
-	fields.forEach(function (name) {
-		var Type = FIELD_TYPES[name];
-		if (f32 && (name === "x" || name === "y" || name === "z")) Type = Float32Array;
-		cols[name] = new Type(n);
-	});
+	var into = opts.into || null;
+	var cols = into ? into.cols : {};
+	if (!into) fields.forEach(function (name) { cols[name] = new (columnType(name, opts))(n); });
 	var F = fmt.fields;
 	var sx = header.scale.x, sy = header.scale.y, sz = header.scale.z;
 	var tx = header.offset.x - ox, ty = header.offset.y - oy, tz = header.offset.z - oz;
@@ -103,7 +102,7 @@ export function decodeRecords(bytes, header, opts) {
 	var want = {};
 	fields.forEach(function (name) { want[name] = true; });
 
-	var k = 0;
+	var k = into ? into.at : 0;
 	for (var i = 0; i < n; i++) {
 		var at = i * len;
 		if (keep && !keep(view, at)) continue;
@@ -146,7 +145,20 @@ export function decodeRecords(bytes, header, opts) {
 		if (want.nir) cols.nir[k] = view.getUint16(at + F.nir.offset, LE);
 		k++;
 	}
+	if (into) return { count: k - into.at };
 	if (k < n) fields.forEach(function (name) { cols[name] = cols[name].slice(0, k); });
 	cols.count = k;
 	return cols;
+}
+
+/**
+ * The typed-array type a field is decoded into (x / y / z are Float32
+ * when float32 is asked for with a local origin).
+ * @param {string} name
+ * @param {{float32?:boolean, localOrigin?:object}} [opts]
+ * @returns {Function}
+ */
+export function columnType(name, opts) {
+	var f32 = !!(opts && opts.float32 && opts.localOrigin);
+	return f32 && (name === "x" || name === "y" || name === "z") ? Float32Array : FIELD_TYPES[name];
 }

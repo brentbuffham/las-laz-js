@@ -38,3 +38,19 @@ test("an empty range reads nothing", async function () {
 	assert.equal((await src.read(4, 4)).length, 0);
 	await src.close();
 });
+
+test("readInto fills the front of a reused buffer, with the same range checks", async function () {
+	var src = await NodeFileSource.open(tempFile());
+	var buf = new Uint8Array(8).fill(99);
+	var got = await src.readInto(2, 5, buf);
+	assert.deepEqual(Array.from(got), [2, 3, 4]);
+	assert.equal(got.buffer, buf.buffer);                // no new allocation
+	assert.deepEqual(Array.from(buf.subarray(3)), [99, 99, 99, 99, 99]);
+	await assert.rejects(src.readInto(8, 12, buf), { code: "TRUNCATED" });
+	await assert.rejects(src.readInto(5, 2, buf), { code: "INVALID_ARGUMENT" });
+	await src.close();
+});
+
+test("open without a path is INVALID_ARGUMENT", async function () {
+	await assert.rejects(NodeFileSource.open(""), { code: "INVALID_ARGUMENT" });
+});

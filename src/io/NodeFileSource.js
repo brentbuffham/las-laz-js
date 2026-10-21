@@ -53,7 +53,25 @@ NodeFileSource.prototype.read = async function (start, end) {
 	if (end > this.size) {
 		throw new LasError(ERROR_CODES.TRUNCATED, "read past end of " + this.size + "-byte file", end);
 	}
-	var out = new Uint8Array(end - start);
+	return this.readInto(start, end, new Uint8Array(end - start));
+};
+
+/**
+ * Read bytes [start, end) into the front of target (reused by the reader
+ * from window to window, so a big read leaves no per-window garbage).
+ * @param {number} start
+ * @param {number} end
+ * @param {Uint8Array} target - at least end - start bytes
+ * @returns {Promise<Uint8Array>} the filled view of target
+ */
+NodeFileSource.prototype.readInto = async function (start, end, target) {
+	if (start < 0 || end < start) {
+		throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "bad read range " + start + ".." + end);
+	}
+	if (end > this.size) {
+		throw new LasError(ERROR_CODES.TRUNCATED, "read past end of " + this.size + "-byte file", end);
+	}
+	var out = target.subarray(0, end - start);
 	var done = 0;
 	while (done < out.length) {
 		var r = await this._handle.read(out, done, out.length - done, start + done);
