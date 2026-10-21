@@ -10,7 +10,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseLazVlr, findLazVlr, COMPRESSOR } from "../../src/laz/LazVlr.js";
 import { readChunks, decodeChunkTable } from "../../src/laz/chunkTable.js";
-import { ArithmeticEncoder, IntegerCompressor } from "../helpers/lazEncoder.js";
+import { ArithmeticEncoder } from "../../src/laz/ArithmeticEncoder.js";
+import { IntegerCompressor } from "../../src/laz/IntegerCompressor.js";
 
 function vlrBytes(compressor, chunkSize, items) {
 	var b = new Uint8Array(34 + items.length * 6), v = new DataView(b.buffer);

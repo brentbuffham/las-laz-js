@@ -1,7 +1,7 @@
 // test/laz/arithmetic.test.js
 //==========================================================
-// The LASzip arithmetic decoder, models and integer decompressor,
-// by round trip through the test-only encoder (helpers/lazEncoder.js):
+// The LASzip arithmetic coder, models and integer compressor/decompressor,
+// by round trip (src/laz/ArithmeticEncoder.js, IntegerCompressor.js):
 // whatever the encoder wrote, the decoder must read back exactly,
 // across small and large models, raw bits, and integer corrections
 // that wrap. Whole-file correctness against an independent encoder
@@ -13,7 +13,8 @@ import assert from "node:assert/strict";
 import { ArithmeticDecoder } from "../../src/laz/ArithmeticDecoder.js";
 import { ArithmeticModel, ArithmeticBitModel } from "../../src/laz/models.js";
 import { IntegerDecompressor } from "../../src/laz/IntegerDecompressor.js";
-import { ArithmeticEncoder, IntegerCompressor } from "../helpers/lazEncoder.js";
+import { ArithmeticEncoder } from "../../src/laz/ArithmeticEncoder.js";
+import { IntegerCompressor } from "../../src/laz/IntegerCompressor.js";
 
 function rng(seed) { return function () { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; }; }
 
@@ -97,4 +98,17 @@ test("a stream cut short is TRUNCATED, never an endless decode", function () {
 	var dec = new ArithmeticDecoder(bytes, 0, bytes.length - 40), dm = new ArithmeticModel(256);
 	dec.readInitBytes();
 	assert.throws(function () { for (var j = 0; j < 1000; j++) dec.decodeSymbol(dm); }, { code: "TRUNCATED" });
+});
+
+test("the encoder's output buffer grows past its first allocation", function () {
+	var r = rng(77), n = 2000000, syms = new Uint8Array(n);
+	var enc = new ArithmeticEncoder(), em = new ArithmeticModel(256);
+	for (var i = 0; i < n; i++) { syms[i] = Math.floor(r() * 256); enc.encodeSymbol(em, syms[i]); }
+	var bytes = enc.done();
+	assert.ok(bytes.length > 65536, "the stream outgrew the 64 KiB first allocation");
+	var dec = new ArithmeticDecoder(bytes), dm = new ArithmeticModel(256);
+	dec.readInitBytes();
+	for (var j = 0; j < n; j++) {
+		if (dec.decodeSymbol(dm) !== syms[j]) assert.fail("symbol " + j + " differs");
+	}
 });
