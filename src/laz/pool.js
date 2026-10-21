@@ -40,15 +40,15 @@ export async function defaultThreads() {
 
 // One worker, browser or Node, behind the same small interface
 async function spawn(onMessage, onFail) {
-	var url = new URL("./chunkWorker.js", import.meta.url);
 	if (typeof Worker === "function") {
-		var w = new Worker(url, { type: "module" });
+		// written inline so bundlers (Vite, webpack 5) see the worker and emit it
+		var w = new Worker(new URL("./chunkWorker.js", import.meta.url), { type: "module" });
 		w.onmessage = function (e) { onMessage(e.data); };
 		w.onerror = function (e) { if (e && e.preventDefault) e.preventDefault(); onFail(new Error(e && e.message ? e.message : "LAZ worker failed")); };
 		return { post: function (m, t) { w.postMessage(m, t); }, close: function () { w.terminate(); } };
 	}
 	var wt = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_WORKER_THREADS);
-	var nw = new wt.Worker(url);
+	var nw = new wt.Worker(new URL("./chunkWorker.js", import.meta.url));
 	nw.unref();                                  // a forgotten pool never keeps Node running
 	nw.on("message", onMessage);
 	nw.on("error", onFail);

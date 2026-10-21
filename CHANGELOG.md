@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0 (2026-10-21)
+
+Faster LAZ.
+
+- LAZ chunks decode in parallel on a pool of workers (browser Workers, Node worker_threads; one
+  fewer than the cores, at most 16), with the next window decoding while the current one becomes
+  columns. A 10-million-point LAZ reads in about 0.6 s (3.9 s on one thread); a 1.2 GB,
+  160-million-point LAZ in about 12 s (102 s in 0.2.0). Output is identical.
+- `openLas(src, { threads })`: automatic by default (used from 4 chunks up); `threads: 1` decodes
+  on the calling thread. Falls back to one thread when workers cannot start.
+- The decoder's hot loop does less: about 30% faster on one thread, same results.
+- Demo: decodes in the background with a progress bar, then shows the cloud once; colour, ramp
+  and range recolour the points already read instead of reading the file again.
+
 ## 0.2.0 (2026-10-21)
 
 Reads LAZ.

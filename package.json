@@ -1,6 +1,6 @@
 {
 	"name": "las-laz-js",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Zero-dependency JavaScript reader and writer for ASPRS LAS point clouds, and reader for LAZ (LASzip), for the browser and Node, built for files larger than memory.",
 	"type": "module",
 	"exports": {

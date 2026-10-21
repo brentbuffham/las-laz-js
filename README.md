@@ -30,8 +30,9 @@ Node 22 or newer, or any current browser. No dependencies.
 
 Try it in the browser: **https://brentbuffham.github.io/las-laz-js/**
 
-Drop a LAS or LAZ file onto the page. It is read locally (never uploaded), in the library's
-Worker, and streamed into a Three.js viewer. The side panel shows the header, VLRs, coordinate
+Drop a LAS or LAZ file onto the page. It is read locally (never uploaded), decoded in the
+library's Worker (LAZ on every core) behind a progress bar, then shown once in a Three.js viewer;
+colour changes recolour the points already read, without reading the file again. The side panel shows the header, VLRs, coordinate
 system and LAZ compression; reads with class, return, bounds, thinning and dedupe filters;
 colours by RGB, intensity, elevation or class; lists point statistics; and saves the points back
 out as LAS. To run it locally: `npm run demo`, then open http://localhost:8080/.
@@ -158,6 +159,11 @@ worker.postMessage({ id: 2, type: "chunks", payload: { fields: ["x", "y", "z"], 
 
 The protocol is documented in `src/workers/workerProtocol.js` and can be driven directly with
 `createWorkerHandler(post)`.
+
+**Bundlers.** The worker entry and the LAZ decode workers are found through
+`new Worker(new URL(..., import.meta.url))`, which Vite and webpack 5 follow. With Vite, keep the
+package out of dependency pre-bundling (`optimizeDeps: { exclude: ["las-laz-js"] }`), so the
+worker files stay next to the module that loads them.
 
 ## Errors
 
