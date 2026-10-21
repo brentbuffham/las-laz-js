@@ -11,6 +11,8 @@
 		"src",
 		"README.md",
 		"LICENSE",
+		"LICENSE-APACHE",
+		"NOTICE",
 		"CHANGELOG.md"
 	],
 	"sideEffects": false,
@@ -36,7 +38,7 @@
 		"threejs"
 	],
 	"author": "Brent Buffham (https://kirra-design.com)",
-	"license": "MIT",
+	"license": "MIT AND Apache-2.0",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/brentbuffham/las-laz-js.git"
