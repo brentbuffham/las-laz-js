@@ -15,12 +15,12 @@ import { makePolygonTest } from "../ops/polygon.js";
 
 var LE = true;
 
-function limit(v, open) { return v === undefined ? open : v; }
+function limit(v, open) { return v === undefined || v === null ? open : v; }
 
 /**
  * Build a keep(view, recordOffset) test for decodeRecords.
- * @param {object} [filter] - { classes?: number[], returns?: number[], bounds?: {minX,maxX,minY,maxY,minZ,maxZ} (an omitted limit is open),
- *   polygon?: number[] [x0, y0, x1, y1, ...] with boundary ("touching" | "inside") and tolerance as selectPolygon, in the file's world coordinates }
+ * @param {object} [filter] - { classes?: number[], returns?: number[], bounds?: {minX,maxX,minY,maxY,minZ,maxZ} (an omitted or null limit is open),
+ *   polygon?: number[] (null or omitted: no crop) [x0, y0, x1, y1, ...] with boundary ("touching" | "inside") and tolerance as selectPolygon, in the file's world coordinates }
  * @param {object} header - from parseHeader.
  * @returns {function(DataView, number): boolean|null} null when there is nothing to filter
  */
@@ -58,14 +58,16 @@ export function makeKeep(filter, header) {
 			return z >= minZ && z <= maxZ;
 		});
 	}
-	if (filter.polygon !== undefined) {
+	if (filter.polygon !== undefined && filter.polygon !== null) {
 		// the file's world x, y of the raw record, as the bounds test computes them; boundary and tolerance as selectPolygon
 		var poly = makePolygonTest(filter.polygon, { boundary: filter.boundary, tolerance: filter.tolerance });
-		var inPoly = poly.test;
+		var inPoly = poly.test, pminX = poly.minX, pmaxX = poly.maxX, pminY = poly.minY, pmaxY = poly.maxY;
 		tests.push(function (v, at) {
 			var x = v.getInt32(at, LE) * sc.x + of.x;
+			if (x < pminX || x > pmaxX) return false;   // y is not decoded for a point outside the box in x
 			var y = v.getInt32(at + 4, LE) * sc.y + of.y;
-			return inPoly(x, y);   // rejects outside its box before any edge work
+			if (y < pminY || y > pmaxY) return false;
+			return inPoly(x, y);
 		});
 	}
 	if (!tests.length) return null;

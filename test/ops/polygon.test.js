@@ -116,10 +116,12 @@ test("a diagonal edge: a point exactly on it is on the boundary", function () {
 });
 test("a diagonal edge with tolerance: distance is to the segment, not the line", function () {
 	var tri = [0, 0, 4, 0, 0, 4];
-	// (1, 3.1) is 0.1 / sqrt(2) = 0.0707 from the hypotenuse; (5, -1) is on its line but 1.414 from the segment end (4, 0)
+	// (1, 3.1) is 0.1 / sqrt(2) = 0.0707 from the hypotenuse; (5, -1) is ON the hypotenuse's line (distance 0) but 1.414 from
+	// the segment's end (4, 0): at tolerance 1.2 the grown box admits it, so only a segment distance rejects it
 	var c = { count: 2, x: Float64Array.of(1, 5), y: Float64Array.of(3.1, -1) };
 	assert.deepEqual(list(selectPolygon(c, tri, { tolerance: 0.08 })), [0]);
 	assert.deepEqual(list(selectPolygon(c, tri, { tolerance: 0.07 })), []);
+	assert.deepEqual(list(selectPolygon(c, tri, { tolerance: 1.2 })), [0]);
 	assert.deepEqual(list(selectPolygon(c, tri, { tolerance: 1.5 })), [0, 1]);
 });
 test("a zero-length edge (a repeated vertex) is a point", function () {
@@ -246,8 +248,11 @@ test("crop on read with maxPoints keeps exactly maxPoints of the inside points",
 });
 test("a bad polygon on read throws before any point is read", async function () {
 	var las = await openLas(fixtureBytes("f0"), { threads: 1 });
-	await assert.rejects(las.readPoints({ polygon: [0, 0, 1, 0] }), { code: "INVALID_ARGUMENT", message: /polygon/ });
-	await assert.rejects(las.readPoints({ polygon: U, boundary: "on" }), { code: "INVALID_ARGUMENT", message: /boundary/ });
-	await assert.rejects(las.readPoints({ polygon: U, tolerance: -1 }), { code: "INVALID_ARGUMENT", message: /tolerance/ });
-	await assert.rejects(async function () { for await (var c of las.chunks({ polygon: [0, 0, 1, NaN, 1, 1] })) { void c; } }, { code: "INVALID_ARGUMENT" });
+	var progress = 0;
+	function onProgress() { progress++; }
+	await assert.rejects(las.readPoints({ polygon: [0, 0, 1, 0], onProgress: onProgress }), { code: "INVALID_ARGUMENT", message: /polygon/ });
+	await assert.rejects(las.readPoints({ polygon: U, boundary: "on", onProgress: onProgress }), { code: "INVALID_ARGUMENT", message: /boundary/ });
+	await assert.rejects(las.readPoints({ polygon: U, tolerance: -1, onProgress: onProgress }), { code: "INVALID_ARGUMENT", message: /tolerance/ });
+	await assert.rejects(async function () { for await (var c of las.chunks({ polygon: [0, 0, 1, NaN, 1, 1], onProgress: onProgress })) { void c; } }, { code: "INVALID_ARGUMENT" });
+	assert.equal(progress, 0);   // no window was read
 });

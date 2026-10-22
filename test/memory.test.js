@@ -61,7 +61,10 @@ test("a cropped read peaks below a full read", { timeout: 180000 }, function () 
 		// at the polygon's far side may add one): the columns returned are about a tenth of the full read's
 		assert.equal(full.outBytes, N * 24);
 		assert.ok(cropped.outBytes > full.outBytes / 11 && cropped.outBytes < full.outBytes / 9, "cropped columns are " + cropped.outBytes + " bytes of " + full.outBytes);
-		assert.ok(cropped.peakDelta < full.peakDelta / 2, "cropped peak rose " + Math.round(cropped.peakDelta / 1048576) + " MB, a full read's " + Math.round(full.peakDelta / 1048576) + " MB");
+		// Measured 0.44 of the full peak (34 MB against 77 MB for 7 MB of columns): a fixed overhead (window
+		// buffer, decoder, the columns' doubling growth) dominates the cropped peak and does not shrink with the
+		// crop, so 0.75 leaves room for machine variation while still failing a crop that decodes everything.
+		assert.ok(cropped.peakDelta < 0.75 * full.peakDelta, "cropped peak rose " + Math.round(cropped.peakDelta / 1048576) + " MB, a full read's " + Math.round(full.peakDelta / 1048576) + " MB");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}

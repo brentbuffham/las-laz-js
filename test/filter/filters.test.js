@@ -1,6 +1,6 @@
 // test/filter/filters.test.js
 //==========================================================
-// Filters: classes, returns, bounds (on raw records), countKept
+// Filters: classes, returns, bounds, polygon (all on raw records), countKept
 // (for maxPoints over filtered points) and dedupe (Kirra's XY grid rule).
 // Every count is worked by hand from the points below.
 //==========================================================
@@ -53,6 +53,10 @@ test("bounds with only some limits: omitted means open", function () {
 	assert.equal(count(0, "1.2", { bounds: { maxZ: 1 } }), 3);          // z = 0, 0.5, 1
 	assert.equal(count(0, "1.2", { bounds: { minX: 3.5, maxX: 7.5 } }), 4);   // x = 4..7, no Y or Z limit
 	assert.equal(count(0, "1.2", { bounds: {} }), 12);
+	// null is open too (it used to mean 0 in a comparison)
+	assert.equal(count(0, "1.2", { bounds: { minZ: null } }), 12);
+	assert.equal(count(0, "1.2", { bounds: { minX: null, maxX: 2, minZ: null, maxZ: null } }), 3);
+	assert.equal(count(0, "1.2", { bounds: { minY: null, maxY: null, minZ: 3 } }), 6);
 });
 
 test("polygon keeps the points inside it (world X, Y of the raw record); boundary and tolerance as selectPolygon", function () {
@@ -79,6 +83,9 @@ test("a polygon counts as a filter (makeKeep is not null); a bad one throws", fu
 	var h = parseHeader(new MemorySource(buildLas({ version: "1.2", pointFormat: 0, points: twelve() })));
 	assert.equal(typeof makeKeep({ polygon: [0, 0, 1, 0, 0, 1] }, h), "function");
 	assert.throws(function () { makeKeep({ polygon: [0, 0, 1, 0] }, h); }, { code: "INVALID_ARGUMENT", message: /polygon/ });
+	assert.equal(makeKeep({ polygon: null }, h), null);                          // null is no polygon, like omitting it
+	assert.equal(count(0, "1.2", { polygon: null }), 12);
+	assert.equal(count(0, "1.2", { polygon: null, classes: [2] }), count(0, "1.2", { classes: [2] }));
 	assert.equal(makeKeep({ boundary: "inside", tolerance: 1 }, h), null);       // no polygon: nothing to filter
 });
 

@@ -179,7 +179,7 @@ LasReader.prototype._plan = async function () {
 
 /**
  * Iterate the selected points window by window.
- * @param {object} [opts] - fields, classes, returns, bounds, maxPoints, localOrigin, float32, onProgress, signal
+ * @param {object} [opts] - fields, classes, returns, bounds, polygon (crop; with boundary "touching" | "inside" and tolerance), maxPoints, localOrigin, float32, onProgress, signal
  * @returns {AsyncGenerator<object>} PointColumns per window
  */
 LasReader.prototype.chunks = async function* (opts) {
