@@ -26,6 +26,7 @@ export { makeTransform, transformPoints } from "./ops/transform.js";
 export { interleavePositions } from "./ops/interleave.js";
 export { selectSparse } from "./ops/sparse.js";
 export { selectOutliers } from "./ops/outliers.js";
+export { pointNormals, estimateNoise } from "./ops/normals.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
