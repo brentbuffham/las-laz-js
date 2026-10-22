@@ -110,7 +110,7 @@ test("set operations: empty sides, tails, plain Arrays", function () {
 	assert.ok(unionSelections([1], [2]) instanceof Uint32Array);
 });
 test("the public names are exported from the package entry", function () {
-	["selectBox", "selectClasses", "selectReturns", "thinSelection", "unionSelections", "intersectSelections", "subtractSelections", "thinStep"].forEach(function (n) {
+	["selectBox", "selectClasses", "selectReturns", "thinSelection", "unionSelections", "intersectSelections", "subtractSelections"].forEach(function (n) {
 		assert.equal(typeof lib[n], "function", n);
 	});
 });

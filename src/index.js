@@ -17,7 +17,7 @@ export { POINT_FORMATS, formatHasRgb } from "./format/PointFormats.js";
 export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords.js";
 export { makeKeep, countKept } from "./filter/filters.js";
 export { dedupe } from "./filter/dedupe.js";
-export { selectBox, selectClasses, selectReturns, thinSelection, thinStep, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
+export { selectBox, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
