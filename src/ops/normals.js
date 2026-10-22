@@ -12,7 +12,8 @@
 // shared with denoisePoints, which weights it.
 //==========================================================
 
-import { workingIndex, knnSearch, checkK, checkMaxDistance, progress } from "../index/knn.js";
+import { checkK, checkMaxDistance, progress } from "../index/knn.js";
+import { buildKdTree, kdNearest } from "../index/kdtree.js";
 import { thinSelection } from "./select.js";
 
 var NOISE_SAMPLE = 100000;
@@ -127,7 +128,7 @@ function options(opts, fn) {
 // Fit point p's plane into fit; false with fewer than 3 neighbours or no plane
 function fitAt(index, p, o, P, D, fit) {
 	var co = index.coords, X = co.x, Y = co.y, Z = co.z, st = co.stride, i = p * st;
-	var m = knnSearch(index, X[i], Y[i], Z[i], o.k, o.maxD2, p, P, D);
+	var m = kdNearest(index, X[i], Y[i], Z[i], o.k, o.maxD2, p, P, D);
 	if (m < 3) { fit[0] = 0; fit[1] = 0; fit[2] = 0; fit[3] = NaN; return false; }
 	return fitPlane(X, Y, Z, st, p, P, m, null, fit);
 }
@@ -142,7 +143,7 @@ function fitAt(index, p, o, P, D, fit) {
 export function pointNormals(cols, opts) {
 	var o = options(opts, "pointNormals");
 	var tick = progress(o.onProgress, cols.count);
-	var index = workingIndex(cols, "pointNormals", o.k, o.maxDistance), n = index.count;
+	var index = buildKdTree(cols, "pointNormals"), n = index.count;
 	var normal = new Float32Array(3 * n), residual = new Float32Array(n);
 	var P = new Uint32Array(o.k), D = new Float64Array(o.k), fit = new Float64Array(7);
 	for (var p = 0; p < n; p++) {
@@ -163,7 +164,7 @@ export function pointNormals(cols, opts) {
  */
 export function estimateNoise(cols, opts) {
 	var o = options(opts, "estimateNoise");
-	var index = workingIndex(cols, "estimateNoise", o.k, o.maxDistance);
+	var index = buildKdTree(cols, "estimateNoise");
 	var sample = thinSelection(index.count, NOISE_SAMPLE), res = new Float64Array(sample.length), m = 0;
 	var P = new Uint32Array(o.k), D = new Float64Array(o.k), fit = new Float64Array(7);
 	for (var i = 0; i < sample.length; i++) {

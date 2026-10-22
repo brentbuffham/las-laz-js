@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { selectOutliers } from "../../src/ops/outliers.js";
-import { workingIndex, knnSearch } from "../../src/index/knn.js";
+import { buildKdTree, kdNearest } from "../../src/index/kdtree.js";
 import { randomCloud } from "../helpers/clouds.js";
 import { pdalStatisticalOutlier } from "../helpers/pdalOutlier.js";
 
@@ -18,9 +18,9 @@ var PDAL = process.env.LAS_PDAL;
 
 // Points whose mean distance to their k nearest is within 1e-9 of the threshold
 function onEdge(cols, k, mult) {
-	var ix = workingIndex(cols, "t", k), n = cols.count, P = new Uint32Array(k), D = new Float64Array(k), means = [], M1 = 0, M2 = 0;
+	var ix = buildKdTree(cols, "t"), n = cols.count, P = new Uint32Array(k), D = new Float64Array(k), means = [], M1 = 0, M2 = 0;
 	for (var i = 0; i < n; i++) {
-		knnSearch(ix, cols.x[i], cols.y[i], cols.z[i], k, Infinity, i, P, D);
+		kdNearest(ix, cols.x[i], cols.y[i], cols.z[i], k, Infinity, i, P, D);
 		var s = 0;
 		for (var j = 0; j < k; j++) s += Math.sqrt(D[j]);
 		means.push(s / k);

@@ -5,20 +5,16 @@
 // the best k kept in a bounded max-heap ordered by (distance², point
 // number), so ties go to the lowest number. Distances are checked in
 // Float64 against the stored coordinates, so results are exact.
-// Also the "working index" the denoise tools build: its cell size is
-// the median distance to the k-th neighbour, so a 3 × 3 × 3 block of
-// cells holds about k points on a surface (the automatic 0.6.0 size
-// aims at 16 points per cell of the bounding volume, coarse on a
-// surface). And the argument checks and progress ticker they share.
+// Also the argument checks and progress ticker the denoise tools
+// share (their own searches run on a k-d tree, kdtree.js, which suits
+// a scan's thousand-fold changes of density better than one grid).
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { buildGrid, coordsOf, checkPointCount, checkIndex, lookup } from "./grid.js";
+import { checkIndex, lookup } from "./grid.js";
 import { checkPoint, checkPositive, cellDist2, decode } from "./query.js";
-import { thinSelection } from "../ops/select.js";
 
 var EPS = 1e-6;   // in cells, as query.js
-var MAX_CELLS = 4503599627370496;   // 2^52: the working index stays well inside buildGrid's 2^53
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -197,39 +193,4 @@ export function nearestPoints(index, point, k, opts) {
 	var m = kk === 0 ? 0 : knnSearch(index, q[0], q[1], q[2], kk, maxD === undefined ? Infinity : maxD * maxD, -1, P, D, xy);
 	for (var i = 0; i < m; i++) D[i] = Math.sqrt(D[i]);
 	return { points: m === kk ? P : P.slice(0, m), d: m === kk ? D : D.slice(0, m) };
-}
-
-/**
- * An index over point columns for k-nearest work: cell size the median distance to the
- * k-th other point over up to 1,000 points spread through the cloud (at most maxDistance),
- * so a 3 × 3 × 3 block of cells holds about k points on a surface.
- * @param {object} cols - point columns (x, y, z or a k = 3 positions column).
- * @param {string} fn - the calling function's name, for messages.
- * @param {number} k
- * @param {number} [maxDistance]
- * @returns {object} PointIndex
- */
-export function workingIndex(cols, fn, k, maxDistance) {
-	var coords = coordsOf(cols, fn), n = cols.count;
-	checkPointCount(n);
-	var coarse = buildGrid(coords, n, undefined, false);
-	var sample = thinSelection(n, 1000), P = new Uint32Array(k), D = new Float64Array(k);
-	var maxD2 = maxDistance === undefined ? Infinity : maxDistance * maxDistance;
-	var X = coords.x, Y = coords.y, Z = coords.z, st = coords.stride, dist = [];
-	for (var i = 0; i < sample.length; i++) {
-		var p = sample[i], o = p * st, m = knnSearch(coarse, X[o], Y[o], Z[o], k, maxD2, p, P, D);
-		if (m === k) dist.push(Math.sqrt(D[k - 1]));
-		else if (maxDistance !== undefined) dist.push(maxDistance);   // the k-th lies beyond the reach
-		else if (m > 0) dist.push(Math.sqrt(D[m - 1]));
-	}
-	dist.sort(function (u, v) { return u - v; });
-	var cellSize = dist.length ? dist[Math.floor((dist.length - 1) / 2)] : 0;
-	if (maxDistance !== undefined && cellSize > maxDistance) cellSize = maxDistance;
-	if (!(cellSize > 0)) return coarse;
-	// Keep the cell count inside 2^52 (a dense patch at one end of a long span)
-	var ext = [coarse.nx * coarse.cellSize, coarse.ny * coarse.cellSize, coarse.nz * coarse.cellSize];
-	function cells(s) { return (Math.floor(ext[0] / s) + 1) * (Math.floor(ext[1] / s) + 1) * (Math.floor(ext[2] / s) + 1); }
-	while (cells(cellSize) > MAX_CELLS) cellSize *= 1.5;
-	if (cellSize === coarse.cellSize) return coarse;
-	return buildGrid(coords, n, cellSize, false);
 }

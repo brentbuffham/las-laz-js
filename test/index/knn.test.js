@@ -3,14 +3,13 @@
 // nearestPoints and knnSearch against a plain scan sorted by
 // (distance², point number), over the 0.6.0 sweep of clouds, layouts
 // and cell sizes, with queries inside and outside the grid; the
-// working index's cell size from the k-th neighbour distance; the
 // shared argument checks and the progress ticker.
 //==========================================================
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildIndex } from "../../src/index/grid.js";
-import { nearestPoints, knnSearch, workingIndex, checkK, checkMaxDistance, progress } from "../../src/index/knn.js";
+import { nearestPoints, knnSearch, checkK, checkMaxDistance, progress } from "../../src/index/knn.js";
 import * as lib from "../../src/index.js";
 import { randomCloud, pointReader, rng } from "../helpers/clouds.js";
 
@@ -105,23 +104,6 @@ test("nearestPoints from far off the cloud's edge stops after a few rings", func
 		assert.deepEqual(Array.from(got.points), brute(c, q, 16, undefined, false, -1).map(function (w) { return w[1]; }), "q=" + q);
 		if (!process.env.NODE_V8_COVERAGE) assert.ok(ms < 30, "q=" + q + " took " + ms.toFixed(1) + " ms");
 	});
-});
-
-test("workingIndex sizes cells from the k-th neighbour distance", function () {
-	var n = 40000, c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n) };
-	for (var i = 0; i < n; i++) { c.x[i] = (i % 200) * 0.05; c.y[i] = Math.floor(i / 200) * 0.05; }
-	// the 16th nearest other point on a 0.05 square lattice is at 0.05 · √5 ≈ 0.112
-	var cs = workingIndex(c, "t", 16).cellSize;
-	assert.ok(Math.abs(cs - 0.05 * Math.sqrt(5)) < 0.25 * 0.112, "cellSize " + cs);
-	assert.ok(workingIndex(c, "t", 16, 0.08).cellSize <= 0.08);
-	var same = { count: 50, x: new Float64Array(50).fill(1), y: new Float64Array(50).fill(2), z: new Float64Array(50).fill(3) };
-	assert.equal(workingIndex(same, "t", 8).cellSize, 1);
-	// 5,000 points 1 mm apart beside one end of a 10 km span: the cell count is clamped
-	var m = 5002, w = { count: m, x: new Float64Array(m), y: new Float64Array(m), z: new Float64Array(m) };
-	for (i = 0; i < 5000; i++) { w.x[i] = (i % 70) * 0.001; w.y[i] = Math.floor(i / 70) * 0.001; w.z[i] = (i % 3) * 0.001; }
-	w.x[5000] = 10000; w.y[5001] = 10000; w.z[5001] = 3000;
-	var wi = workingIndex(w, "t", 16);
-	assert.ok(wi.nx * wi.ny * wi.nz <= Math.pow(2, 52));
 });
 
 test("bad arguments are refused, naming the argument", function () {

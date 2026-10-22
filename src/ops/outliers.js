@@ -9,7 +9,8 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { workingIndex, knnSearch, checkK, progress } from "../index/knn.js";
+import { checkK, progress } from "../index/knn.js";
+import { buildKdTree, kdNearest } from "../index/kdtree.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -26,13 +27,13 @@ export function selectOutliers(cols, opts) {
 	checkK(k, "k");
 	if (!(typeof mult === "number" && isFinite(mult))) throw bad("multiplier must be a finite number, not " + String(mult));
 	var tick = progress(opts.onProgress, cols.count);
-	var index = workingIndex(cols, "selectOutliers", k), n = index.count;
+	var index = buildKdTree(cols, "selectOutliers"), n = index.count;
 	if (n <= k) { tick(n); return new Uint32Array(0); }
 	var co = index.coords, X = co.x, Y = co.y, Z = co.z, st = co.stride;
 	var P = new Uint32Array(k), D = new Float64Array(k), means = new Float64Array(n);
 	var M1 = 0, M2 = 0;
 	for (var i = 0, o = 0; i < n; i++, o += st) {
-		knnSearch(index, X[o], Y[o], Z[o], k, Infinity, i, P, D);
+		kdNearest(index, X[o], Y[o], Z[o], k, Infinity, i, P, D);
 		var s = 0;
 		for (var j = 0; j < k; j++) s += Math.sqrt(D[j]);
 		var mean = s / k;

@@ -22,7 +22,8 @@
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
-import { workingIndex, knnSearch, checkK, checkMaxDistance, progress } from "../index/knn.js";
+import { checkK, checkMaxDistance, progress } from "../index/knn.js";
+import { buildKdTree, kdNearest } from "../index/kdtree.js";
 import { fitPlane, estimateNoise } from "./normals.js";
 import { columnsOf, sameType, checkNoSharedMemory } from "./columns.js";
 
@@ -65,13 +66,13 @@ export function denoisePoints(cols, opts) {
 
 	for (var pass = 0; pass < iterations; pass++) {
 		var last = pass === iterations - 1;
-		var index = move || (last && normal) ? workingIndex(src, "denoisePoints", k, maxDistance) : null;
+		var index = move || (last && normal) ? buildKdTree(src, "denoisePoints") : null;
 		var sc = index ? index.coords : coordsOf(src, "denoisePoints");
 		var X = sc.x, Y = sc.y, Z = sc.z, st = sc.stride;
 		var dc = coordsOf(dst, "denoisePoints"), OX = dc.x, OY = dc.y, OZ = dc.z;
 		for (var p = 0, o = 0; p < n; p++, o += st) {
 			var px = X[o], py = Y[o], pz = Z[o], nx = 0, ny = 0, nz = 0, delta = 0;
-			var m = index ? knnSearch(index, px, py, pz, k, maxD2, p, P, D) : 0;
+			var m = index ? kdNearest(index, px, py, pz, k, maxD2, p, P, D) : 0;
 			if (m >= 3 && fitPlane(X, Y, Z, st, p, P, m, null, fit)) {
 				nx = fit[0]; ny = fit[1]; nz = fit[2];
 				if (move && m >= MIN_NEIGHBOURS && D[m - 1] > 0) {
