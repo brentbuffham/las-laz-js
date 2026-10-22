@@ -232,7 +232,11 @@ test("merge widening rules", function () {
 	assert.ok(widen(Uint8Array, Uint16Array) instanceof Uint16Array);
 	assert.ok(widen(Uint8Array, Int16Array) instanceof Int16Array);
 	assert.ok(widen(Int16Array, Uint8Array) instanceof Int16Array);
-	assert.ok(widen(Int32Array, Float32Array) instanceof Float32Array);
+	assert.ok(widen(Int32Array, Float32Array) instanceof Float64Array);
+	assert.ok(widen(Uint32Array, Float32Array) instanceof Float64Array);
+	assert.ok(widen(Int16Array, Float32Array) instanceof Float32Array);
+	assert.ok(widen(Uint16Array, Float32Array) instanceof Float32Array);
+	assert.ok(widen(Uint8Array, Float32Array) instanceof Float32Array);
 	assert.ok(widen(Uint32Array, Float64Array) instanceof Float64Array);
 	assert.ok(widen(Float32Array, Float64Array) instanceof Float64Array);
 	assert.ok(widen(Uint8Array, Uint8ClampedArray) instanceof Uint8Array);
@@ -252,7 +256,8 @@ test("merge widening rules", function () {
 	}, /column "positions".*k = 1.*k = 3/);
 	// a bad list
 	expectCode(function () { mergePoints(null); }, /list/);
-	expectCode(function () { mergePoints([null]); }, /columns/);
+	expectCode(function () { mergePoints([null]); }, /list\[0\].*columns/);
+	expectCode(function () { mergePoints([{ count: 1, x: new Float64Array(1) }, { count: -1 }]); }, /list\[1\].*count/);
 });
 
 test("widestType rules", function () {
@@ -261,7 +266,9 @@ test("widestType rules", function () {
 	assert.equal(widestType([Uint8ClampedArray, Int16Array], "a"), Int16Array);
 	assert.equal(widestType([Uint8Array, Int8Array, Int16Array], "a"), Int16Array);
 	assert.equal(widestType([Uint16Array, Uint8Array, Uint32Array], "a"), Uint32Array);
-	assert.equal(widestType([Uint32Array, Float32Array, Uint8Array], "a"), Float32Array);
+	assert.equal(widestType([Uint32Array, Float32Array, Uint8Array], "a"), Float64Array);
+	assert.equal(widestType([Int32Array, Float32Array], "a"), Float64Array);
+	assert.equal(widestType([Uint16Array, Float32Array, Int8Array], "a"), Float32Array);
 	assert.equal(widestType([Float32Array, Float64Array, Int8Array], "a"), Float64Array);
 	assert.equal(widestType([BigInt64Array, BigInt64Array], "a"), BigInt64Array);
 	// signed and unsigned of one width, or a wider unsigned
@@ -341,4 +348,47 @@ test("mergePoints accepts a Node Buffer column and names the list position of a 
 	assert.deepEqual(Array.from(m.v), [1, 2, 3]);
 	var a = { count: 2, p: new Float32Array(2) };
 	expectCode(function () { mergePoints([a, a, { count: 2, p: new Float32Array(6) }]); }, /list\[2\]/);
+});
+
+test("inPlace refuses columns that share memory, before any write", function () {
+	var shared = new Float64Array([0, 1, 2, 3]);
+	var c = { count: 4, x: shared, y: shared };
+	expectCode(function () { keepPoints(c, new Uint32Array([1, 2]), { inPlace: true }); }, /"x" and "y" share memory/);
+	expectCode(function () { removePoints(c, new Uint32Array([0]), { inPlace: true }); }, /share memory/);
+	assert.deepEqual(Array.from(shared), [0, 1, 2, 3]);
+	// overlapping views of one buffer (x covers bytes 0-31, a covers 16-47)
+	var buf = new ArrayBuffer(64);
+	var o = { count: 4, x: new Float64Array(buf, 0, 4), a: new Float64Array(buf, 16, 4) };
+	expectCode(function () { keepPoints(o, new Uint32Array([0]), { inPlace: true }); }, /"x" and "a" share memory/);
+	// the copy is unaffected by shared memory
+	assert.deepEqual(Array.from(keepPoints(c, new Uint32Array([1, 2])).y), [1, 2]);
+});
+test("inPlace allows distinct non-overlapping views of one buffer", function () {
+	var buf = new ArrayBuffer(64);
+	var x = new Float64Array(buf, 0, 4);
+	var y = new Float64Array(buf, 32, 4);
+	x.set([0, 1, 2, 3]); y.set([10, 11, 12, 13]);
+	var r = keepPoints({ count: 4, x: x, y: y }, new Uint32Array([1, 3]), { inPlace: true });
+	assert.deepEqual(Array.from(r.x), [1, 3]);
+	assert.deepEqual(Array.from(r.y), [11, 13]);
+	assert.equal(r.x.buffer, buf);
+	assert.equal(r.y.buffer, buf);
+	// an empty column sharing a buffer never overlaps
+	var z = removePoints({ count: 0, a: new Float64Array(buf, 0, 0), b: new Float64Array(buf, 0, 0) }, new Uint32Array(0), { inPlace: true });
+	assert.equal(z.count, 0);
+});
+test("mergePoints: column names that are Object.prototype members work; count and filled are reserved", function () {
+	var a = { count: 1, constructor: new Uint8Array([1]), toString: new Uint8Array([2]) };
+	var b = { count: 1, toString: new Uint8Array([3]), hasOwnProperty: new Float32Array([4]) };
+	var m = mergePoints([a, b]);
+	assert.deepEqual(Array.from(m.constructor), [1, 0]);
+	assert.deepEqual(Array.from(m.toString), [2, 3]);
+	assert.ok(m.hasOwnProperty instanceof Float32Array);
+	assert.deepEqual(Array.from(m.hasOwnProperty), [0, 4]);
+	assert.deepEqual(m.filled, ["constructor", "hasOwnProperty"]);
+	var k = keepPoints(a, new Uint32Array([0]));
+	assert.deepEqual(Array.from(k.constructor), [1]);
+	expectCode(function () { mergePoints([{ count: 1, filled: new Uint8Array(1) }]); }, /column "filled" in list\[0\]/);
+	// "count" cannot be a typed array in a valid input, but a typed-array count is refused as a count
+	expectCode(function () { mergePoints([{ count: new Uint8Array(1) }]); }, /list\[0\]/);
 });

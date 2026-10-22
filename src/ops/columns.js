@@ -94,6 +94,8 @@ export function needColumn(cols, name, fn) {
 }
 
 var FLOATS = { Float64Array: 8, Float32Array: 4 };
+function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
 var INTS = {
 	Int8Array: [1, true], Int16Array: [2, true], Int32Array: [4, true],
 	Uint8Array: [1, false], Uint8ClampedArray: [1, false], Uint16Array: [2, false], Uint32Array: [4, false]
@@ -103,7 +105,9 @@ var BIGS = { BigInt64Array: true, BigUint64Array: true };
 /**
  * The typed-array type a merge of columns of these types is stored in
  * (internal; not exported from the package entry). Float64 beats Float32
- * beats any integer type. Among integers the widest wins, and mixed
+ * beats any integer type, except that Float32 with a 32-bit integer type
+ * (Int32, Uint32) gives Float64, since Float32 holds integers exactly only
+ * to 2^24. Among integers the widest wins, and mixed
  * signedness is allowed only when the widest is signed and strictly
  * wider than every unsigned one (Uint8 + Int16 gives Int16); Int16 +
  * Uint16 and Int8 + Uint16 throw, because the unsigned values would wrap.
@@ -118,21 +122,25 @@ export function widestType(types, name) {
 	if (!Array.isArray(types) || types.length === 0) throw bad(label + " has no types to merge");
 	var names = types.map(function (t) {
 		var n = t && t.name;
-		if (!(n in FLOATS) && !(n in INTS) && !(n in BIGS)) throw bad(label + " has a type that is not a typed-array constructor");
+		if (typeof n !== "string" || (!has(FLOATS, n) && !has(INTS, n) && !has(BIGS, n))) throw bad(label + " has a type that is not a typed-array constructor");
 		return n === "Uint8ClampedArray" ? "Uint8Array" : n;
 	});
 	var first = names[0];
-	if (first in BIGS) {
+	if (has(BIGS, first)) {
 		names.forEach(function (n) {
 			if (n !== first) throw bad(label + " cannot merge " + first + " with " + n);
 		});
 		return globalThis[first];
 	}
 	names.forEach(function (n) {
-		if (n in BIGS) throw bad(label + " cannot merge " + n + " with " + first);
+		if (has(BIGS, n)) throw bad(label + " cannot merge " + n + " with " + first);
 	});
 	if (names.indexOf("Float64Array") >= 0) return Float64Array;
-	if (names.indexOf("Float32Array") >= 0) return Float32Array;
+	if (names.indexOf("Float32Array") >= 0) {
+		// Float32 holds integers exactly only to 2^24: 32-bit integers (an index column) go to Float64
+		if (names.indexOf("Int32Array") >= 0 || names.indexOf("Uint32Array") >= 0) return Float64Array;
+		return Float32Array;
+	}
 	var maxS = 0;
 	var maxU = 0;
 	names.forEach(function (n) {

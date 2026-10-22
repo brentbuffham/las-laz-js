@@ -46,18 +46,41 @@ function gatherComplement(src, dst, k, count, sel) {
 	}
 }
 
+// A column on the output; defineProperty so a column named "__proto__" stays a column.
+function setColumn(out, name, a) {
+	Object.defineProperty(out, name, { value: a, enumerable: true, writable: true, configurable: true });
+}
+
+// In-place compaction writes into every column's buffer, so two columns
+// whose byte ranges overlap would corrupt each other: refuse before any write.
+function checkNoSharedMemory(cols, list) {
+	for (var i = 0; i < list.length; i++) {
+		var a = cols[list[i].name];
+		if (a.byteLength === 0) continue;
+		for (var j = i + 1; j < list.length; j++) {
+			var b = cols[list[j].name];
+			if (b.byteLength === 0 || a.buffer !== b.buffer) continue;
+			if (a.byteOffset < b.byteOffset + b.byteLength && b.byteOffset < a.byteOffset + a.byteLength) {
+				throw bad("inPlace: columns \"" + list[i].name + "\" and \"" + list[j].name + "\" share memory");
+			}
+		}
+	}
+}
+
 // Shared body of keep / remove / split: validate once, then one pass per column.
 function pick(cols, sel, keep, inPlace) {
 	var count = countOf(cols);
 	var s = checkSelection(sel, count);
 	var n = keep ? s.length : count - s.length;
 	var out = { count: n };
-	columnsOf(cols).forEach(function (c) {
+	var list = columnsOf(cols);
+	if (inPlace) checkNoSharedMemory(cols, list);
+	list.forEach(function (c) {
 		var src = cols[c.name];
 		var dst = inPlace ? src : sameType(src, n * c.k);
 		if (keep) gather(src, dst, c.k, s);
 		else gatherComplement(src, dst, c.k, count, s);
-		out[c.name] = inPlace ? src.subarray(0, n * c.k) : dst;
+		setColumn(out, c.name, inPlace ? src.subarray(0, n * c.k) : dst);
 	});
 	return out;
 }
@@ -66,7 +89,7 @@ function pick(cols, sel, keep, inPlace) {
  * The selected points of every column, in order.
  * @param {object} cols - point columns { count, <name>: TypedArray }.
  * @param {Uint32Array|number[]} sel - strictly ascending indices below cols.count.
- * @param {{inPlace?: boolean}} [opts] - inPlace: slide the kept values down inside each column's own buffer and return subarray views of it (the input is overwritten). Default: new columns of the same types.
+ * @param {{inPlace?: boolean}} [opts] - inPlace: slide the kept values down inside each column's own buffer and return subarray views of it (the input is overwritten; two columns sharing memory, the same array twice or overlapping views, throw INVALID_ARGUMENT, while distinct non-overlapping views of one buffer are fine). Default: new columns of the same types.
  * @returns {object} { count, <every column> } and nothing else.
  */
 export function keepPoints(cols, sel, opts) {
@@ -110,12 +133,19 @@ export function splitPoints(cols, sel) {
 export function mergePoints(list) {
 	if (!Array.isArray(list)) throw bad("list must be an Array of point columns");
 	var total = 0;
-	var info = {};
+	var info = Object.create(null);
 	var names = [];
 	var perInput = list.map(function (cols, li) {
-		var n = countOf(cols);
-		var found = {};
-		columnsOf(cols).forEach(function (c) {
+		var n, entries;
+		try {
+			n = countOf(cols);
+			entries = columnsOf(cols);
+		} catch (err) {
+			throw bad("list[" + li + "]: " + err.message);
+		}
+		var found = Object.create(null);
+		entries.forEach(function (c) {
+			if (c.name === "count" || c.name === "filled") throw bad("column \"" + c.name + "\" in list[" + li + "] is a reserved name; rename it before merging");
 			found[c.name] = true;
 			var e = info[c.name];
 			if (!e) { e = info[c.name] = { k: 0, types: [] }; names.push(c.name); }
@@ -143,7 +173,7 @@ export function mergePoints(list) {
 			}
 			at += inp.n;
 		});
-		out[name] = dst;
+		setColumn(out, name, dst);
 	});
 	out.filled = names.filter(function (name) { return filled.indexOf(name) >= 0; });
 	return out;
