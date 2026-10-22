@@ -93,6 +93,18 @@ export function needColumn(cols, name, fn) {
 	return a;
 }
 
+/**
+ * A new typed array of the same type as a (a Node Buffer gives a Uint8Array).
+ * Internal; not exported from the package entry.
+ * @param {TypedArray} a
+ * @param {number} length
+ * @returns {TypedArray}
+ */
+export function sameType(a, length) {
+	var Ctor = globalThis[Object.prototype.toString.call(a).slice(8, -1)];
+	return new Ctor(length);
+}
+
 var FLOATS = { Float64Array: 8, Float32Array: 4 };
 function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
 

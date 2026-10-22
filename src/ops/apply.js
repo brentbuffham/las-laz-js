@@ -8,15 +8,9 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { columnsOf, checkSelection, countOf, widestType } from "./columns.js";
+import { columnsOf, checkSelection, countOf, widestType, sameType } from "./columns.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
-
-// A new typed array of the same type as a (a Node Buffer gives a Uint8Array).
-function sameType(a, length) {
-	var Ctor = globalThis[Object.prototype.toString.call(a).slice(8, -1)];
-	return new Ctor(length);
-}
 
 // dst[i] = src[sel[i]] (k values each). dst may be src: i <= sel[i], so
 // ascending writes never overwrite a value still to be read.

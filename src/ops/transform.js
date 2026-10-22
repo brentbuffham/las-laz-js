@@ -12,7 +12,7 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { countOf } from "./columns.js";
+import { countOf, columnsOf, sameType } from "./columns.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -116,19 +116,35 @@ export function makeTransform(options) {
 	return { m: m, t: t };
 }
 
-// A new typed array of the same type as a (a Node Buffer gives a Uint8Array).
-function sameType(a, length) {
-	var Ctor = globalThis[Object.prototype.toString.call(a).slice(8, -1)];
-	return new Ctor(length);
+/**
+ * The box that holds a box after a transform: the min and max of the 8
+ * transformed corners (internal; not exported from the package entry).
+ * The transform is not checked.
+ * @param {{m: ArrayLike<number>, t: ArrayLike<number>}} T
+ * @param {{minX:number, maxX:number, minY:number, maxY:number, minZ:number, maxZ:number}} b
+ * @returns {{minX:number, maxX:number, minY:number, maxY:number, minZ:number, maxZ:number}}
+ */
+export function transformBounds(T, b) {
+	var out = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity };
+	var p = [0, 0, 0];
+	for (var i = 0; i < 8; i++) {
+		applyTransform(T, i & 1 ? b.maxX : b.minX, i & 2 ? b.maxY : b.minY, i & 4 ? b.maxZ : b.minZ, p);
+		if (p[0] < out.minX) out.minX = p[0]; if (p[0] > out.maxX) out.maxX = p[0];
+		if (p[1] < out.minY) out.minY = p[1]; if (p[1] > out.maxY) out.maxY = p[1];
+		if (p[2] < out.minZ) out.minZ = p[2]; if (p[2] > out.maxZ) out.maxZ = p[2];
+	}
+	return out;
 }
 
 /**
  * Transform the x, y and z columns of point columns. Each point is
  * computed in Float64 from the columns' values and stored into the
  * column's own type. Copy by default (new x, y, z; every other column
- * shared by reference; bounds and stats are not carried, they would be
- * stale); inPlace writes into the input's x, y and z.
- * @param {object} cols - point columns with x, y and z (k = 1).
+ * shared by reference). inPlace writes into the input's x, y and z
+ * arrays and returns a new object holding them (the input object itself
+ * is not changed). The result is { count, <columns> } only: bounds and
+ * stats are not carried, they would be stale.
+ * @param {object} cols - point columns with x, y and z (k = 1, not BigInt).
  * @param {{m: ArrayLike<number>, t: ArrayLike<number>}} T - from makeTransform, or any affine map.
  * @param {{inPlace?: boolean}} [options]
  * @returns {object} PointColumns
@@ -139,10 +155,14 @@ export function transformPoints(cols, T, options) {
 	if (opt === null || typeof opt !== "object") throw bad("options must be an object");
 	var n = countOf(cols);
 	checkTransform(T, "transform");
-	var a = [cols.x, cols.y, cols.z];
-	for (var j = 0; j < 3; j++) {
-		if (!isTyped(a[j]) || a[j].length !== n) throw bad("transformPoints needs x, y and z");
-	}
+	var list = columnsOf(cols);
+	var a = ["x", "y", "z"].map(function (name) {
+		var found = list.filter(function (c) { return c.name === name && c.k === 1; })[0];
+		if (!found) throw bad("transformPoints needs x, y and z");
+		var col = cols[name];
+		if (col instanceof BigInt64Array || col instanceof BigUint64Array) throw bad("transformPoints: " + name + " must not be a BigInt array");
+		return col;
+	});
 	var inPlace = !!opt.inPlace;
 	var x = a[0], y = a[1], z = a[2];
 	var ox = inPlace ? x : sameType(x, n);
@@ -157,12 +177,12 @@ export function transformPoints(cols, T, options) {
 		oy[i] = m3 * px + m4 * py + m5 * pz + t1;
 		oz[i] = m6 * px + m7 * py + m8 * pz + t2;
 	}
-	if (inPlace) return cols;
 	var out = { count: n };
-	Object.keys(cols).forEach(function (name) {
-		if (name === "count" || name === "bounds" || name === "stats") return;
-		if (isTyped(cols[name])) Object.defineProperty(out, name, { value: cols[name], enumerable: true, writable: true, configurable: true });
+	var moved = { x: ox, y: oy, z: oz };
+	list.forEach(function (c) {
+		// defineProperty so a column named "__proto__" stays a column
+		var v = Object.prototype.hasOwnProperty.call(moved, c.name) ? moved[c.name] : cols[c.name];
+		Object.defineProperty(out, c.name, { value: v, enumerable: true, writable: true, configurable: true });
 	});
-	out.x = ox; out.y = oy; out.z = oz;
 	return out;
 }

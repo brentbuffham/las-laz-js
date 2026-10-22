@@ -259,7 +259,7 @@ LasReader.prototype._countPassing = async function (plan, pool, buf, keep, signa
 
 /**
  * Read the selected points into one set of columns.
- * @param {object} [opts] - chunks() options plus dedupe (tolerance) and dedupeZ
+ * @param {object} [opts] - chunks() options plus dedupe (tolerance) and dedupeZ; dedupe runs on the output coordinates (after transform and localOrigin)
  * @returns {Promise<object>} PointColumns plus bounds and stats
  */
 LasReader.prototype.readPoints = async function (opts) {

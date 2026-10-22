@@ -7,11 +7,14 @@
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { makeTransform, transformPoints, applyTransform, checkTransform } from "../../src/ops/transform.js";
+import { makeTransform, transformPoints, applyTransform, checkTransform, transformBounds } from "../../src/ops/transform.js";
+import { thinSelection } from "../../src/ops/select.js";
 import * as lib from "../../src/index.js";
 import { openLas } from "../../src/LasReader.js";
 import { LasError, ERROR_CODES } from "../../src/errors.js";
 import { buildLas } from "../helpers/buildLas.js";
+import { LAZ_MANIFEST, fixtureBytes } from "../helpers/lazFixtureFiles.js";
+import { createWorkerHandler } from "../../src/workers/workerProtocol.js";
 
 function apply(T, x, y, z) { return Array.from(applyTransform(T, x, y, z, [0, 0, 0])); }
 function invalid(fn, part) {
@@ -73,7 +76,10 @@ test("a hand-computed affine through transformPoints", function () {
 	assert.equal(c.x[0], 1);                 // copy by default
 	assert.deepEqual(Array.from(c.y), [3, 0]);
 	var inPlace = transformPoints(c, T, { inPlace: true });
-	assert.equal(inPlace.x, c.x); assert.equal(inPlace.y, c.y); assert.equal(inPlace.z, c.z);
+	assert.notEqual(inPlace, c);                  // a new object ...
+	assert.equal(inPlace.x, c.x); assert.equal(inPlace.y, c.y); assert.equal(inPlace.z, c.z);   // ... holding the input arrays
+	assert.equal(inPlace.cls, c.cls); assert.equal(inPlace.count, 2);
+	assert.deepEqual(Object.keys(inPlace), ["count", "x", "y", "z", "cls"]);
 	assert.deepEqual(Array.from(c.x), [12, 3]); assert.deepEqual(Array.from(c.y), [2, -1]); assert.deepEqual(Array.from(c.z), [8.5, 2.5]);
 });
 test("transformPoints computes in Float64 and stores in each column's own type", function () {
@@ -114,6 +120,9 @@ test("bad transforms throw", function () {
 	invalid(function () { transformPoints({ count: 1, x: new Float64Array(1), y: new Float64Array(1) }, makeTransform()); }, "transformPoints needs x, y and z");
 	invalid(function () { transformPoints({ count: 1, x: new Float64Array(1), y: new Float64Array(1), z: new Float64Array(3) }, makeTransform()); }, "transformPoints needs x, y and z");
 	invalid(function () { transformPoints({ count: 1, x: new Float64Array(1), y: new Float64Array(1), z: [0] }, makeTransform()); }, "transformPoints needs x, y and z");
+	invalid(function () { transformPoints({ count: 1, x: new Float64Array(1), y: new Float64Array(1), z: new Float64Array(2) }, makeTransform()); }, "transformPoints needs x, y and z");   // k = 2 is not a coordinate column
+	invalid(function () { transformPoints({ count: 1, x: new BigInt64Array(1), y: new Float64Array(1), z: new Float64Array(1) }, makeTransform()); }, "BigInt");
+	invalid(function () { transformPoints({ count: 1, x: new Float64Array(1), y: new Float64Array(1), z: new BigUint64Array(1) }, makeTransform(), { inPlace: true }); }, "BigInt");
 });
 
 // ---- on read ----
@@ -217,4 +226,99 @@ test("chunks pass the transform through", async function () {
 test("a bad transform on read throws INVALID_ARGUMENT", async function () {
 	var las = await las500();
 	await assert.rejects(las.readPoints({ transform: { m: [1], t: [0, 0, 0] } }), function (e) { return e instanceof LasError && e.code === ERROR_CODES.INVALID_ARGUMENT && e.message.indexOf("transform.m") >= 0; });
+});
+
+// ---- transformBounds and the worker's colour range ----
+test("transformBounds: a 90 degree rotation about X swaps the Y and Z ranges", function () {
+	// y2 = -z, z2 = y
+	var R = [1, 0, 0, 0, 0, -1, 0, 1, 0];
+	var box = { minX: 0, maxX: 10, minY: 0, maxY: 20, minZ: 0, maxZ: 30 };
+	assert.deepEqual(transformBounds(makeTransform({ rotate: R }), box), { minX: 0, maxX: 10, minY: -30, maxY: 0, minZ: 0, maxZ: 20 });
+	assert.deepEqual(transformBounds(makeTransform({ rotate: R, shift: [1, 2, 3] }), box), { minX: 1, maxX: 11, minY: -28, maxY: 2, minZ: 3, maxZ: 23 });
+	// 45 degrees about Z: the unit square becomes a diamond, x from -sqrt(2)/2 to sqrt(2)/2, y from 0 to sqrt(2)
+	var d = transformBounds(makeTransform({ rotateZ: 45 }), { minX: 0, maxX: 1, minY: 0, maxY: 1, minZ: 5, maxZ: 6 });
+	assert.ok(Math.abs(d.minX + Math.SQRT1_2) < 1e-12 && Math.abs(d.maxX - Math.SQRT1_2) < 1e-12);
+	assert.ok(Math.abs(d.minY) < 1e-12 && Math.abs(d.maxY - Math.SQRT2) < 1e-12);
+	assert.equal(d.minZ, 5); assert.equal(d.maxZ, 6);
+});
+function workerFile(n) {
+	var pts = [];
+	for (var i = 0; i < n; i++) pts.push({ x: 1000 + i, y: 2000 + i, z: i, classification: 2 });
+	return new Blob([buildLas({ version: "1.2", pointFormat: 0, scale: { x: 0.01, y: 0.01, z: 0.01 }, points: pts })]);
+}
+function chunksOf(msgs, id) { return msgs.filter(function (m) { return m.id === id && m.type === "chunk"; }).map(function (m) { return m.chunk; }); }
+test("worker chunks colour by elevation over the transformed Z range", async function () {
+	var msgs = [];
+	var handle = createWorkerHandler(function (m) { msgs.push(m); });
+	await handle({ id: 1, type: "open", payload: { blob: workerFile(100), windowSize: 20 * 10 } });   // 10 windows; z = 0..99, y = 2000..2099
+	// y2 = -z, z2 = y: after the transform Z runs 2000..2099, not 0..99
+	var rot = makeTransform({ rotate: [1, 0, 0, 0, 0, -1, 0, 1, 0] });
+	await handle({ id: 2, type: "chunks", payload: { fields: ["z"], transform: rot, colour: { by: "elevation" } } });
+	var chunks = chunksOf(msgs, 2);
+	assert.equal(chunks.length, 10);
+	// z2 = 2009 -> t = 9 / 99 -> green floor(t * 4 * 255) = 92; z2 = 2010 -> t = 10 / 99 -> green 103
+	// (a range of the untransformed header box, 0..99, would clamp both to the top colour)
+	assert.deepEqual(Array.from(chunks[0].colours.subarray(27, 30)), [0, 92, 255]);
+	assert.deepEqual(Array.from(chunks[1].colours.subarray(0, 3)), [0, 103, 255]);
+	// a localOrigin shifts the points and the range alike
+	await handle({ id: 3, type: "chunks", payload: { fields: ["z"], transform: rot, localOrigin: { x: 0, y: 0, z: 2000 }, colour: { by: "elevation" } } });
+	assert.deepEqual(Array.from(chunksOf(msgs, 3)[0].colours.subarray(27, 30)), [0, 92, 255]);
+	// no transform: the file's Z range as before
+	await handle({ id: 4, type: "chunks", payload: { fields: ["z"], colour: { by: "elevation" } } });
+	assert.deepEqual(Array.from(chunksOf(msgs, 4)[0].colours.subarray(27, 30)), [0, 92, 255]);
+	// a bad transform is an INVALID_ARGUMENT error message
+	await handle({ id: 5, type: "chunks", payload: { fields: ["z"], transform: { m: [1], t: [0, 0, 0] }, colour: { by: "elevation" } } });
+	assert.equal(msgs.filter(function (m) { return m.id === 5; }).pop().code, "INVALID_ARGUMENT");
+});
+
+// ---- more transform-on-read ----
+function mixedLas() {
+	var pts = utmPoints().map(function (p, i) { p.classification = i % 3 === 0 ? 2 : (i % 3 === 1 ? 6 : 1); return p; });
+	return openLas(buildLas({ version: "1.2", pointFormat: 0, scale: SCALE, offset: OFFSET, points: pts }), { threads: 1 });
+}
+test("classes and polygon filters under a transform pick the same points (by index) as without", async function () {
+	var las = await mixedLas();
+	var T = makeTransform({ rotateZ: 71, about: [500100, 7000100, 0], shift: [300, -200, 5], scale: 1.5 });
+	// a triangle in file coordinates covering part of the cloud
+	var polygon = [500000, 7000000, 500150, 7000000, 500000, 7000150];
+	var cases = [{ classes: [2] }, { classes: [2, 6] }, { polygon: polygon }, { polygon: polygon, boundary: "inside" }, { classes: [6], polygon: polygon }];
+	for (var opts of cases) {
+		var fields = ["index", "x", "y", "z", "classification"];
+		var plain = await las.readPoints(Object.assign({ fields: fields }, opts));
+		var moved = await las.readPoints(Object.assign({ fields: fields, transform: T }, opts));
+		assert.ok(plain.count > 0 && plain.count < 500, JSON.stringify(Object.keys(opts)) + " keeps part of the cloud (" + plain.count + ")");
+		assert.deepEqual(Array.from(moved.index), Array.from(plain.index));
+		assert.deepEqual(Array.from(moved.classification), Array.from(plain.classification));
+		var expect = transformPoints(plain, T);
+		for (var i = 0; i < plain.count; i++) {
+			assert.ok(Math.abs(moved.x[i] - expect.x[i]) < 1e-9 && Math.abs(moved.y[i] - expect.y[i]) < 1e-9 && Math.abs(moved.z[i] - expect.z[i]) < 1e-9);
+		}
+	}
+});
+test("maxPoints with a transform keeps the thinSelection points, transformed", async function () {
+	var las = await las500();
+	var T = makeTransform({ rotateZ: -20, about: [500100, 7000100, 0], shift: [10, 20, 30] });
+	var all = await las.readPoints({ fields: ["index", "x", "y", "z"], transform: T });
+	var thin = await las.readPoints({ fields: ["index", "x", "y", "z"], transform: T, maxPoints: 37 });
+	var sel = thinSelection(all.count, 37);
+	assert.equal(thin.count, 37);
+	for (var j = 0; j < sel.length; j++) {
+		assert.equal(thin.index[j], all.index[sel[j]]);
+		assert.equal(thin.x[j], all.x[sel[j]]); assert.equal(thin.y[j], all.y[sel[j]]); assert.equal(thin.z[j], all.z[sel[j]]);
+	}
+});
+test("every LAZ fixture read with a transform equals transformPoints of the plain read", async function () {
+	var T = makeTransform({ rotateZ: 33.3, about: [10, 20, 0], shift: [0.25, -0.75, 2], scale: 1.0001 });
+	for (var name of Object.keys(LAZ_MANIFEST)) {
+		var las = await openLas(fixtureBytes(name), { threads: 1 });
+		var plain = await las.readPoints({ fields: ["x", "y", "z", "classification"] });
+		var moved = await las.readPoints({ fields: ["x", "y", "z", "classification"], transform: T });
+		var expect = transformPoints(plain, T);
+		assert.equal(moved.count, plain.count, name);
+		assert.ok(moved.count > 0, name);
+		for (var i = 0; i < plain.count; i++) {
+			assert.ok(Math.abs(moved.x[i] - expect.x[i]) < 1e-9 && Math.abs(moved.y[i] - expect.y[i]) < 1e-9 && Math.abs(moved.z[i] - expect.z[i]) < 1e-9, name + " point " + i);
+		}
+		assert.deepEqual(Array.from(moved.classification), Array.from(plain.classification), name);
+	}
 });

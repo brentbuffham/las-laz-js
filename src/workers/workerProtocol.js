@@ -9,7 +9,9 @@
 //   chunks              chunks options + colour?      -> streams { id, type: "chunk", chunk } per
 //                                                        window, then result { count }; colours
 //                                                        follow one rule for the whole stream
-//                                                        (createChunkColourizer)
+//                                                        (createChunkColourizer; with a transform the
+//                                                        elevation range is the Z range of the 8 corners
+//                                                        of the header box after it)
 //   readPointsToScratch readPointsToScratch options   -> { count, fields, types, bounds }
 //   colourize           { points, by, ramp?, range? } -> Uint8Array
 //   abort               { id }                        -> cancels that job (it rejects ABORTED)
@@ -22,6 +24,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { openLas } from "../LasReader.js";
 import { colourize, createChunkColourizer } from "../colour/colourize.js";
+import { checkTransform, transformBounds } from "../ops/transform.js";
 
 function buffersOf(cols) {
 	var out = [];
@@ -76,7 +79,10 @@ export function createWorkerHandler(post) {
 		},
 		chunks: async function (id, payload, controller) {
 			var count = 0, r = needReader();
-			var paint = payload.colour ? createChunkColourizer(payload.colour, r.header.bounds, payload.localOrigin) : null;
+			// with a transform, the default elevation range is the Z of the transformed header box
+			var hb = r.header.bounds;
+			if (payload.colour && payload.transform && hb) hb = transformBounds(checkTransform(payload.transform, "transform"), hb);
+			var paint = payload.colour ? createChunkColourizer(payload.colour, hb, payload.localOrigin) : null;
 			for await (var c of r.chunks(readOptions(id, payload, controller))) {
 				if (paint) c.colours = paint(c);
 				count += c.count;
