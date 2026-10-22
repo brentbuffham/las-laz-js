@@ -167,3 +167,15 @@ test("dedupeSelection on count 0, and its tolerance check", function () {
 	assert.equal(sel.map.length, 0);
 	assert.throws(function () { dedupeSelection({ count: 0, x: new Float64Array(0), y: new Float64Array(0) }, 0); }, { code: "INVALID_ARGUMENT", message: /tolerance/ });
 });
+
+test("dedupe keeps more than 2^24 cells (a JS Map stops at 16,777,216 entries)", { timeout: 300000 }, function () {
+	// 2^24 + 1 points on a 1 m lattice at a 0.4 m tolerance, each its own cell, and a copy of point 5
+	var n = 16777218, c = { count: n, x: new Float32Array(n), y: new Float32Array(n) };
+	for (var i = 0; i < n - 1; i++) { c.x[i] = i % 4096; c.y[i] = Math.floor(i / 4096); }
+	c.x[n - 1] = c.x[5]; c.y[n - 1] = c.y[5];
+	var sel = dedupeSelection(c, 0.4);
+	assert.equal(sel.keep.length, n - 1);
+	assert.equal(sel.keep[n - 2], n - 2);
+	assert.equal(sel.map[n - 1], 5);
+	assert.equal(sel.map[n - 2], n - 2);
+});
