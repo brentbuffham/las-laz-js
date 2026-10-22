@@ -125,3 +125,35 @@ test("thin keeps target of total records, evenly, carried across calls", functio
 	assert.equal(b.x[0], 477000);                     // record 3
 	assert.equal(thin.acc, 0);
 });
+
+test("firstIndex offsets the index; a kept record is named by its place in the bytes", function () {
+	var c = decode(3, "1.2", ["x", "index"], { firstIndex: 100 });
+	assert.deepEqual(Array.from(c.index), [100, 101]);
+	assert.ok(c.index instanceof Uint32Array);
+	assert.deepEqual(Array.from(decode(3, "1.2", ["index"]).index), [0, 1]);
+	// 3 records, the middle one rejected by keep: the others keep their own numbers
+	var b = buildLas({ version: "1.2", pointFormat: 0, scale: { x: 1, y: 1, z: 1 }, points: [{ x: 5, y: 0, z: 0 }, { x: 6, y: 0, z: 0 }, { x: 7, y: 0, z: 0 }] });
+	var h = parseHeader(new MemorySource(b));
+	var bytes = b.subarray(h.offsetToPointData, h.offsetToPointData + 3 * h.recordLength);
+	var all = decodeRecords(bytes, h, { fields: ["x", "index"], firstIndex: 100 });
+	assert.deepEqual(Array.from(all.index), [100, 101, 102]);
+	var some = decodeRecords(bytes, h, { fields: ["x", "index"], firstIndex: 100, keep: function (v, at) { return v.getInt32(at, true) !== 6; } });
+	assert.deepEqual(Array.from(some.x), [5, 7]);
+	assert.deepEqual(Array.from(some.index), [100, 102]);
+	// straight into existing columns
+	var into = { index: new Uint32Array(5), x: new Float64Array(5) };
+	var res = decodeRecords(bytes, h, { fields: ["x", "index"], firstIndex: 40, into: { cols: into, at: 2 } });
+	assert.equal(res.count, 3);
+	assert.deepEqual(Array.from(into.index), [0, 0, 40, 41, 42]);
+});
+test("a header above 4294967295 points gives a Float64 index, exact past 2^32", function () {
+	var b = buildLas({ version: "1.2", pointFormat: 0, scale: { x: 1, y: 1, z: 1 }, points: [{ x: 5, y: 0, z: 0 }, { x: 6, y: 0, z: 0 }] });
+	var h = parseHeader(new MemorySource(b));
+	var bytes = b.subarray(h.offsetToPointData, h.offsetToPointData + 2 * h.recordLength);
+	var big = Object.assign({}, h, { pointCount: 4294967296 + 10 });
+	var c = decodeRecords(bytes, big, { fields: ["index"], firstIndex: 4294967295 });
+	assert.ok(c.index instanceof Float64Array);
+	assert.deepEqual(Array.from(c.index), [4294967295, 4294967296]);
+	var small = decodeRecords(bytes, h, { fields: ["index"] });
+	assert.ok(small.index instanceof Uint32Array);
+});

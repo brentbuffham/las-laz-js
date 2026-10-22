@@ -208,7 +208,7 @@ LasReader.prototype._scan = async function* (opts, into) {
 		var kept = 0, w = 0;
 		for await (var bytes of windowBytes(plan, pool, buf, opts.signal)) {
 			var win = list[w];
-			var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, into: into ? into(win) : null });
+			var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, firstIndex: win.firstRecord, into: into ? into(win) : null });
 			kept += cols.count;
 			w++;
 			if (typeof opts.onProgress === "function") opts.onProgress(w / list.length, "read " + kept + " points");
@@ -273,7 +273,7 @@ LasReader.prototype.readPoints = async function (opts) {
 	var cap = !filtered ? (opts.maxPoints > 0 ? Math.min(opts.maxPoints, h.pointCount) : h.pointCount)
 		: (opts.maxPoints > 0 ? Math.min(opts.maxPoints, h.pointCount) : 0);
 	var acc = {}, n = 0;
-	fields.forEach(function (f) { acc[f] = new (columnType(f, opts))(cap || 1024); });
+	fields.forEach(function (f) { acc[f] = new (columnType(f, opts, h))(cap || 1024); });
 	function into(win) {
 		// A known cap is never exceeded, so it never grows; filters alone grow by doubling
 		if (!cap && n + win.count > acc[fields[0]].length) {

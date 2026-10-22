@@ -11,8 +11,8 @@ import { createHash } from "node:crypto";
 import { FIELD_TYPES } from "../../src/read/decodeRecords.js";
 import { openLas } from "../../src/LasReader.js";
 
-/** Every field the library decodes (fields a format lacks are dropped by the reader). */
-export var EVERY_FIELD = Object.keys(FIELD_TYPES);
+/** Every record field the library decodes (fields a format lacks are dropped by the reader). Not index: it is the record number, not a field of the record, and PDAL has no such dimension. */
+export var EVERY_FIELD = Object.keys(FIELD_TYPES).filter(function (f) { return f !== "index"; });
 
 /**
  * @param {string|Uint8Array} source

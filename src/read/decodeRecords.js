@@ -38,7 +38,8 @@ export var FIELD_TYPES = Object.freeze({
 	scanAngle: Float32Array,
 	userData: Uint8Array, pointSourceId: Uint16Array,
 	gpsTime: Float64Array,
-	red: Uint16Array, green: Uint16Array, blue: Uint16Array, nir: Uint16Array
+	red: Uint16Array, green: Uint16Array, blue: Uint16Array, nir: Uint16Array,
+	index: Uint32Array   // not a record field: the record number in the file (Float64 above 4294967295 points, see columnType)
 });
 
 var LE = true;
@@ -46,7 +47,7 @@ var LE = true;
 // Which fields a point format can supply.
 function available(fmt) {
 	var f = fmt.fields;
-	var out = { x: 1, y: 1, z: 1, intensity: 1, returnNumber: 1, numberOfReturns: 1, scanDirection: 1, edgeOfFlightLine: 1, classification: 1, classificationFlags: 1, scanAngle: 1, userData: 1, pointSourceId: 1 };
+	var out = { x: 1, y: 1, z: 1, intensity: 1, returnNumber: 1, numberOfReturns: 1, scanDirection: 1, edgeOfFlightLine: 1, classification: 1, classificationFlags: 1, scanAngle: 1, userData: 1, pointSourceId: 1, index: 1 };
 	if (fmt.extended) out.scannerChannel = 1;
 	if (f.gpsTime) out.gpsTime = 1;
 	if (f.red) { out.red = 1; out.green = 1; out.blue = 1; }
@@ -74,9 +75,11 @@ export function resolveFields(header, fields) {
  * Decode a window of whole point records.
  * @param {Uint8Array} bytes - whole records, the first at bytes[0].
  * @param {object} header - from parseHeader.
- * @param {object} [opts] - { fields, keep, thin, localOrigin, float32, into }
+ * @param {object} [opts] - { fields, keep, thin, localOrigin, float32, into, firstIndex }
  *   into: { cols, at } decodes straight into existing columns from index at
  *   (each sized for every record that can be kept) and returns only { count }
+ *   firstIndex: the file record number of bytes[0] (default 0); the index column holds
+ *   firstIndex + the record's place in bytes
  * @returns {object} PointColumns: { count, <field>: TypedArray, ... }
  */
 export function decodeRecords(bytes, header, opts) {
@@ -93,10 +96,11 @@ export function decodeRecords(bytes, header, opts) {
 	var oy = origin && isFinite(origin.y) ? origin.y : 0;
 	var oz = origin && isFinite(origin.z) ? origin.z : 0;
 	var f32 = !!(opts.float32 && origin);
+	var first = opts.firstIndex > 0 ? opts.firstIndex : 0;
 
 	var into = opts.into || null;
 	var cols = into ? into.cols : {};
-	if (!into) fields.forEach(function (name) { cols[name] = new (columnType(name, opts))(n); });
+	if (!into) fields.forEach(function (name) { cols[name] = new (columnType(name, opts, header))(n); });
 	var F = fmt.fields;
 	var sx = header.scale.x, sy = header.scale.y, sz = header.scale.z;
 	var tx = header.offset.x - ox, ty = header.offset.y - oy, tz = header.offset.z - oz;
@@ -109,6 +113,7 @@ export function decodeRecords(bytes, header, opts) {
 		var at = i * len;
 		if (keep && !keep(view, at)) continue;
 		if (thin && !thinStep(thin)) continue;
+		if (want.index) cols.index[k] = first + i;
 		if (want.x) cols.x[k] = view.getInt32(at, LE) * sx + tx;
 		if (want.y) cols.y[k] = view.getInt32(at + 4, LE) * sy + ty;
 		if (want.z) cols.z[k] = view.getInt32(at + 8, LE) * sz + tz;
@@ -154,9 +159,11 @@ export function decodeRecords(bytes, header, opts) {
  * when float32 is asked for with a local origin).
  * @param {string} name
  * @param {{float32?:boolean, localOrigin?:object}} [opts]
+ * @param {{pointCount?:number}} [header] - index is Float64 when the file holds more than 4294967295 points
  * @returns {Function}
  */
-export function columnType(name, opts) {
+export function columnType(name, opts, header) {
+	if (name === "index") return header && header.pointCount > 4294967295 ? Float64Array : Uint32Array;
 	var f32 = !!(opts && opts.float32 && opts.localOrigin);
 	return f32 && (name === "x" || name === "y" || name === "z") ? Float32Array : FIELD_TYPES[name];
 }
