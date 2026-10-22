@@ -157,10 +157,17 @@ its own spec.
   a selection for `removePoints`; then `dedupe` with an index map. In memory only.
 - **0.6.x — streamed sparse filter:** a whole file larger than memory, tile by tile with a
   neighbour margin, written to a new LAS / LAZ.
-- **0.7.0 — registration:** GCP registration, then ICP-style scan-to-surface alignment.
-- **0.8.0 — facets and joint sets** (as CloudCompare's facet tool): normals, planar region
-  growing, dip / dip direction per facet, families by orientation; per-point facet and family
-  columns ("tags"), facet and family tables, written back as LAS 1.4 extra bytes.
+Roadmap revised 2026-10-22 (Brent): denoise first, as scans are fuzzy; facets next, as they
+reuse its normals; registration after.
+- **0.7.0 — denoise (spec `2026-10-22-denoise-0.7.0-design.md`):** `nearestPoints`
+  (k nearest), `selectOutliers` (PDAL's statistical outlier rule), `pointNormals` /
+  `estimateNoise`, and `denoisePoints` (bilateral, edge-preserving, by default; MLS plane fit).
+- **0.8.0 — facets and joint sets** (as CloudCompare's facet tool): planar region growing on
+  0.7.0's normals and residuals, dip / dip direction per facet, families by orientation;
+  per-point facet and family columns ("tags"); facet and family tables, each facet with its
+  outline as a closed 3D polygon on its plane (traced from an in-plane grid, no
+  triangulation); written back as LAS 1.4 extra bytes.
+- **0.9.0 — registration:** GCP registration, then ICP-style scan-to-surface alignment.
 
 ## 7. Out of scope
 
