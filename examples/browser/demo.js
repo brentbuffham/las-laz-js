@@ -11,7 +11,8 @@
 
 import {
 	VERSION, writeLas, openLas, colourize, POINT_FORMATS,
-	selectPolygon, selectBox, selectClasses, selectSparse, unionSelections,
+	selectPolygon, selectBox, selectClasses, selectSparse, selectOutliers, unionSelections,
+	estimateNoise, denoisePoints, pointNormals,
 	keepPoints, removePoints, splitPoints, mergePoints, interleavePositions, thinSelection,
 	makeTransform, transformPoints
 } from "../../src/index.js";
@@ -131,6 +132,8 @@ var ext = null;        // the cloud's local extent { minX … maxZ, midZ }
 // indices drawn (null: every point), drawn the columns colourize needs for just those points.
 // Selections and edits always act on the whole cloud in memory.
 var drawnIdx = null, drawn = null;
+var roughness = null;      // the drawn points' residuals for the Roughness colour, made on demand
+var beforeSmooth = null;   // the cloud before the last Smooth, for Undo smooth
 
 // Decode out of sight (the library's worker, its chunks on every core), show progress, then
 // build the cloud once. Only the read filters (classes, returns, bounds, max points, dedupe)
@@ -162,6 +165,7 @@ async function read(crop, note) {
 	});
 	try {
 		cloud = lastRead = await readJob.promise;
+		beforeSmooth = null;
 		readCrop = crop || null;
 		edited = false; transformed = false; selection = null; splitAt = -1;
 		var secs = (performance.now() - t0) / 1000;
@@ -198,6 +202,7 @@ function display(refit) {
 		["x", "y", "z", "red", "green", "blue", "intensity", "classification"].forEach(function (k) { if (cloud[k]) part[k] = cloud[k]; });
 		drawn = keepPoints(part, drawnIdx);
 	}
+	roughness = null;
 	viewer.addChunk(interleavePositions(drawn), colours(), DRAW_CAP);
 	if (refit) viewer.fit();
 	ext = extent(cloud);
@@ -206,13 +211,25 @@ function display(refit) {
 // The normal colours, then the Split view's outside part dimmed grey and the selection yellow
 function colours() {
 	if ($("colourBy").value === "rgb" && !cloud.red) $("colourBy").value = "elevation";   // this format holds no colour
-	var c = colourize(drawn, colourOpts());
+	var c = $("colourBy").value === "roughness" ? roughColours() : colourize(drawn, colourOpts());
 	for (var j = 0; j < drawn.count; j++) {
 		var i = drawnIdx ? drawnIdx[j] : j;
 		if (splitAt >= 0 && i >= splitAt) for (var d = j * 3; d < j * 3 + 3; d++) c[d] = 70 + c[d] * 0.2;
 	}
 	onScreen(selection).forEach(function (j) { c[j * 3] = 255; c[j * 3 + 1] = 214; c[j * 3 + 2] = 0; });
 	return c;
+}
+
+// Roughness: the residual of each drawn point's plane fit on the ramp, 0 to its 98th percentile
+// (fewer than 3 neighbours: 0). Over the draw cap it is fitted on the drawn spread only.
+function roughColours() {
+	if (!roughness) {
+		var r = pointNormals(drawn, { k: Number($("smoothK").value) || 16, maxDistance: Number($("smoothMaxDist").value) || 0.3 }).residual;
+		roughness = new Float32Array(r.length);
+		for (var i = 0; i < r.length; i++) roughness[i] = r[i] === r[i] ? r[i] : 0;
+	}
+	var sorted = Float32Array.from(roughness).sort(), hi = sorted[Math.floor(0.98 * (sorted.length - 1))] || 1;
+	return colourize({ count: drawn.count, z: roughness }, { by: "elevation", ramp: $("ramp").value, range: [0, hi] });
 }
 
 // The drawn positions of the selected points (a merge of two ascending lists)
@@ -421,6 +438,8 @@ function edit(name, make) {
 	var ms = since(t0);
 	cloud = out.cloud;
 	edited = true;
+	// Undo smooth goes back exactly one Smooth; any other edit ends that
+	beforeSmooth = null; $("undoSmoothButton").disabled = true;
 	if (out.transformed) transformed = true;
 	if (!out.keep) { selection = null; splitAt = -1; }
 	if (out.splitAt !== undefined) splitAt = out.splitAt;
@@ -432,6 +451,41 @@ function edit(name, make) {
 function needSelection() {
 	if (!selection) throw new Error("select points first (Inside polygon, In box or Classes)");
 	return selection;
+}
+function smoothOpts() {
+	var sigma = $("smoothSigma").value.trim();
+	return { method: $("smoothMethod").value, k: Number($("smoothK").value), maxDistance: Number($("smoothMaxDist").value), sigma: sigma === "" ? undefined : Number(sigma), iterations: Number($("smoothIter").value) };
+}
+function measureNoise() {
+	if (!cloud) return;
+	var o = smoothOpts(), t0 = performance.now(), s;
+	try { s = estimateNoise(cloud, { k: o.k, maxDistance: o.maxDistance }); } catch (err) { setStatus("Measure noise: " + err.message, true); return; }
+	if (s === s) $("smoothSigma").value = Number(s.toFixed(4));
+	setStatus("Noise: " + (s === s ? (s * 100).toFixed(2) + " cm" : "too few neighbours to measure (raise the max distance)") + " in " + since(t0) + " ms");
+}
+// Every point read moves; the selection and the Split view still apply (the points are the same)
+function smooth() {
+	setStatus("Smoothing " + fmt(cloud.count) + " points…");
+	requestAnimationFrame(function () { setTimeout(function () {
+		var prior = cloud;
+		edit("Smooth", function () {
+			var o = smoothOpts(), noise = o.sigma !== undefined ? o.sigma : estimateNoise(cloud, { k: o.k, maxDistance: o.maxDistance });
+			var out = denoisePoints(cloud, Object.assign({}, o, { sigma: noise > 0 ? noise : undefined }));
+			var after = estimateNoise(out, { k: o.k, maxDistance: o.maxDistance }), moved = 0;
+			for (var i = 0; i < out.count; i++) if (out.x[i] !== cloud.x[i] || out.y[i] !== cloud.y[i] || out.z[i] !== cloud.z[i]) moved++;
+			// a point needs 5 neighbours within the max distance to move
+			var hint = moved < 0.5 * out.count ? " — most points have fewer than 5 neighbours within " + o.maxDistance + " m: raise the max distance" : "";
+			return { cloud: out, keep: true, note: " · " + fmt(moved) + " moved, noise " + (noise * 100).toFixed(2) + " cm → " + (after * 100).toFixed(2) + " cm (" + o.method + ")" + hint };
+		});
+		if (cloud !== prior) { beforeSmooth = prior; $("undoSmoothButton").disabled = false; }
+	}, 0); });
+}
+function undoSmooth() {
+	if (!beforeSmooth) return;
+	var prior = beforeSmooth;
+	edit("Undo smooth", function () { return { cloud: prior, keep: true }; });
+	beforeSmooth = null;
+	$("undoSmoothButton").disabled = true;
 }
 function keepSelected() { edit("Keep selected", function () { return { cloud: keepPoints(cloud, needSelection()) }; }); }
 function deleteSelected() { edit("Delete selected", function () { return { cloud: removePoints(cloud, needSelection()) }; }); }
@@ -464,7 +518,8 @@ function reset() {
 	if (!lastRead) return;
 	var before = cloud.count, t0 = performance.now();
 	cloud = lastRead;
-	edited = false; transformed = false; selection = null; splitAt = -1;
+	edited = false; transformed = false; selection = null; splitAt = -1; beforeSmooth = null;
+	$("undoSmoothButton").disabled = true;
 	display(false);
 	showStats();
 	showSelection();
@@ -473,6 +528,7 @@ function reset() {
 
 function editEnabled(on) {
 	document.querySelectorAll("#tab-edit button").forEach(function (b) { b.disabled = !on; });
+	$("undoSmoothButton").disabled = !on || !beforeSmooth;
 	if (!on && drawing) setDrawing(false);
 }
 
@@ -594,6 +650,13 @@ $("selClassesButton").addEventListener("click", function () { select("Classes", 
 $("selSparseButton").addEventListener("click", function () {
 	select("Sparse points", function () { return selectSparse(cloud, { radius: Number($("sparseRadius").value), minNeighbours: Number($("sparseMin").value) }); });
 });
+$("selOutliersButton").addEventListener("click", function () {
+	select("Outliers", function () { return selectOutliers(cloud, { k: Number($("outlierK").value), multiplier: Number($("outlierMult").value) }); });
+});
+$("measureNoiseButton").addEventListener("click", measureNoise);
+$("smoothButton").addEventListener("click", smooth);
+$("undoSmoothButton").addEventListener("click", undoSmooth);
+["smoothK", "smoothMaxDist"].forEach(function (id) { $(id).addEventListener("change", function () { roughness = null; if ($("colourBy").value === "roughness") recolour(); }); });
 $("clearSelButton").addEventListener("click", clearSelection);
 $("keepButton").addEventListener("click", keepSelected);
 $("deleteButton").addEventListener("click", deleteSelected);
