@@ -75,10 +75,16 @@ test("count 0 and 1, and k above the count", function () {
 });
 
 test("every left point is at most its node's split, every right point at least", function () {
-	var c = randomCloud(5000, { seed: 9, kind: "clustered" }), tree = buildKdTree(c, "t"), at = pointReader(c);
+	var c = randomCloud(5000, { seed: 9, kind: "clustered" }), at = pointReader(c);
+	for (var i = 0; i < 300; i++) { c.x[i] = 7; c.y[i] = 8; c.z[i] = 9; }   // a cluster, for uniform nodes
+	var tree = buildKdTree(c, "t");
 	var bad = 0;
 	(function walk(node, lo, hi) {
 		if (hi - lo <= tree.leafSize) return;
+		if (tree.axis[node] === 3) {   // uniform: one point, numbers ascending
+			for (var u = lo + 1; u < hi; u++) if (tree.perm[u] < tree.perm[u - 1] || at(tree.perm[u]).join() !== at(tree.perm[lo]).join()) bad++;
+			return;
+		}
 		var mid = Math.floor((lo + hi) / 2), a = tree.axis[node], s = tree.split[node];
 		for (var j = lo; j < mid; j++) if (at(tree.perm[j])[a] > s) bad++;
 		for (j = mid; j < hi; j++) if (at(tree.perm[j])[a] < s) bad++;
@@ -101,4 +107,19 @@ test("bad columns are refused, naming the caller", function () {
 	assert.throws(function () { buildKdTree({ count: 2, x: new Float64Array(2), y: new Float64Array(2) }, "selectOutliers"); }, { code: "INVALID_ARGUMENT", message: /selectOutliers needs x, y, z/ });
 	var c = { count: 3, x: new Float64Array([0, NaN, 1]), y: new Float64Array(3), z: new Float64Array(3) };
 	assert.throws(function () { buildKdTree(c, "t"); }, { code: "INVALID_ARGUMENT", message: /point 1 has a non-finite x/ });
+});
+
+test("a cluster of 20,000 coincident points stays fast (ties need not visit every copy)", function () {
+	// 20,000 copies of one point among 20,000 others: every copy ties, and the lowest numbers
+	// win, so a search that cannot rule out a tie visits all 20,000 (quadratic over the cloud)
+	var r = rng(12), n = 40000, c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n) };
+	for (var i = 0; i < n; i++) if (i % 2) { c.x[i] = r() * 50; c.y[i] = r() * 50; c.z[i] = r() * 5; } else { c.x[i] = 25; c.y[i] = 25; c.z[i] = 2; }
+	var tree = buildKdTree(c, "t"), P = new Uint32Array(8), D = new Float64Array(8);
+	var t0 = performance.now();
+	for (i = 0; i < n; i++) kdNearest(tree, c.x[i], c.y[i], c.z[i], 8, Infinity, i, P, D);
+	var ms = performance.now() - t0;
+	if (!process.env.NODE_V8_COVERAGE) assert.ok(ms < 500, "40,000 searches took " + Math.round(ms) + " ms");
+	// and still the lowest-numbered copies
+	assert.equal(kdNearest(tree, 25, 25, 2, 8, Infinity, 0, P, D), 8);
+	assert.deepEqual(Array.from(P), [2, 4, 6, 8, 10, 12, 14, 16]);
 });

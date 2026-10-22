@@ -8,7 +8,10 @@
 // on the axis of the node's largest extent, with every left point at
 // most the split value and every right point at least it. A node
 // stores its axis (a byte) and split value (a Float64), in heap order.
-// Leaves hold up to 16 points. About 4.6 bytes a point. Distances are checked in Float64 and pruning compares the
+// Leaves hold up to 16 points. About 4.6 bytes a point. A node whose
+// points all coincide (zero extent) is not split: its point numbers are
+// sorted (axis UNIFORM) and a search offers only the lowest ones, so a
+// cluster of exact duplicates costs k, not its size, per search. Distances are checked in Float64 and pruning compares the
 // same rounded differences, so results are exact; ties go to the
 // lowest point number.
 //==========================================================
@@ -16,7 +19,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf, checkPointCount } from "./grid.js";
 
-var LEAF = 16;
+var LEAF = 16, UNIFORM = 3;
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -70,6 +73,12 @@ export function buildKdTree(cols, fn) {
 			for (var j = lo; j < hi; j++) { var v = V[perm[j] * st]; if (v < mn) mn = v; if (v > mx) mx = v; }
 			if (mx - mn > ext) { ext = mx - mn; best = ax; }
 		}
+		if (ext === 0) {
+			// every point here is the same point: sort by number and stop
+			perm.subarray(lo, hi).sort();
+			axis[node] = UNIFORM;
+			continue;
+		}
 		axis[node] = best;
 		var mid = Math.floor((lo + hi) / 2);
 		select(lo, hi, mid, A[best]);
@@ -116,7 +125,20 @@ function search(node, lo, hi) {
 		}
 		return;
 	}
-	var mid = Math.floor((lo + hi) / 2), a = T.axis[node];
+	var a = T.axis[node];
+	if (a === UNIFORM) {
+		// one distance for all, numbers ascending: once the heap is full, the rest lose
+		var u = perm[lo] * ST, ux = X[u] - Q[0], uy = Y[u] - Q[1], uz = Z[u] - Q[2], du = ux * ux + uy * uy + uz * uz;
+		if (du > MAXD2) return;
+		for (var i = lo; i < hi; i++) {
+			var q = perm[i];
+			if (q === SKIP) continue;
+			if (M === K && (du > D[0] || (du === D[0] && q > P[0]))) return;
+			offer(q, du);
+		}
+		return;
+	}
+	var mid = Math.floor((lo + hi) / 2);
 	var diff = Q[a] - T.split[node];
 	// The far side's points are at least |diff| away on this axis
 	if (diff < 0) {
