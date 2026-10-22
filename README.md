@@ -270,7 +270,8 @@ A handheld scan reads a flat bench as a band centimetres thick. Remove the stray
   **`estimateNoise`** is the median residual over up to 100,000 points spread through the cloud.
 
 On a 1 M-point handheld scan (Node, one thread): `selectOutliers` 2.5 s, `estimateNoise` 0.7 s,
-`pointNormals` 4.6 s, `denoisePoints` 6.3 s, taking the measured noise from 0.60 cm to 0.11 cm.
+`pointNormals` 4.6 s, `denoisePoints` 6.3 s, taking the measured noise from 0.60 cm to 0.11 cm. On a
+34 M-point scan: 2.1 min, 14 s, 3.2 min and 3.7 min (about 6.5 µs a point), noise 0.74 cm to 0.58 cm.
 The searches run on a k-d tree (about 4.6 bytes a point); an output's coordinates cost what the
 input's do. The calls are synchronous; for a big scan, run them in a Worker and pass
 `onProgress(done, total)`.

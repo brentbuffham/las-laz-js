@@ -21,7 +21,9 @@ Denoise: stray points, normals and smoothing, for fuzzy handheld scans.
   0.6.0 voxel index, nearest first, ties to the lowest number.
 - The denoise tools search an implicit k-d tree (about 4.6 bytes a point), which suits a scan's
   thousand-fold changes of density. On a 1 M-point handheld scan (Node): `selectOutliers` 2.5 s,
-  `pointNormals` 4.6 s, `denoisePoints` 6.3 s, the measured noise going from 0.60 cm to 0.11 cm.
+  `pointNormals` 4.6 s, `denoisePoints` 6.3 s, the measured noise going from 0.60 cm to 0.11 cm; on a
+  34 M-point scan, `denoisePoints` takes about 3.7 min. A cluster of exact duplicates costs a search k
+  points, not the cluster's size.
 - Demo: a Denoise section on the Edit tab and a Roughness colour mode.
 
 ## 0.6.2 (2026-10-22)
