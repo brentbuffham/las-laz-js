@@ -209,4 +209,111 @@ function nearestByScan(index, q, xy, maxD2, best, bd) {
 	return best;
 }
 
+/**
+ * Every point near a ray: within radius + growth · t of its axis, where t >= 0 is the
+ * point's distance along it (growth 0: a cylinder, as an orthographic view's pick ray;
+ * growth > 0: a cone, as a perspective camera's, growth = tan of the half-angle).
+ * The snap rules (front-most, priorities) are the caller's: pick from t and d.
+ * @param {object} index - PointIndex from buildIndex.
+ * @param {number[]} origin - [x, y, z].
+ * @param {number[]} direction - [x, y, z], any length > 0.
+ * @param {{radius: number, growth?: number, maxT?: number}} opts - maxT omitted: unlimited.
+ * @returns {{points: Uint32Array, t: Float64Array, d: Float64Array}} points ascending; t, d parallel
+ */
+export function pointsNearRay(index, origin, direction, opts) {
+	checkIndex(index, "pointsNearRay");
+	var o = checkPoint(origin, false, "origin");
+	var dir = checkPoint(direction, false, "direction");
+	var len = Math.sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+	if (!(len > 0 && isFinite(len))) throw bad("direction must not be zero");
+	var u = [dir[0] / len, dir[1] / len, dir[2] / len];
+	opts = opts || {};
+	checkPositive(opts.radius, "radius");
+	var growth = opts.growth === undefined ? 0 : opts.growth;
+	if (!(fin(growth) && growth >= 0)) throw bad("growth must be a finite number >= 0, not " + String(growth));
+	checkPositive(opts.maxT, "maxT", true);
+	var radius = opts.radius, maxT = opts.maxT;
+	var points = [], ts = [], ds = [];
+	var co = index.coords, X = co.x, Y = co.y, Z = co.z, st = co.stride, order = index.order;
+
+	function check(s) {
+		for (var j = index.start[s], e = j + index.length[s]; j < e; j++) {
+			var p = order[j], q = p * st;
+			var vx = X[q] - o[0], vy = Y[q] - o[1], vz = Z[q] - o[2];
+			var t = vx * u[0] + vy * u[1] + vz * u[2];
+			if (t < 0 || (maxT !== undefined && t > maxT)) continue;
+			var cx = vy * u[2] - vz * u[1], cy = vz * u[0] - vx * u[2], cz = vx * u[1] - vy * u[0];
+			var d = Math.sqrt(cx * cx + cy * cy + cz * cz);
+			if (d <= radius + growth * t) { points.push(p); ts.push(t); ds.push(d); }
+		}
+	}
+
+	if (index.count > 0) walk();
+	var idx = points.map(function (_, i) { return i; }).sort(function (a, b) { return points[a] - points[b]; });
+	return {
+		points: Uint32Array.from(idx, function (i) { return points[i]; }),
+		t: Float64Array.from(idx, function (i) { return ts[i]; }),
+		d: Float64Array.from(idx, function (i) { return ds[i]; })
+	};
+
+	function walk() {
+		var cs = index.cellSize, m = index.min, n = dims(index);
+		var lo = [m[0], m[1], m[2]], hi = [m[0] + n[0] * cs, m[1] + n[1] * cs, m[2] + n[2] * cs];
+		// No point has a t beyond the far side of the grid's bounding sphere
+		var half = 0, dc = 0;
+		for (var a = 0; a < 3; a++) { var e = (hi[a] - lo[a]) / 2, w = (lo[a] + hi[a]) / 2 - o[a]; half += e * e; dc += w * w; }
+		var T = Math.sqrt(dc) + Math.sqrt(half);
+		if (maxT !== undefined && maxT < T) T = maxT;
+		var R = radius + growth * T + cs * EPS;
+		// Clip [0, T] to where the ray is within R of the grid's box (slab method)
+		var t0 = 0, t1 = T;
+		for (a = 0; a < 3; a++) {
+			if (u[a] === 0) {
+				if (o[a] < lo[a] - R || o[a] > hi[a] + R) return;
+				continue;
+			}
+			var ta = (lo[a] - R - o[a]) / u[a], tb = (hi[a] + R - o[a]) / u[a];
+			if (ta > tb) { var sw = ta; ta = tb; tb = sw; }
+			if (ta > t0) t0 = ta;
+			if (tb < t1) t1 = tb;
+		}
+		if (t0 > t1) return;
+		// Many more cells along the way than occupied cells: test each occupied cell once
+		var across = 2 * R / cs + 1;
+		if (((t1 - t0) / cs + 1) * across * across > index.keys.length) return scanCells();
+		var seen = new Set();
+		for (var t = t0; t <= t1; t += cs) {
+			var t2 = Math.min(t + cs, t1), rr = radius + growth * t2;
+			var bl = [0, 0, 0], bh = [0, 0, 0];
+			for (a = 0; a < 3; a++) {
+				var pa = o[a] + t * u[a], pb = o[a] + t2 * u[a];
+				var r = cellRange(index, a, Math.min(pa, pb) - rr, Math.max(pa, pb) + rr);
+				bl[a] = r[0]; bh[a] = r[1];
+			}
+			visitBox(index, bl, bh, function (s) {
+				if (seen.has(s)) return;
+				seen.add(s);
+				check(s);
+			});
+			if (t2 >= t1) break;
+		}
+	}
+
+	// A cell can hold an answer only if its centre is near enough: every point is
+	// within hd of the centre, so its t and d differ from the centre's by at most hd
+	function scanCells() {
+		var cs = index.cellSize, m = index.min, keys = index.keys, hd = cs * Math.sqrt(3) / 2 + cs * EPS;
+		for (var s = 0; s < keys.length; s++) {
+			if (keys[s] < 0) continue;
+			var c = decode(index, keys[s]);
+			var vx = m[0] + (c[0] + 0.5) * cs - o[0], vy = m[1] + (c[1] + 0.5) * cs - o[1], vz = m[2] + (c[2] + 0.5) * cs - o[2];
+			var tc = vx * u[0] + vy * u[1] + vz * u[2];
+			if (tc + hd < 0 || (maxT !== undefined && tc - hd > maxT)) continue;
+			var cx = vy * u[2] - vz * u[1], cy = vz * u[0] - vx * u[2], cz = vx * u[1] - vy * u[0];
+			if (Math.sqrt(cx * cx + cy * cy + cz * cz) - hd > radius + growth * Math.max(0, tc + hd)) continue;
+			check(s);
+		}
+	}
+}
+
 export { checkPoint, checkPositive, cellRange, cellDist2 };

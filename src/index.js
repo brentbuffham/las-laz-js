@@ -18,7 +18,7 @@ export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords
 export { makeKeep, countKept } from "./filter/filters.js";
 export { dedupe } from "./filter/dedupe.js";
 export { buildIndex } from "./index/grid.js";
-export { pointsInRadius, nearestPoint } from "./index/query.js";
+export { pointsInRadius, nearestPoint, pointsNearRay } from "./index/query.js";
 export { selectBox, selectPolygon, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
 export { keepPoints, removePoints, splitPoints, mergePoints } from "./ops/apply.js";
 export { makeTransform, transformPoints } from "./ops/transform.js";
