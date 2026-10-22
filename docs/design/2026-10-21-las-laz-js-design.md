@@ -150,12 +150,15 @@ its own spec.
 - **0.5.0 — selections and column operations (shipped 2026-10-22; spec `2026-10-22-selections-ops-0.5.0-design.md`).** Crop by box / polygon, keep or delete by point
   indices, split / merge, class filters, the pre-transform (#131), the thinning selector
   exported, original-index tracking, interleaved local-origin output into caller buffers.
-- **0.6.0 — voxel index and noise filter.** Nearest-point and radius queries on a flat
-  typed-array grid; first on it, a noise filter (Brent, 2026-10-22: dust in pit scans):
-  radius-outlier and statistical-outlier selections, returned as selections for
-  `removePoints`, with defaults that keep thin sparse features such as scanned blastholes;
-  then `dedupe` with an index map; GCP registration, then ICP-style scan-to-surface alignment.
-- **0.7.0 — facets and joint sets** (as CloudCompare's facet tool): normals, planar region
+- **0.6.0 — voxel index and sparse-point filter (spec `2026-10-22-voxel-index-sparse-0.6.0-design.md`).**
+  A sorted voxel grid on flat typed arrays with nearest, radius and near-ray queries (Kirra's
+  snap rules use them; the rules stay in Kirra); first on it, `selectSparse` (Brent,
+  2026-10-22: dust in pit scans) — points with too few neighbours within a radius, returned as
+  a selection for `removePoints`; then `dedupe` with an index map. In memory only.
+- **0.6.x — streamed sparse filter:** a whole file larger than memory, tile by tile with a
+  neighbour margin, written to a new LAS / LAZ.
+- **0.7.0 — registration:** GCP registration, then ICP-style scan-to-surface alignment.
+- **0.8.0 — facets and joint sets** (as CloudCompare's facet tool): normals, planar region
   growing, dip / dip direction per facet, families by orientation; per-point facet and family
   columns ("tags"), facet and family tables, written back as LAS 1.4 extra bytes.
 
