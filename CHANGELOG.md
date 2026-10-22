@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.7.0 (2026-10-22)
+
+Denoise: stray points, normals and smoothing, for fuzzy handheld scans.
+
+- `selectOutliers(cols, { k = 8, multiplier = 2 })` selects stray points by PDAL's statistical
+  outlier rule (a point's mean distance to its k nearest above the cloud's average plus
+  `multiplier` standard deviations), for `removePoints`. Checked point for point against PDAL's
+  `filters.outlier` `method=statistical`.
+- `denoisePoints(cols, { method, k = 16, maxDistance, sigma, iterations = 1, normals, inPlace })`
+  smooths the points against their neighbours (the other points among the k nearest within
+  `maxDistance`, which is required): `"bilateral"` (default) moves each point along its normal
+  and keeps crests sharp; `"mls"` moves it onto its neighbours' fitted plane. The noise level
+  `sigma` is measured unless given. Returns columns as `transformPoints` does; `normals: true`
+  adds a `normal` column.
+- `pointNormals(cols, { k = 16, maxDistance })` → `{ normal, residual }`: unit normals (pointing
+  up) and each point's RMS distance from its fitted plane; `estimateNoise` is the median residual
+  over up to 100,000 points.
+- `nearestPoints(index, point, k, { maxDistance, xy })` → `{ points, d }`: the k nearest on the
+  0.6.0 voxel index, nearest first, ties to the lowest number.
+- The denoise tools search an implicit k-d tree (about 4.6 bytes a point), which suits a scan's
+  thousand-fold changes of density. On a 1 M-point handheld scan (Node): `selectOutliers` 2.5 s,
+  `pointNormals` 4.6 s, `denoisePoints` 6.3 s, the measured noise going from 0.60 cm to 0.11 cm.
+- Demo: a Denoise section on the Edit tab and a Roughness colour mode.
+
 ## 0.6.2 (2026-10-22)
 
 - `dedupe` and `dedupeSelection` handle more than 16,777,216 occupied cells. They used a

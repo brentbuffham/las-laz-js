@@ -29,6 +29,12 @@
 //    neighbour of every point, so a dense crop at 2 m runs out of memory.
 //    LAS_SPARSE_SAMPLE=<path> adds one more file to this check only (a
 //    scan too big for every check above), as id "sparse1"
+//  - (0.7.0) denoise on a 10 m × 10 m crop around each sample's centre
+//    (at most 200 000 points; sparse1 too): selectOutliers, estimateNoise
+//    (k 16, maxDistance 0.3), denoisePoints, then estimateNoise of the
+//    result is lower (a crop too sparse to measure is left unmoved);
+//    with LAS_PDAL set, PDAL's statistical outlier filter flags the same
+//    points as selectOutliers
 // Skipped, loudly, when there are no samples.
 //==========================================================
 /* prettier-ignore-file */
@@ -47,7 +53,10 @@ import { selectSparse } from "../src/ops/sparse.js";
 import { buildIndex } from "../src/index/grid.js";
 import { keepPoints } from "../src/ops/apply.js";
 import { thinSelection } from "../src/ops/select.js";
-import { pdalRadiusOutlier } from "./helpers/pdalOutlier.js";
+import { pdalRadiusOutlier, pdalStatisticalOutlier } from "./helpers/pdalOutlier.js";
+import { selectOutliers } from "../src/ops/outliers.js";
+import { estimateNoise } from "../src/ops/normals.js";
+import { denoisePoints } from "../src/ops/denoise.js";
 
 var samples = findSamples();
 
@@ -179,5 +188,24 @@ sparseSamples.forEach(function (s) {
 		var ours = Array.from(selectSparse(res.cols, { radius: R - 1e-9 }));
 		if (ours.length === res.cols.count) return;   // PDAL flags none then
 		assert.deepEqual(ours, res.flagged, s.id + ": PDAL and selectSparse disagree");
+	});
+});
+
+sparseSamples.forEach(function (s) {
+	test(s.id + ": denoise on a 10 m crop" + (process.env.LAS_PDAL ? ", outliers against PDAL" : ""), { timeout: 900000 }, async function () {
+		var las = await openLas(s.path), b = las.header.bounds;
+		var cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+		var crop = await las.readPoints({ fields: ["x", "y", "z"], polygon: [cx - 5, cy - 5, cx + 5, cy - 5, cx + 5, cy + 5, cx - 5, cy + 5], maxPoints: 200000 });
+		await las.close();
+		var t = performance.now(), out = selectOutliers(crop), tOut = Math.round(performance.now() - t);
+		var o = { maxDistance: 0.3 }, before = estimateNoise(crop, o);
+		t = performance.now();
+		var smooth = denoisePoints(crop, o), tSmooth = Math.round(performance.now() - t), after = estimateNoise(smooth, o);
+		console.log("# " + s.id + ": " + crop.count + " points in the crop, " + out.length + " outliers (" + tOut + " ms); noise " + (before * 100).toFixed(2) + " cm → " + (after * 100).toFixed(2) + " cm (denoise " + tSmooth + " ms)");
+		if (before > 0) assert.ok(after < before, s.id + ": noise " + before + " → " + after);
+		else assert.deepEqual(Array.from(smooth.z), Array.from(crop.z));
+		if (!process.env.LAS_PDAL || crop.count < 20) return;
+		var res = await pdalStatisticalOutlier(process.env.LAS_PDAL, crop, 8, 2);
+		assert.deepEqual(Array.from(selectOutliers(res.cols)), res.flagged, s.id + ": PDAL and selectOutliers disagree");
 	});
 });

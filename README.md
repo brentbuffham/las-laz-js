@@ -40,7 +40,8 @@ library's Worker (LAZ on every core) behind a progress bar, then shown once in a
 colour changes recolour the points already read, without reading the file again. The side panel shows the header, VLRs, coordinate
 system and LAZ compression; reads with class, return, bounds, thinning and dedupe filters;
 colours by RGB, intensity, elevation or class; lists point statistics; selects points by polygon,
-box or class and keeps, deletes, splits, transforms or crops them (the Edit tab); and saves the
+box, class, dust or outliers and keeps, deletes, splits, transforms, smooths or crops them (the
+Edit tab), with a Roughness colour to see the noise; and saves the
 points back out as LAS or LAZ. To run it locally: `npm run demo`, then open http://localhost:8080/.
 
 ## Reading
@@ -235,15 +236,55 @@ cost of thin features. It works on columns in memory (x / y / z, or a k = 3 `pos
 points take about 2 s in Node. With PDAL's `filters.outlier` (`method=radius`), `min_k` is the same
 as `minNeighbours`, but PDAL does not count a point exactly `radius` away.
 
+### Denoise
+
+```js
+import { selectOutliers, removePoints, estimateNoise, denoisePoints, pointNormals } from "las-laz-js";
+
+var strays = selectOutliers(pts);                       // PDAL's statistical rule: k 8, multiplier 2
+var kept   = removePoints(pts, strays);
+var noise  = estimateNoise(kept, { maxDistance: 0.3 }); // e.g. 0.006: 6 mm of fuzz
+var smooth = denoisePoints(kept, { maxDistance: 0.3 }); // bilateral; { method: "mls" } for the plane fit
+var { normal, residual } = pointNormals(smooth, { maxDistance: 0.3 });   // unit normals, local roughness
+```
+
+A handheld scan reads a flat bench as a band centimetres thick. Remove the stray points first
+(`selectOutliers`), so they cannot pull the surface, then smooth what is left (`denoisePoints`).
+- **`selectOutliers(cols, { k = 8, multiplier = 2 })`** — each point's mean distance to its k
+  nearest other points; a point is selected when that mean is above the cloud's average of those
+  means plus `multiplier` standard deviations. It is PDAL's `filters.outlier` `method=statistical`
+  and selects the same points.
+- **`denoisePoints(cols, { method, k = 16, maxDistance, sigma, iterations = 1, normals, inPlace })`**
+  moves each point against its neighbours — the other points among its k nearest within
+  `maxDistance` (required: about 0.2–0.5 m for a handheld scan; a point with fewer than 5 stays
+  put). `"bilateral"` (the default) moves a point along its normal by the weighted height of its
+  neighbours above its plane, and nearly ignores points far off that plane, so a crest or a toe
+  stays sharp. `"mls"` moves it onto the plane fitted to its neighbours: a little smoother, and
+  it rounds edges and the top of a cone. `sigma` is the noise level in metres; omitted, it is
+  measured (`estimateNoise`). More `iterations`, or a larger `k`, smooth more. The result is
+  as `transformPoints` returns: new x, y, z (or `positions`) of the input's types, every other
+  column shared; `normals: true` adds a `normal` column.
+- **`pointNormals`** gives each point the unit normal of the plane through it and its neighbours
+  (pointing up) and the residual, the RMS distance of those points from the plane: a roughness
+  map. Fewer than 3 neighbours, or points all on one line: normal (0, 0, 0), residual NaN.
+  **`estimateNoise`** is the median residual over up to 100,000 points spread through the cloud.
+
+On a 1 M-point handheld scan (Node, one thread): `selectOutliers` 2.5 s, `estimateNoise` 0.7 s,
+`pointNormals` 4.6 s, `denoisePoints` 6.3 s, taking the measured noise from 0.60 cm to 0.11 cm.
+The searches run on a k-d tree (about 4.6 bytes a point); an output's coordinates cost what the
+input's do. The calls are synchronous; for a big scan, run them in a Worker and pass
+`onProgress(done, total)`.
+
 ### Neighbour index
 
 ```js
-import { buildIndex, nearestPoint, pointsInRadius, pointsNearRay } from "las-laz-js";
+import { buildIndex, nearestPoint, nearestPoints, pointsInRadius, pointsNearRay } from "las-laz-js";
 
 var index = buildIndex(pts);                              // or { cellSize: 0.5 }; omitted: ~16 points a cell
 var i     = nearestPoint(index, [x, y, z]);               // point number, or -1
 var j     = nearestPoint(index, [x, y], { xy: true, maxDistance: 0.3 });   // nearest in plan, within 0.3
 var near  = pointsInRadius(index, [x, y, z], 5);          // a selection
+var knn   = nearestPoints(index, [x, y, z], 8);           // { points, d }: the 8 nearest, nearest first
 var hit   = pointsNearRay(index, origin, direction, { radius: 0.2, growth: 0 });
 // hit = { points, t, d }: every point within radius + growth · t of the ray, t along it, d from its axis
 ```
