@@ -4,7 +4,9 @@
 // Float32 RELATIVE to a local origin (the library's localOrigin
 // option), so UTM-scale coordinates never jitter on the GPU.
 // Each streamed chunk becomes one THREE.Points; hover picks the
-// nearest point under the cursor in screen space.
+// nearest point under the cursor in screen space. The Edit tab draws
+// a polygon on a horizontal plane (planePoint, setOutline) and looks
+// straight down to do it (topView).
 //==========================================================
 
 import * as THREE from "three";
@@ -25,6 +27,11 @@ export function createViewer(container) {
 	var chunks = [];  // { points, positions, count }
 	var drawn = 0;
 	var box = new THREE.Box3();
+	var raycaster = new THREE.Raycaster();
+	var outline = null;   // the polygon being drawn: a Group of its line and vertex dots
+	// drawn over the points (no depth test) so the outline never hides behind them
+	var lineMaterial = new THREE.LineBasicMaterial({ color: 0xff2d95, depthTest: false });
+	var dotMaterial = new THREE.PointsMaterial({ color: 0xff2d95, size: 7, sizeAttenuation: false, depthTest: false });
 
 	function background() {
 		var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -80,6 +87,47 @@ export function createViewer(container) {
 			camera.position.set(centre.x - size * 0.6, centre.y - size * 0.8, centre.z + size * 0.6);
 			camera.near = size / 10000; camera.far = size * 20;
 			camera.updateProjectionMatrix();
+		},
+		/** Look straight down over the cloud's box, north (+Y) up. */
+		topView: function () {
+			if (box.isEmpty()) return;
+			var centre = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+			var size = s.length() || 1;
+			// the height at which the box's X and Y extents fill the view, with a margin
+			var h = Math.max(s.y, s.x / camera.aspect, size * 0.01) / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.1;
+			controls.target.copy(centre);
+			// a hair south of overhead: straight down, camera.up (+Z) would leave the heading undefined
+			camera.position.set(centre.x, centre.y - h * 1e-4, box.max.z + h);
+			camera.near = size / 10000; camera.far = Math.max(size, h) * 20;
+			camera.updateProjectionMatrix();
+			controls.update();
+		},
+		/** Where the cursor's ray meets the horizontal plane at local z: { x, y }, or null when it misses. */
+		planePoint: function (clientX, clientY, z) {
+			var rect = renderer.domElement.getBoundingClientRect();
+			var ndc = new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, -(clientY - rect.top) / rect.height * 2 + 1);
+			raycaster.setFromCamera(ndc, camera);
+			var hit = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 0, 1), -z), new THREE.Vector3());
+			return hit ? { x: hit.x, y: hit.y } : null;
+		},
+		/** Draw the polygon [x0, y0, x1, y1, ...] at local z, closed or open; setOutline([]) removes it. */
+		setOutline: function (xy, z, closed) {
+			if (outline) {
+				scene.remove(outline);
+				outline.children[0].geometry.dispose();
+				outline = null;
+			}
+			var n = xy ? Math.floor(xy.length / 2) : 0;
+			if (!n) return;
+			var pos = new Float32Array(n * 3);
+			for (var i = 0; i < n; i++) { pos[i * 3] = xy[i * 2]; pos[i * 3 + 1] = xy[i * 2 + 1]; pos[i * 3 + 2] = z; }
+			var geom = new THREE.BufferGeometry();
+			geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+			outline = new THREE.Group();
+			outline.add(new THREE.Points(geom, dotMaterial));
+			if (n >= 2) outline.add(closed ? new THREE.LineLoop(geom, lineMaterial) : new THREE.Line(geom, lineMaterial));
+			outline.children.forEach(function (o) { o.renderOrder = 1; });
+			scene.add(outline);
 		},
 		setPointSize: function (px) { material.size = px; },
 		/** New colours (r,g,b bytes per point, in the order the points were added), in place. */

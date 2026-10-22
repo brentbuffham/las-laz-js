@@ -38,6 +38,7 @@
 			<nav class="tabs" role="tablist">
 				<button class="tab active" data-tab="header" role="tab">Header</button>
 				<button class="tab" data-tab="read" role="tab">Read</button>
+				<button class="tab" data-tab="edit" role="tab">Edit</button>
 				<button class="tab" data-tab="colour" role="tab">Colour</button>
 				<button class="tab" data-tab="stats" role="tab">Stats</button>
 				<button class="tab" data-tab="write" role="tab">Write</button>
@@ -68,6 +69,59 @@
 				</div>
 				<p class="muted small hidden" id="readHint">The read filters changed — press <strong>Read points</strong> to apply them.</p>
 				<p class="muted small">The viewer draws at most <span id="drawCapText">20,000,000</span> points; Max points keeps that many of the points that pass the filters, spread evenly over the file.</p>
+			</div>
+
+			<div class="tab-body hidden" id="tab-edit">
+				<p class="muted small">Selects and edits the points in memory. Every edit makes a copy, so <strong>Reset</strong> goes back to the last read.</p>
+				<h3>Polygon</h3>
+				<div class="row wrap">
+					<button class="button" id="drawButton" disabled title="Click the viewer to add vertices; a drag still orbits">Draw</button>
+					<button class="button" id="finishButton" disabled title="Close the polygon (or double-click)">Finish</button>
+					<button class="button" id="clearPolyButton" disabled>Clear</button>
+					<button class="button" id="topViewButton" disabled title="Look straight down, north up">Top view</button>
+				</div>
+				<p class="muted small" id="polyInfo">Draw, then click the viewer to add vertices (a drag still orbits); double-click or Finish closes it.</p>
+				<div class="form-grid">
+					<label>Boundary
+						<select id="boundary" title="touching keeps points on the edge too; inside only points strictly within">
+							<option value="touching">touching</option>
+							<option value="inside">inside</option>
+						</select>
+					</label>
+					<label>Tolerance (m) <input type="number" id="tolerance" value="0" min="0" step="0.01" title="Points within this distance of an edge count as on the boundary"></label>
+				</div>
+				<h3>Select</h3>
+				<p class="muted small">Each adds to the selection (yellow): the polygon, the Read tab's Bounds min / max, or a list of classes.</p>
+				<div class="row wrap">
+					<button class="button" id="selPolygonButton" disabled>Inside polygon</button>
+					<button class="button" id="selBoxButton" disabled title="The Read tab's Bounds min / max (world coordinates)">In box</button>
+				</div>
+				<div class="row">
+					<input type="text" id="selClasses" placeholder="e.g. 2,6">
+					<button class="button" id="selClassesButton" disabled>Classes</button>
+				</div>
+				<div class="row">
+					<button class="button" id="clearSelButton" disabled>Clear selection</button>
+					<span class="muted small" id="selInfo">nothing selected</span>
+				</div>
+				<h3>Apply</h3>
+				<div class="row wrap">
+					<button class="button" id="keepButton" disabled>Keep selected</button>
+					<button class="button" id="deleteButton" disabled>Delete selected</button>
+					<button class="button" id="splitButton" disabled title="Both parts stay on screen, the outside part dimmed grey">Split</button>
+				</div>
+				<h3>Transform</h3>
+				<div class="form-grid">
+					<label>Shift (m) <input type="text" id="shift" placeholder="x y z" title="Blank values are 0"></label>
+					<label>Rotate Z (°) <input type="number" id="rotateZ" value="0" step="1" title="Anticlockwise, about the cloud's centre"></label>
+					<label>Scale <input type="number" id="scale" value="1" min="0" step="0.1" title="About the cloud's centre"></label>
+				</div>
+				<div class="row"><button class="button" id="transformButton" disabled>Apply transform</button></div>
+				<h3>Crop on read</h3>
+				<p class="muted small">Reads the file again keeping only the points in the polygon (with the boundary and tolerance above and the Read tab's filters); records outside are skipped before they are decoded.</p>
+				<div class="row"><button class="button" id="cropReadButton" disabled>Read inside polygon</button></div>
+				<h3>Reset</h3>
+				<div class="row"><button class="button" id="resetButton" disabled>Reset to last read</button></div>
 			</div>
 
 			<div class="tab-body hidden" id="tab-colour">
@@ -105,12 +159,15 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-write">
-				<p class="muted">Writes the points read (with every field the format holds) as a new LAS file with <code>writeLas</code>, then reads it back to check the round trip. A browser page holds at most <span id="writeCapText">5,000,000</span> points for this, thinned evenly; to write more, stream with <code>createLasWriter</code>.</p>
+				<p class="muted">Writes the points read (with every field the format holds) as a new LAS or LAZ file with <code>writeLas</code>, then reads it back to check the round trip. After an edit it writes the edited cloud instead: the fields read (x y z, class, intensity, return, colour). A browser page holds at most <span id="writeCapText">5,000,000</span> points for this, thinned evenly; to write more, stream with <code>createLasWriter</code>.</p>
 				<label class="field">LAS version
 					<select id="writeVersion"><option>1.2</option><option>1.4</option></select>
 				</label>
 				<label class="field">Point format
 					<select id="writeFormat"></select>
+				</label>
+				<label class="field">Compress (LAZ)
+					<input type="checkbox" id="writeCompress" title="LAZ for point formats 0–3 and 6–8">
 				</label>
 				<div class="row"><button class="button" id="writeButton" disabled>Save as LAS</button></div>
 				<div id="writeResult" class="muted small"></div>
