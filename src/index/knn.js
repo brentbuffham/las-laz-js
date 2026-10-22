@@ -100,7 +100,7 @@ export function knnSearch(index, qx, qy, qz, k, maxD2, skip, outP, outD2, xy) {
 	function offer(p, d) {
 		if (m < k) {
 			P[m] = p; D[m] = d;
-			for (var i = m++; i > 0;) { var up = (i - 1) >> 1; if (!worse(i, up)) break; swap(i, up); i = up; }
+			for (var i = m++; i > 0;) { var up = Math.floor((i - 1) / 2); if (!worse(i, up)) break; swap(i, up); i = up; }
 		} else if (d < D[0] || (d === D[0] && p < P[0])) {
 			P[0] = p; D[0] = d; down(0, m);
 		}
@@ -223,7 +223,7 @@ export function workingIndex(cols, fn, k, maxDistance) {
 		else if (m > 0) dist.push(Math.sqrt(D[m - 1]));
 	}
 	dist.sort(function (u, v) { return u - v; });
-	var cellSize = dist.length ? dist[(dist.length - 1) >> 1] : 0;
+	var cellSize = dist.length ? dist[Math.floor((dist.length - 1) / 2)] : 0;
 	if (maxDistance !== undefined && cellSize > maxDistance) cellSize = maxDistance;
 	if (!(cellSize > 0)) return coarse;
 	// Keep the cell count inside 2^52 (a dense patch at one end of a long span)
