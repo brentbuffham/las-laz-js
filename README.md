@@ -11,7 +11,8 @@ runs in the browser and in Node — and built for files far larger than memory.
   thinning, a polygon crop, a coordinate transform and the original point index; `colourize`
   colours points; `writeLas` and `createLasWriter` write LAS 1.0–1.4.
 - Point operations on columns: select by box, polygon, class or return; keep, remove, split and
-  merge; transform coordinates; interleave positions for a renderer. See Point operations.
+  merge; transform coordinates; interleave positions for a renderer; find sparse points (dust);
+  a voxel neighbour index with nearest, radius and near-ray queries. See Point operations.
 - LAZ: point formats 0–3 and 6–8, read exactly like LAS — the same calls, the same options,
   decoded chunk by chunk in plain JavaScript (no WebAssembly) — and written with
   `compress: true`, byte for byte what PDAL (LAZperf) writes (bar one lossless exception, see
@@ -214,6 +215,57 @@ The origin is subtracted in Float64 before storing, so world coordinates keep th
 Float32 buffer; an axis left out of `origin` is not shifted ({ x, y } keeps world Z). `float32`
 defaults to true and picks the type of a new array; `into` must be a Float32Array or Float64Array
 long enough, else `INVALID_ARGUMENT`.
+
+### Sparse points (dust)
+
+```js
+import { selectSparse, removePoints } from "las-laz-js";
+
+var dust  = selectSparse(pts, { radius: 2 });   // fewer than 1 other point within 2 m
+var clean = removePoints(pts, dust);
+var lone  = selectSparse(pts, { radius: 0.5, minNeighbours: 4, xy: true });   // counted in 2D
+```
+
+A point is sparse when fewer than `minNeighbours` (default 1) **other** points lie within
+`radius` of it, inclusive; `radius` is required, in the columns' units. The result is a selection,
+so it can be shown before anything is deleted. `minNeighbours: 1` keeps any point with a single
+neighbour inside the radius, so thin sparse features — a line of points down a scanned blasthole —
+survive; dust that clumps survives too. A higher `minNeighbours` removes small clumps, at the
+cost of thin features. It works on columns in memory (x / y / z, or a k = 3 `positions`): 34 million
+points take about 2 s in Node. With PDAL's `filters.outlier` (`method=radius`), `min_k` is the same
+as `minNeighbours`, but PDAL does not count a point exactly `radius` away.
+
+### Neighbour index
+
+```js
+import { buildIndex, nearestPoint, pointsInRadius, pointsNearRay } from "las-laz-js";
+
+var index = buildIndex(pts);                              // or { cellSize: 0.5 }; omitted: ~16 points a cell
+var i     = nearestPoint(index, [x, y, z]);               // point number, or -1
+var j     = nearestPoint(index, [x, y], { xy: true, maxDistance: 0.3 });   // nearest in plan, within 0.3
+var near  = pointsInRadius(index, [x, y, z], 5);          // a selection
+var hit   = pointsNearRay(index, origin, direction, { radius: 0.2, growth: 0 });
+// hit = { points, t, d }: every point within radius + growth · t of the ray, t along it, d from its axis
+```
+
+A sorted voxel grid on flat typed arrays, 6 to 8 bytes a point (34 million points build in about
+1 s). Results are exact — every candidate is distance-checked in Float64 — "within" is inclusive,
+and ties go to the lowest point number. `pointsNearRay` is a cylinder for `growth: 0` (an
+orthographic camera's pick ray) and a cone for `growth > 0` (a perspective camera's, `growth` the
+tangent of the half-angle); points behind `origin` are left out, and choosing a snap point from `t`
+and `d` is the caller's. The index refers to the coordinate arrays, it does not copy them: rebuild
+it after any keep, remove, merge or transform — after an `inPlace` edit an old index would read
+overwritten memory, and queries cannot tell.
+
+### Dedupe with an index map
+
+```js
+import { dedupeSelection } from "las-laz-js";
+
+var { keep, map } = dedupeSelection(pts, 0.01);   // { z: true } for 3D
+var unique = keepPoints(pts, keep);               // what dedupe(pts, 0.01) returns
+// map[i]: where input point i went in unique — a dropped point maps to its nearest kept point
+```
 
 ## LAZ
 

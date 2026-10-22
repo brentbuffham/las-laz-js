@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.0 (2026-10-22)
+
+Voxel neighbour index and the sparse-point (dust) filter.
+
+- `selectSparse(cols, { radius, minNeighbours = 1, xy })` selects the points with fewer than
+  `minNeighbours` other points within `radius` (inclusive), for `removePoints`. `minNeighbours: 1`
+  keeps thin sparse features such as scanned blastholes. Checked point for point against PDAL's
+  `filters.outlier` (`method=radius`; PDAL's `min_k` is `minNeighbours`, and PDAL does not count a
+  point exactly `radius` away).
+- `buildIndex(cols, { cellSize })`: a sorted voxel grid on flat typed arrays (6 to 8 bytes a point),
+  over x / y / z or a k = 3 `positions` column, with exact queries: `nearestPoint` (3D, or `xy` in
+  plan; `maxDistance`), `pointsInRadius` (a selection) and `pointsNearRay` (a cylinder or a cone,
+  with each point's `t` along the ray and `d` from its axis, for a caller's snap). Rebuild it after
+  any edit of the columns.
+- `dedupeSelection(cols, tolerance, { z })` returns `dedupe`'s kept points as a selection and a
+  `map` from every input point to the kept point it merged into (its nearest within the tolerance).
+- Speed (Node): a 34-million-point LAS (Float32 after a local origin) indexes in about 1.1 s at
+  about 8 bytes a point, and `selectSparse` at 2 m takes about 2.1 s.
+- Demo: a Sparse points selection on the Edit tab.
+
 ## 0.5.0 (2026-10-22)
 
 Point operations.

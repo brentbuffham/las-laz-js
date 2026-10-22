@@ -11,7 +11,7 @@
 
 import {
 	VERSION, writeLas, openLas, colourize, POINT_FORMATS,
-	selectPolygon, selectBox, selectClasses, unionSelections,
+	selectPolygon, selectBox, selectClasses, selectSparse, unionSelections,
 	keepPoints, removePoints, splitPoints, mergePoints, interleavePositions, thinSelection,
 	makeTransform, transformPoints
 } from "../../src/index.js";
@@ -563,6 +563,9 @@ $("topViewButton").addEventListener("click", function () { viewer.topView(); });
 $("selPolygonButton").addEventListener("click", function () { select("Inside polygon", selectInsidePolygon); });
 $("selBoxButton").addEventListener("click", function () { select("In box", selectInBox); });
 $("selClassesButton").addEventListener("click", function () { select("Classes", selectInClasses); });
+$("selSparseButton").addEventListener("click", function () {
+	select("Sparse points", function () { return selectSparse(cloud, { radius: Number($("sparseRadius").value), minNeighbours: Number($("sparseMin").value) }); });
+});
 $("clearSelButton").addEventListener("click", clearSelection);
 $("keepButton").addEventListener("click", keepSelected);
 $("deleteButton").addEventListener("click", deleteSelected);
