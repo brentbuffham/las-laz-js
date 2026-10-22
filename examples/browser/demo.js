@@ -17,7 +17,8 @@ import {
 } from "../../src/index.js";
 import { createViewer } from "./viewer.js";
 
-var DRAW_CAP = 20000000;
+// ?drawCap=N lowers the cap, to try a cloud bigger than what is drawn with a small file
+var DRAW_CAP = Math.floor(Number(new URLSearchParams(location.search).get("drawCap"))) || 20000000;
 var $ = function (id) { return document.getElementById(id); };
 var viewer = createViewer($("viewer"));
 var worker = new Worker(new URL("../../src/workers/lasWorker.js", import.meta.url), { type: "module" });
@@ -126,6 +127,10 @@ var edited = false;    // cloud is an edit of lastRead, so Save writes it rather
 var transformed = false;   // cloud has been through Transform since the last read or Reset
 var readCrop = null;   // { polygon, boundary, tolerance } of the last read (world), or null
 var ext = null;        // the cloud's local extent { minX … maxZ, midZ }
+// Over the draw cap the viewer draws an even spread of the cloud: drawnIdx holds the cloud
+// indices drawn (null: every point), drawn the columns colourize needs for just those points.
+// Selections and edits always act on the whole cloud in memory.
+var drawnIdx = null, drawn = null;
 
 // Decode out of sight (the library's worker, its chunks on every core), show progress, then
 // build the cloud once. Only the read filters (classes, returns, bounds, max points, dedupe)
@@ -164,7 +169,7 @@ async function read(crop, note) {
 		setStatus("Building the view…");
 		await new Promise(function (r) { requestAnimationFrame(function () { setTimeout(r, 0); }); });   // paint before the build
 		display(true);
-		var drawn = viewer.drawnCount(), showing = drawn < cloud.count ? " (showing " + fmt(drawn) + ")" : "";
+		var showing = drawnIdx ? " (" + fmt(drawnIdx.length) + " drawn, spread over the whole cloud; selections and edits apply to all " + fmt(cloud.count) + ")" : "";
 		if (crop) setStatus("Read inside polygon: " + fmt(info.header.pointCount) + " → " + fmt(cloud.count) + " points in " + Math.round(secs * 1000) + " ms" + showing + (note || ""));
 		else setStatus("Read " + fmt(cloud.count) + " points in " + secs.toFixed(1) + " s" + showing);
 		// every record is decoded (thinning picks from all of them), so the rate is over the whole file
@@ -181,13 +186,19 @@ async function read(crop, note) {
 	}
 }
 
-// The cloud on screen (up to the draw cap). Its positions are already local, so no origin.
+// The cloud on screen: all of it, or over the draw cap an even spread (thinSelection) over the
+// whole cloud. Its positions are already local, so no origin.
 // refit: frame the camera on it (after a read; edits keep the view where it is).
 function display(refit) {
 	viewer.clear();
-	var n = Math.min(cloud.count, DRAW_CAP);
-	var view = n < cloud.count ? { count: n, x: cloud.x.subarray(0, n), y: cloud.y.subarray(0, n), z: cloud.z.subarray(0, n) } : cloud;
-	viewer.addChunk(interleavePositions(view), colours(), DRAW_CAP);
+	drawnIdx = cloud.count > DRAW_CAP ? thinSelection(cloud.count, DRAW_CAP) : null;
+	drawn = cloud;
+	if (drawnIdx) {
+		var part = { count: cloud.count };
+		["x", "y", "z", "red", "green", "blue", "intensity", "classification"].forEach(function (k) { if (cloud[k]) part[k] = cloud[k]; });
+		drawn = keepPoints(part, drawnIdx);
+	}
+	viewer.addChunk(interleavePositions(drawn), colours(), DRAW_CAP);
 	if (refit) viewer.fit();
 	ext = extent(cloud);
 }
@@ -195,10 +206,26 @@ function display(refit) {
 // The normal colours, then the Split view's outside part dimmed grey and the selection yellow
 function colours() {
 	if ($("colourBy").value === "rgb" && !cloud.red) $("colourBy").value = "elevation";   // this format holds no colour
-	var c = colourize(cloud, colourOpts());
-	if (splitAt >= 0) for (var i = splitAt * 3; i < c.length; i++) c[i] = 70 + c[i] * 0.2;
-	if (selection) for (var k = 0; k < selection.length; k++) { var o = selection[k] * 3; c[o] = 255; c[o + 1] = 214; c[o + 2] = 0; }
+	var c = colourize(drawn, colourOpts());
+	for (var j = 0; j < drawn.count; j++) {
+		var i = drawnIdx ? drawnIdx[j] : j;
+		if (splitAt >= 0 && i >= splitAt) for (var d = j * 3; d < j * 3 + 3; d++) c[d] = 70 + c[d] * 0.2;
+	}
+	onScreen(selection).forEach(function (j) { c[j * 3] = 255; c[j * 3 + 1] = 214; c[j * 3 + 2] = 0; });
 	return c;
+}
+
+// The drawn positions of the selected points (a merge of two ascending lists)
+function onScreen(sel) {
+	if (!sel) return [];
+	if (!drawnIdx) return sel;
+	var out = [];
+	for (var a = 0, b = 0; a < sel.length && b < drawnIdx.length;) {
+		if (sel[a] === drawnIdx[b]) { out.push(b); a++; b++; }
+		else if (sel[a] < drawnIdx[b]) a++;
+		else b++;
+	}
+	return out;
 }
 
 // Colour, ramp or range changed: recolour the points on screen, no re-read
@@ -341,7 +368,8 @@ var selection = null;   // ascending Uint32Array of indices into cloud, or null
 var splitAt = -1;       // after Split: the points from here on are the outside part (dimmed)
 
 function showSelection() {
-	$("selInfo").textContent = selection ? fmt(selection.length) + " selected" : "nothing selected";
+	if (!selection) { $("selInfo").textContent = "nothing selected"; return; }
+	$("selInfo").textContent = fmt(selection.length) + " selected" + (drawnIdx ? " · " + fmt(onScreen(selection).length) + " of them on screen; edits apply to all" : "");
 }
 
 // Run one selection and add it to the current one (unionSelections), then show it yellow
@@ -530,7 +558,7 @@ $("viewer").addEventListener("mousemove", function (e) {
 		if (!cloud.count) return;
 		var hit = viewer.pick(lastMove.clientX, lastMove.clientY, 8);
 		if (!hit) { $("hud").textContent = ""; return; }
-		var c = cloud, i = hit.index;
+		var c = cloud, i = drawnIdx ? drawnIdx[hit.index] : hit.index;
 		$("hud").textContent = "X " + (c.x[i] + origin.x).toFixed(3) + "  Y " + (c.y[i] + origin.y).toFixed(3) + "  Z " + (c.z[i] + origin.z).toFixed(3) +
 			"  · class " + c.classification[i] + "  · intensity " + c.intensity[i] + "  · return " + c.returnNumber[i] +
 			(c.index ? "  · record " + c.index[i] : "");

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Demo: a read bigger than the draw cap (20 M) is drawn as an even spread over the whole cloud,
+  not its first 20 M points; selections and edits still act on every point read, and the
+  selection line says how many selected points are on screen. `?drawCap=N` lowers the cap.
+
 ## 0.6.0 (2026-10-22)
 
 Voxel neighbour index and the sparse-point (dust) filter.

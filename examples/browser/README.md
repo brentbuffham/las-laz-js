@@ -19,6 +19,10 @@ the minimum neighbours within the radius) (yellow), then keep, delete, split or
 transform the points in memory, or read the file again cropped to the polygon. Every edit is a
 copy, so **Reset** goes back to the last read; **Save** on the Write tab then writes the edited cloud.
 
+The viewer draws at most 20 million points. A bigger read stays whole in memory and is drawn as an
+even spread over it; selections, edits and Save act on every point read, and the selection line says
+how many of the selected points are on screen. Add `?drawCap=10000` to the URL to try this with a small file.
+
 Hover a point to see its coordinates, fields and record number in the file. Your file never leaves your browser.
 
 Run it locally with `npm run demo` (http://localhost:8080/). Three.js 0.170.0 is loaded from a
