@@ -9,7 +9,7 @@
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildIndex, buildGrid, coordsOf, lookup, checkIndex, checkPointCount } from "../../src/index/grid.js";
+import { buildIndex, buildGrid, coordsOf, lookup, checkIndex, checkPointCount, hashKey } from "../../src/index/grid.js";
 import * as lib from "../../src/index.js";
 
 function rng(seed) {
@@ -150,4 +150,38 @@ test("a 1 M-point index builds in under 3 s and costs under 10 bytes a point", f
 	assert.ok(ms < 3000, "built in " + ms + " ms");
 	var bytes = ix.order.byteLength + ix.keys.byteLength + ix.start.byteLength + ix.length.byteLength;
 	assert.ok(bytes < 10 * n, (bytes / n).toFixed(2) + " bytes a point");
+});
+
+test("a NaN or infinite coordinate is refused, naming the point", function () {
+	function withBad(v, axis) {
+		var c = { count: 100, x: new Float64Array(100), y: new Float64Array(100), z: new Float64Array(100) };
+		for (var i = 0; i < 100; i++) { c.x[i] = i; c.y[i] = i % 7; c.z[i] = i % 3; }
+		c[axis][5] = v;
+		return c;
+	}
+	[NaN, Infinity, -Infinity].forEach(function (v) {
+		["x", "y", "z"].forEach(function (axis) {
+			assert.throws(function () { buildIndex(withBad(v, axis)); }, { code: "INVALID_ARGUMENT", message: new RegExp("point 5 has a non-finite " + axis) });
+			assert.throws(function () { buildIndex(withBad(v, axis), { cellSize: 1 }); }, { code: "INVALID_ARGUMENT", message: /point 5 has a non-finite/ });
+		});
+	});
+	// with xy (selectSparse's 2D grid) z is not used, so a NaN z does not matter
+	var g = buildGrid(coordsOf(withBad(NaN, "z"), "t"), 100, 1, true);
+	assert.equal(g.count, 100);
+});
+
+test("the hash spreads keys whose low bits are all zero (a strip with ny = 65 536)", function () {
+	// 30 000 cells along x at iy = 0; keys are ix · 65 536: before, every key hashed to one slot
+	var n = 30000, c = { count: n + 1, x: new Float64Array(n + 1), y: new Float64Array(n + 1), z: new Float64Array(n + 1) };
+	for (var i = 0; i < n; i++) c.x[i] = i + 0.5;
+	c.y[n] = 65535.5;   // makes ny = 65 536 at cellSize 1
+	var ix = buildIndex(c, { cellSize: 1 });
+	assert.equal(ix.ny, 65536);
+	var longest = 0;
+	for (var s = 0; s < ix.keys.length; s++) {
+		if (ix.keys[s] < 0) continue;
+		var d = (s - hashKey(ix.keys[s], ix.mask) + ix.keys.length) & ix.mask;
+		if (d > longest) longest = d;
+	}
+	assert.ok(longest < 64, "longest probe " + longest);
 });

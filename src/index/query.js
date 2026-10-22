@@ -135,6 +135,12 @@ export function nearestPoint(index, point, opts) {
 	for (var a = 0; a < axes; a++) c[a] = Math.min(n[a] - 1, Math.max(0, Math.floor((q[a] - m[a]) * inv)));
 	var co = index.coords, X = co.x, Y = co.y, Z = co.z, st = co.stride, order = index.order;
 	var best = -1, bd = Infinity, visited = 0, budget = index.keys.length;
+	// How far the query lies outside the grid on each axis (0 inside)
+	var out = [0, 0, 0];
+	for (a = 0; a < axes; a++) {
+		var gl = m[a], gh = m[a] + n[a] * cs;
+		out[a] = Math.max(0, (q[a] < gl ? gl - q[a] : q[a] > gh ? q[a] - gh : 0) - cs * EPS);
+	}
 
 	function cell(ix, iy, iz) {
 		visited++;
@@ -169,19 +175,23 @@ export function nearestPoint(index, point, opts) {
 		}
 	}
 
+	function gap(g) { g = Math.max(0, g - cs * EPS); return g * g; }
+
 	for (var r = 0; ; r++) {
 		ring(r);
 		if (visited > budget) return nearestByScan(index, q, xy, maxD2, best, bd);
-		// Unvisited points lie outside the cells c - r .. c + r: a lower bound on their distance
-		var bound = Infinity;
+		// Unvisited points lie beyond a face of the cells c - r .. c + r on some axis a, and
+		// inside the grid on the others: a lower bound on their squared distance
+		var bound2 = Infinity;
 		for (a = 0; a < axes; a++) {
-			if (c[a] - r > 0) bound = Math.min(bound, q[a] - (m[a] + (c[a] - r) * cs));
-			if (c[a] + r < n[a] - 1) bound = Math.min(bound, m[a] + (c[a] + r + 1) * cs - q[a]);
+			var rest = 0;
+			for (var b = 0; b < axes; b++) if (b !== a) rest += out[b] * out[b];
+			if (c[a] - r > 0) bound2 = Math.min(bound2, gap(q[a] - (m[a] + (c[a] - r) * cs)) + rest);
+			if (c[a] + r < n[a] - 1) bound2 = Math.min(bound2, gap(m[a] + (c[a] + r + 1) * cs - q[a]) + rest);
 		}
-		if (bound === Infinity) break;
-		bound = Math.max(0, bound - cs * EPS);
-		if (best >= 0 && bd < bound * bound) break;
-		if (bound * bound > maxD2) break;
+		if (bound2 === Infinity) break;
+		if (best >= 0 && bd < bound2) break;
+		if (bound2 > maxD2) break;
 	}
 	return best;
 }

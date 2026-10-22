@@ -49,9 +49,22 @@ export function checkPointCount(n) {
 	if (n > MAX_POINTS) throw new LasError(ERROR_CODES.TOO_MANY_POINTS, "the neighbour index takes at most 4,294,967,295 points, not " + n);
 }
 
-function hashKey(key, mask) {
+// murmur3's 32-bit finaliser: every input bit reaches the low bits the mask keeps
+function fmix32(h) {
+	h ^= h >>> 16; h = Math.imul(h, 0x85EBCA6B);
+	h ^= h >>> 13; h = Math.imul(h, 0xC2B2AE35);
+	return (h ^ (h >>> 16)) >>> 0;
+}
+
+/**
+ * The home slot of a cell key (an integer below 2^53) in a table of mask + 1 slots.
+ * @param {number} key
+ * @param {number} mask
+ * @returns {number}
+ */
+export function hashKey(key, mask) {
 	var lo = key % 4294967296, hi = (key - lo) / 4294967296;
-	return (Math.imul(lo ^ Math.imul(hi, 0x85EBCA6B), 0x9E3779B1) >>> 0) & mask;
+	return fmix32(lo ^ fmix32(hi)) & mask;
 }
 
 function nextPow2(n) {
@@ -76,6 +89,7 @@ export function buildGrid(coords, count, cellSize, xy) {
 	var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
 	for (var i = 0, o = 0; i < count; i++, o += st) {
 		var a = X[o], b = Y[o], c = xy ? 0 : Z[o];
+		if (a - a !== 0 || b - b !== 0 || c - c !== 0) throw bad("point " + i + " has a non-finite " + (a - a !== 0 ? "x" : b - b !== 0 ? "y" : "z") + " coordinate");
 		if (a < lo[0]) lo[0] = a; if (a > hi[0]) hi[0] = a;
 		if (b < lo[1]) lo[1] = b; if (b > hi[1]) hi[1] = b;
 		if (c < lo[2]) lo[2] = c; if (c > hi[2]) hi[2] = c;

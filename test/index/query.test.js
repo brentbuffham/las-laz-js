@@ -156,3 +156,19 @@ test("bad arguments are refused, naming the argument", function () {
 	assert.throws(function () { nearestPoint(Object.assign({}, ix, { count: 99 }), [1, 2, 3]); }, { message: /nearestPoint: index is not self-consistent/ });
 	assert.throws(function () { pointsInRadius({}, [1, 2, 3], 1); }, { message: /pointsInRadius: index is not self-consistent/ });
 });
+
+test("nearestPoint from far off the cloud's edge stops after a few rings", function () {
+	// 1 M points on a 1 km × 1 km surface, cellSize 2 (a big table): before, an off-edge
+	// query fell back to scanning every slot (hundreds of ms); now it stops early
+	var r = rng(91), n = 1000000, c = { count: n, x: new Float32Array(n), y: new Float32Array(n), z: new Float32Array(n) };
+	for (var i = 0; i < n; i++) { c.x[i] = r() * 1000; c.y[i] = r() * 1000; c.z[i] = r() * 3; }
+	var ix = buildIndex(c, { cellSize: 2 });
+	[[1500, 500, 1], [-3000, 200, 1], [500, 500, 600], [4000, 4000, -50]].forEach(function (q) {
+		[false, true].forEach(function (xy) {
+			nearestPoint(ix, q, { xy: xy });
+			var t = performance.now(), got = nearestPoint(ix, q, { xy: xy }), ms = performance.now() - t;
+			assert.equal(got, bruteNearest(c, q, undefined, xy), "q=" + q + " xy=" + xy);
+			if (!process.env.NODE_V8_COVERAGE) assert.ok(ms < 30, "q=" + q + " xy=" + xy + " took " + ms.toFixed(1) + " ms");
+		});
+	});
+});
