@@ -10,7 +10,7 @@
 //==========================================================
 
 import {
-	writeLas, openLas, colourize, POINT_FORMATS,
+	VERSION, writeLas, openLas, colourize, POINT_FORMATS,
 	selectPolygon, selectBox, selectClasses, unionSelections,
 	keepPoints, removePoints, splitPoints, mergePoints, interleavePositions, thinSelection,
 	makeTransform, transformPoints
@@ -570,6 +570,7 @@ $("resetButton").addEventListener("click", reset);
 	$(id).addEventListener("input", function () { if (cloud) $("readHint").classList.remove("hidden"); });
 });
 $("pointSize").addEventListener("input", function () { viewer.setPointSize(Number($("pointSize").value) || 2); });
+$("version").textContent = "v" + VERSION;
 $("drawCapText").textContent = fmt(DRAW_CAP);
 $("writeCapText").textContent = fmt(WRITE_CAP);
 window.addEventListener("dragover", function (e) { e.preventDefault(); $("dropOverlay").classList.remove("hidden"); });
