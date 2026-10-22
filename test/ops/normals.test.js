@@ -156,3 +156,11 @@ test("bad arguments are refused, naming the argument", function () {
 	assert.throws(function () { estimateNoise(c, { maxDistance: 0.3, k: 2.5 }); }, { message: /k/ });
 	assert.throws(function () { pointNormals(c, { maxDistance: 0.3, onProgress: 1 }); }, { message: /onProgress/ });
 });
+
+test("points on one line have no plane: zero normal, NaN residual", function () {
+	var n = 50, c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n) };
+	for (var i = 0; i < n; i++) { c.x[i] = i * 0.05; c.y[i] = i * 0.03; c.z[i] = 1 + i * 0.01; }
+	var res = pointNormals(c, { maxDistance: 0.5 });
+	assert.ok(Array.from(res.normal).every(function (v) { return v === 0; }));
+	assert.ok(Array.from(res.residual).every(Number.isNaN));
+});

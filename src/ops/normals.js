@@ -31,7 +31,8 @@ export function orientNormal(v) {
  * The unit eigenvector of the smallest eigenvalue of a symmetric 3 × 3 matrix, oriented
  * (orientNormal), and that eigenvalue. The lowest axis wins a tie.
  * @param {Float64Array} m - [c00, c01, c02, c11, c12, c22].
- * @param {Float64Array} out - out[0..2] the vector, out[3] the eigenvalue.
+ * @param {Float64Array} out - out[0..2] the vector, out[3] the eigenvalue; out[4], when out has
+ *   room, the middle eigenvalue.
  * @returns {boolean} false (out = 0, 0, 0, NaN) when the trace is 0
  */
 export function smallestEigen(m, out) {
@@ -73,10 +74,11 @@ export function smallestEigen(m, out) {
 	out[0] /= len; out[1] /= len; out[2] /= len;
 	orientNormal(out);
 	out[3] = A[b][b];
+	if (out.length > 4) out[4] = A[(b + 1) % 3][(b + 1) % 3] < A[(b + 2) % 3][(b + 2) % 3] ? A[(b + 1) % 3][(b + 1) % 3] : A[(b + 2) % 3][(b + 2) % 3];
 	return true;
 }
 
-var M6 = new Float64Array(6), E4 = new Float64Array(4);
+var M6 = new Float64Array(6), E4 = new Float64Array(5);
 
 /**
  * Fit a plane to point p and its m neighbours (weights w, p's own weight 1; null: all 1),
@@ -91,7 +93,8 @@ var M6 = new Float64Array(6), E4 = new Float64Array(4);
  * @param {Float64Array|null} w - w[j] the weight of nbrs[j].
  * @param {Float64Array} out - [nx, ny, nz, residual, cx, cy, cz]: the unit normal, the RMS distance
  *   from the plane, and the weighted centroid's offset from p.
- * @returns {boolean} false (normal 0, residual NaN) when the points do not span a plane's worth
+ * @returns {boolean} false (normal 0, residual NaN) when the points do not span a plane: all
+ *   coincident, or on one line (the middle eigenvalue at most 1e-12 of the trace)
  */
 export function fitPlane(X, Y, Z, stride, p, nbrs, m, w, out) {
 	var o = p * stride, px = X[o], py = Y[o], pz = Z[o];
@@ -107,7 +110,7 @@ export function fitPlane(X, Y, Z, stride, p, nbrs, m, w, out) {
 	M6[0] = sxx - sx * cx; M6[1] = sxy - sx * cy; M6[2] = sxz - sx * cz;
 	M6[3] = syy - sy * cy; M6[4] = syz - sy * cz; M6[5] = szz - sz * cz;
 	out[4] = cx; out[5] = cy; out[6] = cz;
-	if (!smallestEigen(M6, E4)) { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = NaN; return false; }
+	if (!smallestEigen(M6, E4) || E4[4] <= 1e-12 * (M6[0] + M6[3] + M6[5])) { out[0] = 0; out[1] = 0; out[2] = 0; out[3] = NaN; return false; }
 	out[0] = E4[0]; out[1] = E4[1]; out[2] = E4[2];
 	out[3] = Math.sqrt(Math.max(0, E4[3]) / W);
 	return true;
