@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2 (2026-10-22)
+
+- `dedupe` and `dedupeSelection` handle more than 16,777,216 occupied cells. They used a
+  JavaScript Map, which stops at 2^24 entries, so a 20-30 M-point cloud at a small tolerance threw
+  `RangeError: Map maximum size exceeded`. A typed-array hash table (5 bytes a slot) replaces
+  it, with the same results and about 1.5 to 2 times the speed (2 M points: 0.9 s in 2D, 2.2 s in 3D).
+
 ## 0.6.1 (2026-10-22)
 
 - Demo: a read bigger than the draw cap (20 M) is drawn as an even spread over the whole cloud,
