@@ -72,7 +72,7 @@ export function dedupe(cols, tolerance, opts) {
 
 	// Every column (k values per point) follows the kept points; anything else passes through
 	var sel = kept.subarray(0, nKept);
-	var ks = {};
+	var ks = Object.create(null);   // a column may be named like an Object.prototype member
 	columnsOf(cols).forEach(function (c) { ks[c.name] = c.k; });
 	var out = { count: nKept };
 	Object.keys(cols).forEach(function (name) {

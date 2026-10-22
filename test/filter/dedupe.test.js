@@ -98,3 +98,11 @@ test("dedupe on count 0 and on a k = 3 column with all points kept", function ()
 	var all = dedupe({ count: 2, x: new Float64Array([0, 5]), y: new Float64Array(2), positions: new Float32Array([1, 2, 3, 4, 5, 6]) }, 0.01);
 	assert.deepEqual(Array.from(all.positions), [1, 2, 3, 4, 5, 6]);
 });
+
+test("dedupe moves a column named like an Object.prototype member", function () {
+	var c = { count: 3, x: new Float64Array([0, 0.001, 5]), y: new Float64Array([0, 0, 5]) };
+	Object.defineProperty(c, "__proto__", { value: new Uint8Array([1, 2, 3]), enumerable: true, writable: true, configurable: true });
+	var r = dedupe(c, 0.01);
+	assert.equal(r.count, 2);
+	assert.deepEqual(Array.from(Object.getOwnPropertyDescriptor(r, "__proto__").value), [1, 3]);
+});
