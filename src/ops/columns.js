@@ -92,3 +92,56 @@ export function needColumn(cols, name, fn) {
 	if (!isTyped(a) || a.length !== n) throw bad(fn + " needs a " + name + " column");
 	return a;
 }
+
+var FLOATS = { Float64Array: 8, Float32Array: 4 };
+var INTS = {
+	Int8Array: [1, true], Int16Array: [2, true], Int32Array: [4, true],
+	Uint8Array: [1, false], Uint8ClampedArray: [1, false], Uint16Array: [2, false], Uint32Array: [4, false]
+};
+var BIGS = { BigInt64Array: true, BigUint64Array: true };
+
+/**
+ * The typed-array type a merge of columns of these types is stored in
+ * (internal; not exported from the package entry). Float64 beats Float32
+ * beats any integer type. Among integers the widest wins, and mixed
+ * signedness is allowed only when the widest is signed and strictly
+ * wider than every unsigned one (Uint8 + Int16 gives Int16); Int16 +
+ * Uint16 and Int8 + Uint16 throw, because the unsigned values would wrap.
+ * Uint8ClampedArray counts as Uint8Array. A BigInt array only merges
+ * with its own type.
+ * @param {Function[]} types - typed-array constructors, at least one.
+ * @param {string} name - the column, for the message.
+ * @returns {Function}
+ */
+export function widestType(types, name) {
+	var label = "column \"" + name + "\"";
+	if (!Array.isArray(types) || types.length === 0) throw bad(label + " has no types to merge");
+	var names = types.map(function (t) {
+		var n = t && t.name;
+		if (!(n in FLOATS) && !(n in INTS) && !(n in BIGS)) throw bad(label + " has a type that is not a typed-array constructor");
+		return n === "Uint8ClampedArray" ? "Uint8Array" : n;
+	});
+	var first = names[0];
+	if (first in BIGS) {
+		names.forEach(function (n) {
+			if (n !== first) throw bad(label + " cannot merge " + first + " with " + n);
+		});
+		return globalThis[first];
+	}
+	names.forEach(function (n) {
+		if (n in BIGS) throw bad(label + " cannot merge " + n + " with " + first);
+	});
+	if (names.indexOf("Float64Array") >= 0) return Float64Array;
+	if (names.indexOf("Float32Array") >= 0) return Float32Array;
+	var maxS = 0;
+	var maxU = 0;
+	names.forEach(function (n) {
+		var b = INTS[n][0];
+		if (INTS[n][1]) { if (b > maxS) maxS = b; } else if (b > maxU) maxU = b;
+	});
+	if (maxS > 0 && maxU > 0 && maxS <= maxU) {
+		throw bad(label + " cannot merge signed Int" + maxS * 8 + "Array with unsigned Uint" + maxU * 8 + "Array (values would wrap)");
+	}
+	if (maxS > 0) return globalThis["Int" + maxS * 8 + "Array"];
+	return globalThis["Uint" + maxU * 8 + "Array"];
+}
