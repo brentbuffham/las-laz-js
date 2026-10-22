@@ -21,6 +21,14 @@
 //    streamed SHA-256 per field). The size ratio and compression time
 //    are logged. With LAS_PDAL set, PDAL decompresses our file too and
 //    must find the same points
+//  - (0.6.0) selectSparse on a 20 m × 20 m crop around each sample's
+//    centre (at most 2 M points, radius 2); with LAS_PDAL set, PDAL's
+//    radius outlier filter flags the same points (helpers/pdalOutlier.js)
+//    on the crop thinned to 200 000 points, at the crop's own automatic
+//    cell size as the radius (about 16 points a cell): PDAL returns every
+//    neighbour of every point, so a dense crop at 2 m runs out of memory.
+//    LAS_SPARSE_SAMPLE=<path> adds one more file to this check only (a
+//    scan too big for every check above), as id "sparse1"
 // Skipped, loudly, when there are no samples.
 //==========================================================
 /* prettier-ignore-file */
@@ -35,6 +43,11 @@ import { openLas } from "../src/LasReader.js";
 import { writeLas, createLasWriter } from "../src/write/writeLas.js";
 import { findSamples } from "./helpers/samples.js";
 import { fieldDigests, EVERY_FIELD } from "./helpers/fieldDigests.js";
+import { selectSparse } from "../src/ops/sparse.js";
+import { buildIndex } from "../src/index/grid.js";
+import { keepPoints } from "../src/ops/apply.js";
+import { thinSelection } from "../src/ops/select.js";
+import { pdalRadiusOutlier } from "./helpers/pdalOutlier.js";
 
 var samples = findSamples();
 
@@ -147,3 +160,24 @@ if (process.env.LAS_PDAL) {
 		});
 	});
 }
+
+var sparseSamples = samples.slice();
+if (process.env.LAS_SPARSE_SAMPLE) sparseSamples.push({ id: "sparse1", path: process.env.LAS_SPARSE_SAMPLE, size: statSync(process.env.LAS_SPARSE_SAMPLE).size, laz: /\.laz$/i.test(process.env.LAS_SPARSE_SAMPLE) });
+sparseSamples.forEach(function (s) {
+	test(s.id + ": selectSparse on a 20 m crop" + (process.env.LAS_PDAL ? ", against PDAL" : ""), { timeout: 900000 }, async function () {
+		var las = await openLas(s.path), b = las.header.bounds;
+		var cx = (b.minX + b.maxX) / 2, cy = (b.minY + b.maxY) / 2;
+		var crop = await las.readPoints({ fields: ["x", "y", "z"], polygon: [cx - 10, cy - 10, cx + 10, cy - 10, cx + 10, cy + 10, cx - 10, cy + 10], maxPoints: 2000000 });
+		await las.close();
+		var t = performance.now(), sel = selectSparse(crop, { radius: 2 }), ms = Math.round(performance.now() - t);
+		console.log("# " + s.id + ": " + crop.count + " points in the crop, " + sel.length + " sparse at radius 2 (" + ms + " ms)");
+		assert.ok(sel.length <= crop.count);
+		if (!process.env.LAS_PDAL || crop.count === 0) return;
+		// R = (k + 0.5) mm: R² is then a quarter of a mm² step from any squared distance at 1 mm scale
+		var thin = keepPoints(crop, thinSelection(crop.count, 200000)), R = (Math.round(buildIndex(thin).cellSize * 1000) + 0.5) / 1000;
+		var res = await pdalRadiusOutlier(process.env.LAS_PDAL, thin, R, 1);
+		var ours = Array.from(selectSparse(res.cols, { radius: R - 1e-9 }));
+		if (ours.length === res.cols.count) return;   // PDAL flags none then
+		assert.deepEqual(ours, res.flagged, s.id + ": PDAL and selectSparse disagree");
+	});
+});
