@@ -6,18 +6,24 @@
 // objects to columns. XY by default (one Z per XY location, as a
 // 2.5D surface wants); { z: true } compares in 3D.
 // Every column follows the kept points (k values per point).
+// dedupeSelection gives the same keep as a selection, plus a map from
+// every input point to the output point it merged into.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { columnsOf, gather, sameType } from "../ops/columns.js";
 
 /**
+ * The points dedupe keeps, and where every input point went.
+ * map[i] is the output number (position in keep) of the kept point that point i
+ * merged into: for a dropped point, the nearest kept point within tolerance
+ * (lowest number on a tie); a kept point maps to itself.
  * @param {object} cols - PointColumns ({ count, x, y, z?, ... }).
  * @param {number} tolerance - distance below which points merge (> 0).
- * @param {{z?: boolean}} [opts]
- * @returns {object} PointColumns with only the kept points
+ * @param {{z?: boolean}} [opts] - z: compare in 3D.
+ * @returns {{keep: Uint32Array, map: Uint32Array}}
  */
-export function dedupe(cols, tolerance, opts) {
+export function dedupeSelection(cols, tolerance, opts) {
 	if (!(tolerance > 0)) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "dedupe tolerance must be > 0");
 	var use3d = !!(opts && opts.z && cols.z);
 	var tol2 = tolerance * tolerance;
@@ -44,6 +50,8 @@ export function dedupe(cols, tolerance, opts) {
 	var head = new Map();
 	var next = new Int32Array(n);
 	var kept = new Uint32Array(n);
+	var map = new Uint32Array(n);
+	var dropped = [];
 	var nKept = 0;
 	for (var i = 0; i < n; i++) {
 		var cx = Math.floor(x[i] / tolerance) - lo[0] + 1, cy = Math.floor(y[i] / tolerance) - lo[1] + 1;
@@ -62,16 +70,49 @@ export function dedupe(cols, tolerance, opts) {
 				}
 			}
 		}
-		if (dup) continue;
+		if (dup) { dropped.push(i); continue; }
 		var own = key(cx, cy, cz);
 		var prev = head.get(own);
 		next[i] = prev === undefined ? -1 : prev;
 		head.set(own, i);
+		map[i] = nKept;
 		kept[nKept++] = i;
 	}
 
+	// Each dropped point maps to its nearest kept point (the cell lists hold kept points only)
+	dropped.forEach(function (i) {
+		var cx = Math.floor(x[i] / tolerance) - lo[0] + 1, cy = Math.floor(y[i] / tolerance) - lo[1] + 1;
+		var cz = use3d ? Math.floor(z[i] / tolerance) - lo[2] + 1 : 1;
+		var best = -1, bd = Infinity;
+		for (var dx = -1; dx <= 1; dx++) {
+			for (var dy = -1; dy <= 1; dy++) {
+				for (var dz = -dzRange; dz <= dzRange; dz++) {
+					var k = head.get(key(cx + dx, cy + dy, cz + dz));
+					while (k !== undefined && k >= 0) {
+						var ex = x[k] - x[i], ey = y[k] - y[i];
+						var ez = use3d ? z[k] - z[i] : 0;
+						var d = ex * ex + ey * ey + ez * ez;
+						if (d <= tol2 && (d < bd || (d === bd && k < best))) { bd = d; best = k; }
+						k = next[k];
+					}
+				}
+			}
+		}
+		map[i] = map[best];
+	});
+	return { keep: kept.slice(0, nKept), map: map };
+}
+
+/**
+ * @param {object} cols - PointColumns ({ count, x, y, z?, ... }).
+ * @param {number} tolerance - distance below which points merge (> 0).
+ * @param {{z?: boolean}} [opts]
+ * @returns {object} PointColumns with only the kept points
+ */
+export function dedupe(cols, tolerance, opts) {
+	var sel = dedupeSelection(cols, tolerance, opts).keep, nKept = sel.length;
+
 	// Every column (k values per point) follows the kept points; anything else passes through
-	var sel = kept.subarray(0, nKept);
 	var ks = Object.create(null);   // a column may be named like an Object.prototype member
 	columnsOf(cols).forEach(function (c) { ks[c.name] = c.k; });
 	var out = { count: nKept };

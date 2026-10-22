@@ -9,8 +9,9 @@
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dedupe } from "../../src/filter/dedupe.js";
+import { dedupe, dedupeSelection } from "../../src/filter/dedupe.js";
 import { keepPoints } from "../../src/index.js";
+import * as lib from "../../src/index.js";
 
 function bruteForce(cols, tol, use3d) {
 	var kept = [];
@@ -105,4 +106,64 @@ test("dedupe moves a column named like an Object.prototype member", function () 
 	var r = dedupe(c, 0.01);
 	assert.equal(r.count, 2);
 	assert.deepEqual(Array.from(Object.getOwnPropertyDescriptor(r, "__proto__").value), [1, 3]);
+});
+
+// The map's oracle: for a dropped point, the nearest kept point within the
+// tolerance (lowest number on a tie), as its position in keep
+function bruteMap(cols, keep, tol, use3d) {
+	var pos = new Map(), map = [];
+	keep.forEach(function (k, j) { pos.set(k, j); });
+	for (var i = 0; i < cols.count; i++) {
+		if (pos.has(i)) { map.push(pos.get(i)); continue; }
+		var best = -1, bd = Infinity;
+		keep.forEach(function (k) {
+			var dx = cols.x[k] - cols.x[i], dy = cols.y[k] - cols.y[i], dz = use3d ? cols.z[k] - cols.z[i] : 0;
+			var d = dx * dx + dy * dy + dz * dz;
+			if (d <= tol * tol && d < bd) { bd = d; best = k; }
+		});
+		map.push(pos.get(best));
+	}
+	return map;
+}
+
+test("dedupeSelection is exported from the package", function () {
+	assert.equal(lib.dedupeSelection, dedupeSelection);
+});
+
+test("dedupeSelection.keep is what dedupe keeps (UTM, 2D and 3D)", function () {
+	[false, true].forEach(function (use3d) {
+		var c = cloud(3000, 11, 500000, 7000000, 3);
+		var sel = dedupeSelection(c, 0.01, { z: use3d });
+		assert.ok(sel.keep instanceof Uint32Array);
+		assert.deepEqual(Array.from(sel.keep), bruteForce(c, 0.01, use3d));
+		var a = keepPoints(c, sel.keep), b = dedupe(c, 0.01, { z: use3d });
+		["x", "y", "z", "id"].forEach(function (k) { assert.deepEqual(Array.from(a[k]), Array.from(b[k])); });
+		assert.equal(a.count, b.count);
+	});
+});
+
+test("dedupeSelection.map: kept points map to themselves, dropped to their nearest kept point", function () {
+	[false, true].forEach(function (use3d) {
+		var c = cloud(3000, 12, 500000, 7000000, 3);
+		var sel = dedupeSelection(c, 0.01, { z: use3d });
+		assert.ok(sel.map instanceof Uint32Array);
+		assert.equal(sel.map.length, c.count);
+		for (var j = 0; j < sel.keep.length; j++) assert.equal(sel.map[sel.keep[j]], j);
+		assert.deepEqual(Array.from(sel.map), bruteMap(c, Array.from(sel.keep), 0.01, use3d));
+	});
+});
+
+test("map names the nearest kept point, not the one that caused the drop", function () {
+	// 0 kept; 1 dropped (0.9 from 0); 2 kept (1.7 from 0, and 1 is dropped so it does not block)
+	var c = { count: 3, x: new Float64Array([0, 0.9, 1.7]), y: new Float64Array(3) };
+	var sel = dedupeSelection(c, 1);
+	assert.deepEqual(Array.from(sel.keep), [0, 2]);
+	assert.deepEqual(Array.from(sel.map), [0, 1, 1]);
+});
+
+test("dedupeSelection on count 0, and its tolerance check", function () {
+	var sel = dedupeSelection({ count: 0, x: new Float64Array(0), y: new Float64Array(0) }, 0.5);
+	assert.equal(sel.keep.length, 0);
+	assert.equal(sel.map.length, 0);
+	assert.throws(function () { dedupeSelection({ count: 0, x: new Float64Array(0), y: new Float64Array(0) }, 0); }, { code: "INVALID_ARGUMENT", message: /tolerance/ });
 });

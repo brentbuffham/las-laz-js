@@ -16,7 +16,7 @@ export { parseCrs } from "./format/LasCrs.js";
 export { POINT_FORMATS, formatHasRgb } from "./format/PointFormats.js";
 export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords.js";
 export { makeKeep, countKept } from "./filter/filters.js";
-export { dedupe } from "./filter/dedupe.js";
+export { dedupe, dedupeSelection } from "./filter/dedupe.js";
 export { buildIndex } from "./index/grid.js";
 export { pointsInRadius, nearestPoint, pointsNearRay } from "./index/query.js";
 export { selectBox, selectPolygon, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
