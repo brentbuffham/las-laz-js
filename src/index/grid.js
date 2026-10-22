@@ -57,14 +57,23 @@ function fmix32(h) {
 }
 
 /**
+ * A 32-bit hash of a cell key (an integer below 2^53).
+ * @param {number} key
+ * @returns {number}
+ */
+export function hash32(key) {
+	var lo = key % 4294967296, hi = (key - lo) / 4294967296;
+	return fmix32(lo ^ fmix32(hi));
+}
+
+/**
  * The home slot of a cell key (an integer below 2^53) in a table of mask + 1 slots.
  * @param {number} key
  * @param {number} mask
  * @returns {number}
  */
 export function hashKey(key, mask) {
-	var lo = key % 4294967296, hi = (key - lo) / 4294967296;
-	return fmix32(lo ^ fmix32(hi)) & mask;
+	return hash32(key) & mask;
 }
 
 function nextPow2(n) {

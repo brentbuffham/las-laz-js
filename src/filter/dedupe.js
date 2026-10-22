@@ -12,7 +12,7 @@
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { columnsOf, gather, sameType } from "../ops/columns.js";
-import { hashKey } from "../index/grid.js";
+import { hash32 } from "../index/grid.js";
 
 /**
  * The points dedupe keeps, and where every input point went.
@@ -53,26 +53,29 @@ export function dedupeSelection(cols, tolerance, opts) {
 
 	// Each cell is a linked list of kept points through next[]. Its newest point sits in
 	// an open-addressing table (linear probing, power-of-two capacity, at most half
-	// full); a slot holds only the point number and its key is recomputed from that
-	// point's cell, so a slot costs 4 bytes. (A Map stops at 2^24 cells.)
+	// full). A slot holds the point number and an 8-bit tag of its key's hash; the key
+	// itself is recomputed from the point's cell, only when the tag matches. 5 bytes a
+	// slot. (A Map stops at 2^24 cells.)
 	var cells = (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1);
 	var cap = 16;
 	while (cap < Math.min(n, cells)) cap *= 2;
-	var mask = cap - 1, used = 0, table = new Int32Array(cap).fill(-1);
+	var mask = cap - 1, used = 0, table = new Int32Array(cap).fill(-1), tags = new Uint8Array(cap);
+	var tag = 0;   // the tag of the key find() last looked up
 	// The slot of cell key c: its newest kept point, or -1 (the free slot c would take)
 	function find(c) {
-		var h = hashKey(c, mask);
-		while (table[h] >= 0 && cellKey(table[h]) !== c) h = (h + 1) & mask;
+		var g = hash32(c), h = g & mask;
+		tag = Math.imul(g, 0x9E3779B1) >>> 24;   // top bits of a multiply mix every bit of g
+		while (table[h] >= 0 && (tags[h] !== tag || cellKey(table[h]) !== c)) h = (h + 1) & mask;
 		return h;
 	}
 	function grow() {
-		var old = table;
-		cap *= 2; mask = cap - 1; table = new Int32Array(cap).fill(-1);
+		var old = table, oldTags = tags;
+		cap *= 2; mask = cap - 1; table = new Int32Array(cap).fill(-1); tags = new Uint8Array(cap);
 		for (var s = 0; s < old.length; s++) {
 			if (old[s] < 0) continue;
-			var h = hashKey(cellKey(old[s]), mask);
+			var h = hash32(cellKey(old[s])) & mask;
 			while (table[h] >= 0) h = (h + 1) & mask;
-			table[h] = old[s];
+			table[h] = old[s]; tags[h] = oldTags[s];
 		}
 	}
 	var next = new Int32Array(n);
@@ -101,6 +104,7 @@ export function dedupeSelection(cols, tolerance, opts) {
 		if (table[h] < 0) {
 			if (2 * (used + 1) > cap) { grow(); h = find(own); }
 			used++;
+			tags[h] = tag;
 		}
 		next[i] = table[h];
 		table[h] = i;
