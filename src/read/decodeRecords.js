@@ -16,11 +16,13 @@
 // records that pass, spread evenly: an integer accumulator gains
 // target per passing record and keeps the record each time it
 // reaches total (Bresenham), so record ceil(j * total / target) - 1
-// is the j-th kept. acc is carried from window to window.
+// is the j-th kept. acc is carried from window to window. The rule
+// itself is thinStep in ops/select.js (thinSelection uses it too).
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { POINT_FORMATS } from "../format/PointFormats.js";
+import { thinStep } from "../ops/select.js";
 
 /** Fields decoded when opts.fields is not given (colour added when the format has it). */
 export var DEFAULT_FIELDS = Object.freeze(["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "classification"]);
@@ -106,11 +108,7 @@ export function decodeRecords(bytes, header, opts) {
 	for (var i = 0; i < n; i++) {
 		var at = i * len;
 		if (keep && !keep(view, at)) continue;
-		if (thin) {
-			thin.acc += thin.target;
-			if (thin.acc < thin.total) continue;
-			thin.acc -= thin.total;
-		}
+		if (thin && !thinStep(thin)) continue;
 		if (want.x) cols.x[k] = view.getInt32(at, LE) * sx + tx;
 		if (want.y) cols.y[k] = view.getInt32(at + 4, LE) * sy + ty;
 		if (want.z) cols.z[k] = view.getInt32(at + 8, LE) * sz + tz;
