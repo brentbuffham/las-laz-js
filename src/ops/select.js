@@ -10,6 +10,7 @@
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { countOf, checkSelection, needColumn } from "./columns.js";
+import { makePolygonTest } from "./polygon.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -70,6 +71,40 @@ export function selectBox(cols, box) {
 			if (!(vz >= minZ && vz <= maxZ)) continue;
 		}
 		out[m++] = i;
+	}
+	return trim(out, m);
+}
+
+/**
+ * Indices of the points inside a polygon (even-odd rule), in the columns' own frame. A point on the
+ * boundary (within tolerance of an edge or vertex, as the 2D distance to the segment in Float64) is
+ * kept by boundary "touching" (default) and dropped by "inside", so the two differ by exactly the
+ * boundary points. The boundary is decided before the crossing test. Needs x and y; z only when a Z
+ * limit is given.
+ * @param {object} cols - point columns.
+ * @param {number[]|TypedArray} polygon - [x0, y0, x1, y1, ...], at least 3 vertices, implicitly closed.
+ * @param {{boundary?: "touching"|"inside", tolerance?: number, minZ?: number, maxZ?: number}} [opts]
+ * @returns {Uint32Array}
+ */
+export function selectPolygon(cols, polygon, opts) {
+	var n = countOf(cols);
+	if (opts === undefined || opts === null) opts = {};
+	if (typeof opts !== "object") throw bad("options must be an object { boundary, tolerance, minZ, maxZ }");
+	var poly = makePolygonTest(polygon, opts);
+	var minZ = bound(opts, "minZ"), maxZ = bound(opts, "maxZ");
+	var x = needColumn(cols, "x", "selectPolygon"), y = needColumn(cols, "y", "selectPolygon");
+	var useZ = minZ !== undefined || maxZ !== undefined;
+	var z = useZ ? needColumn(cols, "z", "selectPolygon") : null;
+	if (minZ === undefined) minZ = -Infinity;
+	if (maxZ === undefined) maxZ = Infinity;
+	var test = poly.test;
+	var out = new Uint32Array(n), m = 0;
+	for (var i = 0; i < n; i++) {
+		if (useZ) {
+			var vz = z[i];
+			if (!(vz >= minZ && vz <= maxZ)) continue;
+		}
+		if (test(x[i], y[i])) out[m++] = i;
 	}
 	return trim(out, m);
 }

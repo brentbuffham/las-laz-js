@@ -56,7 +56,10 @@ var pts = await las.readPoints({
 	fields: ["x", "y", "z", "classification", "red", "green", "blue"],
 	classes: [2],            // keep only these classification codes
 	returns: [1],            // keep only these return numbers
-	bounds: { minX, maxX, minY, maxY, minZ, maxZ },
+	bounds: { minX, maxX, minY, maxY, minZ, maxZ },   // any limit may be left out: an omitted limit is open
+	polygon: [x0, y0, x1, y1, x2, y2],   // crop: keep points inside it (file coordinates, XY, even-odd)
+	boundary: "touching",    // polygon edge: "touching" keeps points on it (default), "inside" drops them
+	tolerance: 0,            // file units: within this of a polygon edge counts as on it
 	maxPoints: 5000000,      // even thinning; 0 keeps every point
 	dedupe: 0.01,            // drop points within 1 cm (XY; dedupeZ: true for 3D)
 	localOrigin: { x: 478000, y: 6772000 }, float32: true,   // small Float32 coordinates for the GPU
@@ -73,6 +76,9 @@ red green blue nir`. Fields a point format does not hold are left out. `scanAngl
 degrees for every format.
 
 Filters run on the raw record before it is decoded, so a filtered-out point costs a byte read.
+`polygon` is a crop on read: only the points inside it are decoded and held, so a site region of
+a large file never costs the whole file in memory. It needs at least 3 vertices (a flat list of
+x, y pairs, implicitly closed) and combines with the other filters and `maxPoints`.
 `maxPoints` keeps exactly that many of the points that pass the filters, spread evenly over
 the whole file; with filters set it first counts the passing points, which reads the file twice.
 

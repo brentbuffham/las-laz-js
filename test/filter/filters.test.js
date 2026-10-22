@@ -46,6 +46,42 @@ test("bounds keeps the 3 points inside the box (X 4-6, Y 10)", function () {
 	assert.equal(count(0, "1.2", { bounds: { minX: 3.5, maxX: 7.5, minY: 5, maxY: 15, minZ: -1, maxZ: 100 } }), 3);
 });
 
+test("bounds with only some limits: omitted means open", function () {
+	assert.equal(count(0, "1.2", { bounds: { minZ: 3 } }), 6);          // z = i * 0.5 >= 3 -> i = 6..11
+	assert.equal(count(0, "1.2", { bounds: { maxX: 2 } }), 3);          // x = 0, 1, 2
+	assert.equal(count(0, "1.2", { bounds: { minY: 5 } }), 3);          // the three at Y = 10
+	assert.equal(count(0, "1.2", { bounds: { maxZ: 1 } }), 3);          // z = 0, 0.5, 1
+	assert.equal(count(0, "1.2", { bounds: { minX: 3.5, maxX: 7.5 } }), 4);   // x = 4..7, no Y or Z limit
+	assert.equal(count(0, "1.2", { bounds: {} }), 12);
+});
+
+test("polygon keeps the points inside it (world X, Y of the raw record); boundary and tolerance as selectPolygon", function () {
+	var box = [3, -1, 9, -1, 9, 1, 3, 1];   // X 3..9, Y -1..1: x = 3, 7, 8, 9 (x = 4, 5, 6 are at Y = 10)
+	assert.equal(count(0, "1.2", { polygon: box }), 4);
+	assert.equal(count(0, "1.2", { polygon: box, boundary: "touching" }), 4);
+	assert.equal(count(0, "1.2", { polygon: box, boundary: "inside" }), 2);     // 3 and 9 are on the polygon's edges
+	var narrow = [3.5, -1, 8.5, -1, 8.5, 1, 3.5, 1];                            // x = 7, 8 inside; 3 and 9 are 0.5 outside an edge
+	assert.equal(count(0, "1.2", { polygon: narrow }), 2);
+	assert.equal(count(0, "1.2", { polygon: narrow, tolerance: 0.6 }), 4);
+	assert.equal(count(0, "1.2", { polygon: narrow, tolerance: 0.4 }), 2);
+	assert.equal(count(6, "1.4", { polygon: box, boundary: "inside" }), 2);
+});
+
+test("polygon and classes combine with AND; polygon and bounds too", function () {
+	var box = [3, -1, 9, -1, 9, 1, 3, 1];                                       // x = 3, 7, 8, 9
+	assert.equal(count(0, "1.2", { polygon: box, classes: [2] }), 2);                      // ground at 0, 3, 6, 9: 3 and 9 (6 is at Y = 10)
+	assert.equal(count(0, "1.2", { polygon: box, boundary: "inside", classes: [2] }), 0);  // 3 and 9 are on the edges
+	assert.equal(count(0, "1.2", { polygon: box, returns: [1] }), 1);                      // first returns at even x: 8 (4 and 6 are at Y = 10)
+	assert.equal(count(0, "1.2", { polygon: box, bounds: { minZ: 4 } }), 2);               // z = x / 2 >= 4: x = 8, 9
+});
+
+test("a polygon counts as a filter (makeKeep is not null); a bad one throws", function () {
+	var h = parseHeader(new MemorySource(buildLas({ version: "1.2", pointFormat: 0, points: twelve() })));
+	assert.equal(typeof makeKeep({ polygon: [0, 0, 1, 0, 0, 1] }, h), "function");
+	assert.throws(function () { makeKeep({ polygon: [0, 0, 1, 0] }, h); }, { code: "INVALID_ARGUMENT", message: /polygon/ });
+	assert.equal(makeKeep({ boundary: "inside", tolerance: 1 }, h), null);       // no polygon: nothing to filter
+});
+
 test("filters combine (AND): ground AND inside the box = X 6 only", function () {
 	assert.equal(count(0, "1.2", { classes: [2], bounds: { minX: 3.5, maxX: 7.5, minY: 5, maxY: 15, minZ: -1, maxZ: 100 } }), 1);
 });

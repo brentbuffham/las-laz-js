@@ -46,3 +46,23 @@ test("writeLas peaks at under 1.5x the file it returns", { timeout: 120000 }, fu
 	assert.equal(r.outBytes, 227 + N * 20);
 	assert.ok(r.peakDelta < 1.5 * r.outBytes, "peak rose " + Math.round(r.peakDelta / 1048576) + " MB for a " + Math.round(r.outBytes / 1048576) + " MB file");
 });
+
+test("a cropped read peaks below a full read", { timeout: 180000 }, function () {
+	var dir = mkdtempSync(join(tmpdir(), "las-mem-"));
+	try {
+		var pts = new Array(N);
+		for (var i = 0; i < N; i++) pts[i] = { x: 1000 + i * 0.01, y: 2000 + (i % 977), z: i % 100 };
+		var path = join(dir, "big.las");
+		writeFileSync(path, buildLas({ version: "1.2", pointFormat: 0, scale: { x: 0.01, y: 0.01, z: 0.01 }, points: pts }));
+		pts = null;
+		var full = probe(["read", path, String(4 * 1048576)]);
+		var cropped = probe(["read-polygon", path, String(4 * 1048576)]);
+		// X rises with the index, so the first tenth of X holds a tenth of the points (the edge point
+		// at the polygon's far side may add one): the columns returned are about a tenth of the full read's
+		assert.equal(full.outBytes, N * 24);
+		assert.ok(cropped.outBytes > full.outBytes / 11 && cropped.outBytes < full.outBytes / 9, "cropped columns are " + cropped.outBytes + " bytes of " + full.outBytes);
+		assert.ok(cropped.peakDelta < full.peakDelta / 2, "cropped peak rose " + Math.round(cropped.peakDelta / 1048576) + " MB, a full read's " + Math.round(full.peakDelta / 1048576) + " MB");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
