@@ -19,6 +19,7 @@ export { makeKeep, countKept } from "./filter/filters.js";
 export { dedupe, dedupeSelection } from "./filter/dedupe.js";
 export { buildIndex } from "./index/grid.js";
 export { pointsInRadius, nearestPoint, pointsNearRay } from "./index/query.js";
+export { nearestPoints } from "./index/knn.js";
 export { selectBox, selectPolygon, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
 export { keepPoints, removePoints, splitPoints, mergePoints } from "./ops/apply.js";
 export { makeTransform, transformPoints } from "./ops/transform.js";
