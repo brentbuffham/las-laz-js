@@ -108,7 +108,7 @@
 				<div class="row wrap">
 					<label>k <input type="number" id="outlierK" value="8" min="1" step="1" title="Neighbours averaged per point (PDAL's mean_k)"></label>
 					<label>Multiplier <input type="number" id="outlierMult" value="2" step="0.5" title="Standard deviations above the cloud's average mean distance"></label>
-					<button class="button" id="selOutliersButton" disabled title="Stray points: mean distance to the k nearest well above the cloud's (PDAL's statistical rule)">Outliers</button>
+					<button class="button" id="selOutliersButton" disabled title="Stray points: mean distance to the k nearest well above the cloud's (PDAL's statistical rule). For clouds of even density; on a handheld scan it selects the sparse surface far from the walk path, so use Sparse points there">Outliers</button>
 				</div>
 				<div class="row">
 					<button class="button" id="clearSelButton" disabled>Clear selection</button>

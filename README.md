@@ -253,7 +253,10 @@ A handheld scan reads a flat bench as a band centimetres thick. Remove the stray
 - **`selectOutliers(cols, { k = 8, multiplier = 2 })`** — each point's mean distance to its k
   nearest other points; a point is selected when that mean is above the cloud's average of those
   means plus `multiplier` standard deviations. It is PDAL's `filters.outlier` `method=statistical`
-  and selects the same points.
+  and selects the same points. It compares every point with one threshold for the whole cloud, so it
+  suits clouds of even density (aerial, static tripod). On a handheld scan, whose density falls far
+  from the walk path, it selects the sparse surface instead of strays: on a 1 M-point scan every point
+  it selected came from the sparsest tenth. Use `selectSparse` (a fixed radius) for dust there.
 - **`denoisePoints(cols, { method, k = 16, maxDistance, sigma, iterations = 1, normals, inPlace })`**
   moves each point against its neighbours — the other points among its k nearest within
   `maxDistance` (required: about 0.2–0.5 m for a handheld scan; a point with fewer than 5 stays
