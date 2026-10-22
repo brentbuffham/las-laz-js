@@ -316,4 +316,4 @@ export function pointsNearRay(index, origin, direction, opts) {
 	}
 }
 
-export { checkPoint, checkPositive, cellRange, cellDist2 };
+export { checkPoint, checkPositive, cellRange, cellDist2, decode };
