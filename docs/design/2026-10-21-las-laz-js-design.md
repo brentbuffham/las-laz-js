@@ -18,7 +18,7 @@ Decisions (Brent, 2026-10-20/21):
   from LGPL in 2022, following LASzip), not MIT / Apache dual. The ported files keep Apache-2.0 with
   their notice; the rest of the library stays MIT (package licence `MIT AND Apache-2.0`). Brent to confirm.
 - Releases: **0.1.0** read + write LAS · **0.2.0** read LAZ · **0.3.0** parallel LAZ decoding ·
-  **0.4.0** write LAZ · then point operations (§6; roadmap revised 2026-10-21).
+  **0.4.0** write LAZ · **0.5.0** point operations (§6; roadmap revised 2026-10-21).
 - **Kirra switches to the library at 0.2.0** (one migration, proven by identical output).
 - Every library ships a demo; this one is a **Three.js** viewer (demo spec).
 
@@ -147,7 +147,7 @@ ecw-js's `EcwError` (changed from three classes when planning, 2026-10-21). Code
 Roadmap revised 2026-10-21 (Brent): the library grows from format I/O into zero-dependency
 operations on point columns. 0.4.0 and 0.5.0 come first (Kirra needs them); each release gets
 its own spec.
-- **0.5.0 — selections and column operations.** Crop by box / polygon, keep or delete by point
+- **0.5.0 — selections and column operations (shipped 2026-10-22; spec `2026-10-22-selections-ops-0.5.0-design.md`).** Crop by box / polygon, keep or delete by point
   indices, split / merge, class filters, the pre-transform (#131), the thinning selector
   exported, original-index tracking, interleaved local-origin output into caller buffers.
 - **0.6.0 — voxel index.** Nearest-point and radius queries on a flat typed-array grid;

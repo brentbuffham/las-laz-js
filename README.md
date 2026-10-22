@@ -7,8 +7,11 @@ runs in the browser and in Node — and built for files far larger than memory.
 **Status: early (0.x).** It works and is tested, but the API may still change before 1.0.
 
 - Working: `openLas` reads the header, VLRs / EVLRs and coordinate system of LAS 1.0–1.4;
-  `readPoints` and `chunks` decode every point format (0–10) a window at a time, with filters
-  and thinning; `colourize` colours points; `writeLas` and `createLasWriter` write LAS 1.0–1.4.
+  `readPoints` and `chunks` decode every point format (0–10) a window at a time, with filters,
+  thinning, a polygon crop, a coordinate transform and the original point index; `colourize`
+  colours points; `writeLas` and `createLasWriter` write LAS 1.0–1.4.
+- Point operations on columns: select by box, polygon, class or return; keep, remove, split and
+  merge; transform coordinates; interleave positions for a renderer. See Point operations.
 - LAZ: point formats 0–3 and 6–8, read exactly like LAS — the same calls, the same options,
   decoded chunk by chunk in plain JavaScript (no WebAssembly) — and written with
   `compress: true`, byte for byte what PDAL (LAZperf) writes (bar one lossless exception, see
@@ -35,8 +38,9 @@ Drop a LAS or LAZ file onto the page. It is read locally (never uploaded), decod
 library's Worker (LAZ on every core) behind a progress bar, then shown once in a Three.js viewer;
 colour changes recolour the points already read, without reading the file again. The side panel shows the header, VLRs, coordinate
 system and LAZ compression; reads with class, return, bounds, thinning and dedupe filters;
-colours by RGB, intensity, elevation or class; lists point statistics; and saves the points back
-out as LAS. To run it locally: `npm run demo`, then open http://localhost:8080/.
+colours by RGB, intensity, elevation or class; lists point statistics; selects points by polygon,
+box or class and keeps, deletes, splits, transforms or crops them (the Edit tab); and saves the
+points back out as LAS or LAZ. To run it locally: `npm run demo`, then open http://localhost:8080/.
 
 ## Reading
 
@@ -57,9 +61,10 @@ var pts = await las.readPoints({
 	classes: [2],            // keep only these classification codes
 	returns: [1],            // keep only these return numbers
 	bounds: { minX, maxX, minY, maxY, minZ, maxZ },   // any limit may be left out: an omitted limit is open
-	polygon: [x0, y0, x1, y1, x2, y2],   // crop: keep points inside it (file coordinates, XY, even-odd)
+	polygon: [x0, y0, x1, y1, x2, y2],   // crop: keep points inside it (file coordinates, XY, even-odd); null is none
 	boundary: "touching",    // polygon edge: "touching" keeps points on it (default), "inside" drops them
 	tolerance: 0,            // file units: within this of a polygon edge counts as on it
+	transform: T,            // { m, t } from makeTransform, applied to world coordinates (see Point operations)
 	maxPoints: 5000000,      // even thinning; 0 keeps every point
 	dedupe: 0.01,            // drop points within 1 cm (XY; dedupeZ: true for 3D)
 	localOrigin: { x: 478000, y: 6772000 }, float32: true,   // small Float32 coordinates for the GPU
@@ -67,7 +72,7 @@ var pts = await las.readPoints({
 	signal: abortController.signal
 });
 pts.count; pts.x; pts.y; pts.z;   // one typed array per field
-pts.bounds; pts.stats;            // world bounds, per-class counts
+pts.bounds; pts.stats;            // world bounds (after any transform), per-class counts
 ```
 
 Fields: `x y z intensity returnNumber numberOfReturns scanDirection edgeOfFlightLine
@@ -75,12 +80,132 @@ classification classificationFlags scannerChannel scanAngle userData pointSource
 red green blue nir`. Fields a point format does not hold are left out. `scanAngle` is in
 degrees for every format.
 
+`index` is one more field, for every format: each kept point's record number in the file (0-based,
+counted after every filter and `maxPoints`). It is a `Uint32Array`, or a `Float64Array` for a file
+of more than 4,294,967,295 points. It is an ordinary column, so keep, remove, split and merge carry
+it, and it tells you which records of the file are left.
+
 Filters run on the raw record before it is decoded, so a filtered-out point costs a byte read.
 `polygon` is a crop on read: only the points inside it are decoded and held, so a site region of
 a large file never costs the whole file in memory. It needs at least 3 vertices (a flat list of
 x, y pairs, implicitly closed) and combines with the other filters and `maxPoints`.
 `maxPoints` keeps exactly that many of the points that pass the filters, spread evenly over
 the whole file; with filters set it first counts the passing points, which reads the file twice.
+
+In `bounds`, a limit that is left out (or `null`) is open; before 0.5.0 a missing limit kept
+nothing. `polygon: null` means no polygon. `boundary` and `tolerance` belong to `polygon`: a point
+within `tolerance` of an edge or vertex is on the boundary, kept by `"touching"` and dropped by
+`"inside"`. They are not `dedupe`'s tolerance, which is the value of the `dedupe` option.
+
+`transform` moves the points while they are decoded, in a fixed order: record → world (scale and
+offset) → `transform` (Float64) → minus `localOrigin` → Float32 (when `float32` and `localOrigin`
+are set). Raw scanner coordinates never pass through Float32 at full magnitude. The filters
+(`classes`, `returns`, `bounds`, `polygon`) apply in **file** coordinates, before the transform;
+the result's `bounds`, its stats and `dedupe` are in the output coordinates. To crop a scan in
+site coordinates, read it transformed and use `selectPolygon`. The Worker's elevation colour
+range follows the transform.
+
+## Point operations
+
+Zero-dependency operations on **point columns**: the object `readPoints` returns, or any object
+of the same shape, `{ count, <name>: TypedArray, ... }`. A property is a column when it is a typed
+array whose length is `count × k` for a whole number `k` of 1 or more (`k` is 1 for `x` or
+`classification`, 3 for an interleaved `positions` or `rgb`). Operations carry every column, `k`
+values per point, and nothing else: `bounds`, `stats` and the like are not copied, so rebuild them
+from the result. A **selection** is a `Uint32Array` of point indices, strictly ascending, each
+below `count`. Everything that takes one checks it in one pass and throws `INVALID_ARGUMENT`
+naming the first bad position; everything that makes one returns a valid one.
+
+### Select
+
+```js
+import { selectBox, selectPolygon, selectClasses, selectReturns, thinSelection,
+         unionSelections, intersectSelections, subtractSelections } from "las-laz-js";
+
+var inBox  = selectBox(pts, { minX: 477010, maxX: 477050, minZ: 295 });   // inclusive; a limit left out is open
+var inSite = selectPolygon(pts, poly, { boundary: "inside", tolerance: 0.001 });   // poly: [x0, y0, x1, y1, ...]
+var ground = selectClasses(pts, [2]);
+var last   = selectReturns(pts, { last: true, single: true });   // returns: [..], first, last, single; any one matches
+var thin   = thinSelection(pts.count, 1000);                     // exactly min(count, 1000) indices, spread evenly
+var wanted = intersectSelections(inSite, ground);                // also unionSelections, subtractSelections
+```
+
+`selectPolygon` takes a flat `[x0, y0, x1, y1, ...]` list of at least 3 vertices, closed for you,
+in the columns' own coordinates; the interior is the even-odd rule, so a concave polygon works.
+Points on the boundary are kept by `boundary: "touching"` (the default) and dropped by `"inside"`,
+so the two differ by exactly the boundary points, and `splitPoints` by one polygon loses and
+duplicates nothing. `minZ` / `maxZ` add a height limit. `thinSelection` is the reader's
+`maxPoints` rule: `keepPoints(all, thinSelection(n, t))` gives the points
+`readPoints({ maxPoints: t })` does.
+
+### Keep, remove, split, merge
+
+```js
+import { keepPoints, removePoints, splitPoints, mergePoints } from "las-laz-js";
+
+var kept    = keepPoints(pts, wanted);              // new columns of the same types
+var without = removePoints(pts, wanted);
+var [inside, outside] = splitPoints(pts, inSite);   // always copies; every point lands in one result
+var both    = mergePoints([inside, outside]);       // concatenated in order; both.filled is []
+
+var crop = keepPoints(big, selectPolygon(big, poly), { inPlace: true });   // no second copy
+```
+
+`inPlace: true` (for `keepPoints` and `removePoints`) slides the kept values down inside each
+column's own buffer and returns views of that memory: the input is overwritten, and a big cloud is
+cropped without a second copy. Columns that share memory (the same array twice, or overlapping
+views) are refused, since compacting one would corrupt the other.
+
+`mergePoints` takes the union of the column names; a column missing from an input is zero for
+that input's points, and its name is listed in `result.filled`. A column named `count` or
+`filled` is refused. A column's `k` must agree across inputs. The result's type is the widest:
+Float64 over Float32 over the integer types; an Int32 or Uint32 with a Float32 gives Float64
+(Float32 holds integers exactly only to 2^24). Signed with unsigned integers merge only when the
+signed type is strictly wider (Int16 with Uint8 is Int16; Int8 with Uint8, or Int32 with Uint32,
+is `INVALID_ARGUMENT`). Coordinates must already share one frame.
+
+### Transform
+
+```js
+import { makeTransform, transformPoints } from "las-laz-js";
+
+// p' = scale · R · (p − about) + about + shift; rotateZ is degrees anticlockwise about +Z
+var T = makeTransform({ rotateZ: 90, about: [477050, 6770015, 0], shift: [10, 0, 0] });
+// T = { m: [0, -1, 0, 1, 0, 0, 0, 0, 1], t: [7247075, 6292965, 0] }   row-major: p' = m·p + t
+
+var moved = transformPoints(pts, T);                     // { count, columns }: new x, y, z; the rest shared
+var same  = transformPoints(pts, T, { inPlace: true });  // the same x, y, z arrays, overwritten
+
+var local = await las.readPoints({                       // or while reading
+	fields: ["x", "y", "z"], transform: T,
+	localOrigin: { x: 477050, y: 6770015 }, float32: true
+});
+```
+
+A transform is a plain object, `{ m, t }`, with `m` nine numbers (a row-major 3×3) and `t` three.
+Any affine map fits, so a fitted registration can be passed the same way; it is not Three.js's
+column-major `Matrix4`. `makeTransform` takes `shift`, `about`, `scale` and either `rotateZ` or
+`rotate` (a row-major 3×3; not both). `transformPoints` needs `x`, `y` and `z`, computes in
+Float64 and stores in the columns' own types. It returns a new `{ count, columns }` object either
+way: with `inPlace` the arrays in it are the input's, overwritten. On read, the order is the one
+above.
+
+### Interleave for a renderer
+
+```js
+import { interleavePositions } from "las-laz-js";
+
+var positions = interleavePositions(pts, { origin: { x: 477000, y: 6770000 } });   // Float32Array, x y z per point
+geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+
+// or into a buffer you own, starting at point 'at'; layout "xy" writes two values per point
+interleavePositions(pts, { into: buffer, at: 50000, layout: "xyz", origin: { x: 477000, y: 6770000, z: 300 } });
+```
+
+The origin is subtracted in Float64 before storing, so world coordinates keep their decimals in a
+Float32 buffer; an axis left out of `origin` is not shifted ({ x, y } keeps world Z). `float32`
+defaults to true and picks the type of a new array; `into` must be a Float32Array or Float64Array
+long enough, else `INVALID_ARGUMENT`.
 
 ## LAZ
 

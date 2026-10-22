@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.5.0 (2026-10-22)
+
+Point operations.
+
+- Operations on point columns (the object `readPoints` returns, or any `{ count, <name>: TypedArray }`
+  whose arrays are `count × k` long), with no dependencies. A selection is a `Uint32Array` of
+  strictly ascending point indices, checked on use (`INVALID_ARGUMENT` names the bad position).
+- Select: `selectBox`, `selectPolygon` (even-odd; `boundary: "touching"` keeps points on the edge,
+  `"inside"` drops them; `tolerance`; `minZ` / `maxZ`), `selectClasses`, `selectReturns` (`returns`,
+  `first`, `last`, `single`, any one matches), `thinSelection` (the reader's `maxPoints` rule,
+  exported), and `unionSelections`, `intersectSelections`, `subtractSelections`.
+- Apply: `keepPoints`, `removePoints`, `splitPoints`, `mergePoints`. Copies by default; `inPlace: true`
+  on keep and remove compacts each column inside its own buffer and returns views of it (columns that
+  share memory are refused). `mergePoints` takes the union of the columns, lists zero-filled ones
+  in `filled`, widens types (Float64 over Float32 over integers; Int32 or Uint32 with Float32 gives
+  Float64), and refuses a `k` mismatch, a column named `count` or `filled`, and signed with unsigned
+  integers unless the signed type is strictly wider.
+- Transform: `makeTransform({ shift, rotateZ, rotate, scale, about })` builds a row-major `{ m, t }`;
+  `transformPoints(cols, T, { inPlace })` applies it in Float64 and returns a new `{ count, columns }`
+  object (a copy has new x, y, z and shares the rest; `inPlace` returns the input's arrays, overwritten).
+- `interleavePositions(cols, { layout, into, at, origin, float32 })` packs x y (z) into a caller's
+  Float32 / Float64 buffer, shifting by `origin` in Float64 first.
+- Reads: `index` field (each point's record number; Uint32, Float64 above 4,294,967,295 points);
+  `polygon` / `boundary` / `tolerance` crop while reading, so only the region is decoded and held;
+  `transform` applies in the fixed order record → world → T → minus `localOrigin` → Float32.
+  Filters apply in file coordinates; the result's bounds and `dedupe` are in output coordinates,
+  and the worker's elevation colour range follows the transform.
+- Changed: an omitted (or `null`) `bounds` limit is now open. Before, a missing limit kept nothing.
+  `polygon: null` means no polygon.
+- Demo: an Edit tab (polygon, box and class selections; keep, delete, split, transform, crop on
+  read) and LAZ export.
+- Docs: README "Point operations".
+
 ## 0.4.0 (2026-10-22)
 
 Writes LAZ.
