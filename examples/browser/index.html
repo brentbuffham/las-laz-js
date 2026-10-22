@@ -114,7 +114,7 @@
 				<div class="form-grid">
 					<label>Shift (m) <input type="text" id="shift" placeholder="x y z" title="Blank values are 0"></label>
 					<label>Rotate Z (°) <input type="number" id="rotateZ" value="0" step="1" title="Anticlockwise, about the cloud's centre"></label>
-					<label>Scale <input type="number" id="scale" value="1" min="0" step="0.1" title="About the cloud's centre"></label>
+					<label>Scale <input type="number" id="scale" value="1" min="0.001" step="0.1" title="About the cloud's centre; greater than 0"></label>
 				</div>
 				<div class="row"><button class="button" id="transformButton" disabled>Apply transform</button></div>
 				<h3>Crop on read</h3>
@@ -159,7 +159,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-write">
-				<p class="muted">Writes the points read (with every field the format holds) as a new LAS or LAZ file with <code>writeLas</code>, then reads it back to check the round trip. After an edit it writes the edited cloud instead: the fields read (x y z, class, intensity, return, colour). A browser page holds at most <span id="writeCapText">5,000,000</span> points for this, thinned evenly; to write more, stream with <code>createLasWriter</code>.</p>
+				<p class="muted">Writes the points read (with every field the format holds) as a new LAS or LAZ file with <code>writeLas</code>, then reads it back to check the round trip. After an edit it writes the edited cloud instead: the fields read (x y z, class, intensity, return and number of returns, colour); a Split cloud is saved whole, both parts. A browser page holds at most <span id="writeCapText">5,000,000</span> points for this, thinned evenly; to write more, stream with <code>createLasWriter</code>.</p>
 				<label class="field">LAS version
 					<select id="writeVersion"><option>1.2</option><option>1.4</option></select>
 				</label>

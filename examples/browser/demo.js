@@ -12,7 +12,7 @@
 import {
 	writeLas, openLas, colourize, POINT_FORMATS,
 	selectPolygon, selectBox, selectClasses, unionSelections,
-	keepPoints, removePoints, splitPoints, mergePoints, interleavePositions,
+	keepPoints, removePoints, splitPoints, mergePoints, interleavePositions, thinSelection,
 	makeTransform, transformPoints
 } from "../../src/index.js";
 import { createViewer } from "./viewer.js";
@@ -144,7 +144,7 @@ async function read(crop) {
 	var t0 = performance.now();
 	var tol = Number($("dedupe").value) || 0;
 	readJob = call("readPoints", Object.assign({
-		fields: ["x", "y", "z", "classification", "intensity", "returnNumber", "index"].concat(hasRgb ? ["red", "green", "blue"] : []),
+		fields: ["x", "y", "z", "classification", "intensity", "returnNumber", "numberOfReturns", "index"].concat(hasRgb ? ["red", "green", "blue"] : []),
 		classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(),
 		maxPoints: Number($("maxPoints").value) || 0, dedupe: tol > 0 ? tol : undefined,
 		localOrigin: origin, float32: true
@@ -278,6 +278,7 @@ function setDrawing(on) {
 	$("drawButton").classList.toggle("active", on);
 	$("drawButton").textContent = on ? "Drawing…" : "Draw";
 	$("viewer").querySelector("canvas").classList.toggle("drawing", on);
+	if (!on) viewer.setOutline(poly, polyZ, polyClosed);   // drop the rubber band to the cursor
 }
 function polyInfo(text) { $("polyInfo").textContent = text; }
 
@@ -415,6 +416,7 @@ function transform() {
 	edit("Transform", function () {
 		var about = [(ext.minX + ext.maxX) / 2, (ext.minY + ext.maxY) / 2, (ext.minZ + ext.maxZ) / 2];
 		var scale = $("scale").value.trim() === "" ? 1 : Number($("scale").value);
+		if (!(scale > 0)) throw new Error("scale must be greater than 0");
 		var T = makeTransform({ shift: triple($("shift").value, 0), rotateZ: Number($("rotateZ").value) || 0, scale: scale, about: about });
 		return { cloud: transformPoints(cloud, T), keep: true };
 	});
@@ -453,11 +455,12 @@ function writeChoice() {
 	$("writeButton").textContent = $("writeCompress").checked ? "Save as LAZ" : "Save as LAS";
 }
 
-// The edited cloud's own columns: the fields read, still relative to the origin
+// The edited cloud's own columns: the fields read, still relative to the origin, thinned
+// evenly (the reader's maxPoints rule) to the page's write limit
 function editedColumns() {
-	var c = cloud, cols = { count: c.count, x: c.x, y: c.y, z: c.z, classification: c.classification, intensity: c.intensity, returnNumber: c.returnNumber };
+	var c = cloud, cols = { count: c.count, x: c.x, y: c.y, z: c.z, classification: c.classification, intensity: c.intensity, returnNumber: c.returnNumber, numberOfReturns: c.numberOfReturns };
 	if (c.red) { cols.red = c.red; cols.green = c.green; cols.blue = c.blue; }
-	return cols;
+	return c.count > WRITE_CAP ? keepPoints(cols, thinSelection(c.count, WRITE_CAP)) : cols;
 }
 
 async function save() {
@@ -496,8 +499,9 @@ async function save() {
 		a.download = name;
 		a.click();
 		setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
-		var what = fromEdit ? ", the edited cloud: x y z, class, intensity, return" + (cols.red ? ", colour" : "")
-			: (cols.count < h.pointCount && limit === WRITE_CAP ? " (thinned to the page's " + fmt(WRITE_CAP) + "-point limit)" : "");
+		var capped = " (thinned to the page's " + fmt(WRITE_CAP) + "-point limit)";
+		var what = fromEdit ? ", the edited cloud: x y z, class, intensity, returns" + (cols.red ? ", colour" : "") + (cols.count < cloud.count ? capped : "")
+			: (cols.count < h.pointCount && limit === WRITE_CAP ? capped : "");
 		$("writeResult").textContent = "Saved " + name + " (" + fmt(blob.size) + " bytes, " + fmt(cols.count) + " points" + what + ", written in " + ms + " ms). Round trip: " + (ok ? "OK, same count read back." : "MISMATCH (" + fmt(check.count) + " read back)") + note;
 		$("writeResult").className = ok ? "muted small" : "error small";
 	} catch (err) {
