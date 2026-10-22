@@ -14,6 +14,8 @@ import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf, buildGrid, lookup, checkPointCount } from "../index/grid.js";
 import { cellRange, visitBox, decode } from "../index/query.js";
 
+var FACE = 2e-6;   // in cells: nearer a face than this, a point gets its own cell lookup
+
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
 /**
@@ -56,7 +58,15 @@ export function selectSparse(cols, opts) {
 		return false;
 	}
 
-	var keys = g.keys;
+	// A point on a cell face: the cells its own radius box covers, its own cell first
+	function slotsAround(o, own) {
+		var rx = cellRange(g, 0, X[o] - radius, X[o] + radius), ry = cellRange(g, 1, Y[o] - radius, Y[o] + radius);
+		var rz = xy ? [0, 0] : cellRange(g, 2, Z[o] - radius, Z[o] + radius), out = [own];
+		visitBox(g, [rx[0], ry[0], rz[0]], [rx[1], ry[1], rz[1]], function (u) { if (u !== own) out.push(u); });
+		return out;
+	}
+
+	var keys = g.keys, inv = 1 / g.cellSize, x0 = g.min[0], y0 = g.min[1], z0 = g.min[2];
 	for (var s = 0; s < keys.length; s++) {
 		if (keys[s] < 0) continue;
 		var c = decode(g, keys[s]);
@@ -72,13 +82,11 @@ export function selectSparse(cols, opts) {
 		}
 		for (var j = start[s], e = j + length[s]; j < e; j++) {
 			var p = order[j], o = p * st;
-			var rx = cellRange(g, 0, X[o] - radius, X[o] + radius), ry = cellRange(g, 1, Y[o] - radius, Y[o] + radius);
-			var rz = xy ? [0, 0] : cellRange(g, 2, Z[o] - radius, Z[o] + radius);
+			// Where p sits in its cell (0 to 1 per axis): away from the faces, every point
+			// within one radius (= one cell) is in the 27 cells around
+			var fx = (X[o] - x0) * inv - c[0], fy = (Y[o] - y0) * inv - c[1], fz = xy ? 0.5 : (Z[o] - z0) * inv - c[2];
 			var slots = near;
-			if (rx[0] < c[0] - 1 || rx[1] > c[0] + 1 || ry[0] < c[1] - 1 || ry[1] > c[1] + 1 || rz[0] < c[2] - 1 || rz[1] > c[2] + 1) {
-				slots = [];
-				visitBox(g, [rx[0], ry[0], rz[0]], [rx[1], ry[1], rz[1]], function (u) { slots.push(u); });
-			}
+			if (fx < FACE || fx > 1 - FACE || fy < FACE || fy > 1 - FACE || fz < FACE || fz > 1 - FACE) slots = slotsAround(o, s);
 			if (!enough(p, slots)) { sparse[p] = 1; nSparse++; }
 		}
 	}

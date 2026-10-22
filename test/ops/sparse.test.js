@@ -10,7 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { selectSparse } from "../../src/ops/sparse.js";
 import * as lib from "../../src/index.js";
-import { randomCloud, pointReader } from "../helpers/clouds.js";
+import { randomCloud, pointReader, rng } from "../helpers/clouds.js";
 
 function bruteSparse(cols, radius, minN, xy) {
 	var at = pointReader(cols), out = [], r2 = radius * radius, pts = [];
@@ -102,4 +102,16 @@ test("bad arguments are refused, naming the argument", function () {
 	assert.throws(function () { selectSparse(c, { radius: 1, minNeighbours: 0 }); }, { message: /minNeighbours/ });
 	assert.throws(function () { selectSparse(c, { radius: 1, minNeighbours: 1.5 }); }, { message: /minNeighbours/ });
 	assert.throws(function () { selectSparse({ count: 2, x: new Float64Array(2) }, { radius: 1 }); }, { message: /selectSparse needs x, y, z/ });
+});
+
+test("points on cell faces (quantised coordinates) stay fast in dense cells", function () {
+	// 300 000 points in a 6 m cube on a 1 cm grid: 1.5 % sit exactly on a 2 m cell face and
+	// take the face path; scanning a far 11 000-point cell first made this ~25× slower
+	var r = rng(41), n = 300000, c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n) };
+	for (var i = 0; i < n; i++) { c.x[i] = Math.round(r() * 600) / 100; c.y[i] = Math.round(r() * 600) / 100; c.z[i] = Math.round(r() * 600) / 100; }
+	c.x[0] = 0; c.y[0] = 0; c.z[0] = 0;
+	var t = performance.now();
+	assert.equal(selectSparse(c, { radius: 2 }).length, 0);
+	var ms = performance.now() - t;
+	if (!process.env.NODE_V8_COVERAGE) assert.ok(ms < 200, "took " + Math.round(ms) + " ms");
 });
