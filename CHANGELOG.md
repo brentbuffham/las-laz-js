@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.1 (2026-10-22)
 
 - Demo: a read bigger than the draw cap (20 M) is drawn as an even spread over the whole cloud,
   not its first 20 M points; selections and edits still act on every point read, and the
