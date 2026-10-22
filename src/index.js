@@ -19,6 +19,7 @@ export { makeKeep, countKept } from "./filter/filters.js";
 export { dedupe } from "./filter/dedupe.js";
 export { selectBox, selectPolygon, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
 export { keepPoints, removePoints, splitPoints, mergePoints } from "./ops/apply.js";
+export { interleavePositions } from "./ops/interleave.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
