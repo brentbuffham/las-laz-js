@@ -1,7 +1,8 @@
 // test/helpers/pdalOutlier.js
 //==========================================================
-// PDAL's radius outlier filter as an oracle for selectSparse
-// (dev machine only: LAS_PDAL=<path to pdal>). The points are
+// PDAL's outlier filter as an oracle: method=radius for selectSparse,
+// method=statistical for selectOutliers (dev machine only:
+// LAS_PDAL=<path to pdal>). The points are
 // written to a temporary LAS (format 0, 1 mm scale), read back so
 // both sides see the same rounded coordinates, and run through
 //   pdal translate in out outlier --filters.outlier.method=radius
@@ -9,6 +10,9 @@
 // (2026-10-22): min_k counts OTHER points, so it equals our
 // minNeighbours; a point exactly `radius` away is not counted (ours
 // counts it); when every point would be flagged it flags none.
+// Statistical (PDAL 2.10.0, 2026-10-22): mean_k nearest excluding the
+// point itself, sample standard deviation (n - 1), noise when the
+// mean distance is above mean + multiplier · sd — selectOutliers' rule.
 // Test-only.
 //==========================================================
 
@@ -26,7 +30,22 @@ import { writeLas } from "../../src/write/writeLas.js";
  * @param {number} minK
  * @returns {Promise<{cols: object, flagged: number[]}>} the re-read points and PDAL's class-7 indices
  */
-export async function pdalRadiusOutlier(pdal, cols, radius, minK) {
+export function pdalRadiusOutlier(pdal, cols, radius, minK) {
+	return pdalOutlier(pdal, cols, ["--filters.outlier.method=radius", "--filters.outlier.radius=" + radius, "--filters.outlier.min_k=" + minK]);
+}
+
+/**
+ * @param {string} pdal - path to the pdal executable.
+ * @param {object} cols - { count, x, y, z } (any numeric arrays).
+ * @param {number} meanK
+ * @param {number} multiplier
+ * @returns {Promise<{cols: object, flagged: number[]}>} the re-read points and PDAL's class-7 indices
+ */
+export function pdalStatisticalOutlier(pdal, cols, meanK, multiplier) {
+	return pdalOutlier(pdal, cols, ["--filters.outlier.method=statistical", "--filters.outlier.mean_k=" + meanK, "--filters.outlier.multiplier=" + multiplier]);
+}
+
+async function pdalOutlier(pdal, cols, args) {
 	var dir = mkdtempSync(join(tmpdir(), "las-pdal-outlier-"));
 	try {
 		var input = join(dir, "in.las"), output = join(dir, "out.las");
@@ -35,7 +54,7 @@ export async function pdalRadiusOutlier(pdal, cols, radius, minK) {
 		writeFileSync(input, await writeLas(pts, { pointFormat: 0, scale: { x: 0.001, y: 0.001, z: 0.001 } }));
 		var a = await openLas(input), back = await a.readPoints({ fields: ["x", "y", "z"] });
 		await a.close();
-		execFileSync(pdal, ["translate", input, output, "outlier", "--filters.outlier.method=radius", "--filters.outlier.radius=" + radius, "--filters.outlier.min_k=" + minK], { stdio: "pipe" });
+		execFileSync(pdal, ["translate", input, output, "outlier"].concat(args), { stdio: "pipe" });
 		var b = await openLas(output), res = await b.readPoints({ fields: ["classification"] });
 		await b.close();
 		var flagged = [];
