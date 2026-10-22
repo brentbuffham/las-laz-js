@@ -5,10 +5,11 @@
 // tolerance-sized cells, neighbours checked), ported from point
 // objects to columns. XY by default (one Z per XY location, as a
 // 2.5D surface wants); { z: true } compares in 3D.
-// Every column follows the kept points.
+// Every column follows the kept points (k values per point).
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
+import { columnsOf, gather, sameType } from "../ops/columns.js";
 
 /**
  * @param {object} cols - PointColumns ({ count, x, y, z?, ... }).
@@ -69,13 +70,21 @@ export function dedupe(cols, tolerance, opts) {
 		kept[nKept++] = i;
 	}
 
+	// Every column (k values per point) follows the kept points; anything else passes through
+	var sel = kept.subarray(0, nKept);
+	var ks = {};
+	columnsOf(cols).forEach(function (c) { ks[c.name] = c.k; });
 	var out = { count: nKept };
 	Object.keys(cols).forEach(function (name) {
+		if (name === "count") return;
 		var col = cols[name];
-		if (!ArrayBuffer.isView(col) || col.length !== cols.count) { if (name !== "count") out[name] = col; return; }
-		var c = new col.constructor(nKept);
-		for (var q = 0; q < nKept; q++) c[q] = col[kept[q]];
-		out[name] = c;
+		var v = col;
+		if (Object.prototype.hasOwnProperty.call(ks, name)) {
+			v = sameType(col, nKept * ks[name]);
+			gather(col, v, ks[name], sel);
+		}
+		// defineProperty so a column named "__proto__" stays a column
+		Object.defineProperty(out, name, { value: v, enumerable: true, writable: true, configurable: true });
 	});
 	return out;
 }

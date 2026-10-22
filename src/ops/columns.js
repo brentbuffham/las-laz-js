@@ -105,6 +105,48 @@ export function sameType(a, length) {
 	return new Ctor(length);
 }
 
+/**
+ * dst[i] = src[sel[i]] for each i (k values each; internal, not exported from the package entry).
+ * dst may be src: i <= sel[i], so ascending writes never overwrite a value still to be read.
+ * @param {TypedArray} src
+ * @param {TypedArray} dst
+ * @param {number} k
+ * @param {Uint32Array} sel - strictly ascending.
+ */
+export function gather(src, dst, k, sel) {
+	var n = sel.length;
+	if (k === 1) {
+		for (var i = 0; i < n; i++) dst[i] = src[sel[i]];
+		return;
+	}
+	for (var p = 0; p < n; p++) {
+		var from = sel[p] * k;
+		var to = p * k;
+		for (var j = 0; j < k; j++) dst[to + j] = src[from + j];
+	}
+}
+
+/**
+ * Throw INVALID_ARGUMENT when two of the named columns overlap in memory (internal; not exported
+ * from the package entry). In-place compaction writes into every column's buffer, so two columns
+ * whose byte ranges overlap would corrupt each other: refuse before any write.
+ * @param {object} cols
+ * @param {Array<{name: string}>} list - the columns to check, by name.
+ */
+export function checkNoSharedMemory(cols, list) {
+	for (var i = 0; i < list.length; i++) {
+		var a = cols[list[i].name];
+		if (a.byteLength === 0) continue;
+		for (var j = i + 1; j < list.length; j++) {
+			var b = cols[list[j].name];
+			if (b.byteLength === 0 || a.buffer !== b.buffer) continue;
+			if (a.byteOffset < b.byteOffset + b.byteLength && b.byteOffset < a.byteOffset + a.byteLength) {
+				throw bad("inPlace: columns \"" + list[i].name + "\" and \"" + list[j].name + "\" share memory");
+			}
+		}
+	}
+}
+
 var FLOATS = { Float64Array: 8, Float32Array: 4 };
 function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
 

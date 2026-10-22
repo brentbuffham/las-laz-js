@@ -322,3 +322,21 @@ test("every LAZ fixture read with a transform equals transformPoints of the plai
 		assert.deepEqual(Array.from(moved.classification), Array.from(plain.classification), name);
 	}
 });
+
+test("transformPoints inPlace refuses x, y or z that share memory, before any write", function () {
+	var T = makeTransform({ shift: [1, 1, 1] });
+	var shared = new Float64Array([1, 2]);
+	invalid(function () { transformPoints({ count: 2, x: shared, y: shared, z: new Float64Array(2) }, T, { inPlace: true }); }, "\"x\" and \"y\" share memory");
+	invalid(function () { transformPoints({ count: 2, x: new Float64Array(2), y: shared, z: shared }, T, { inPlace: true }); }, "\"y\" and \"z\" share memory");
+	assert.deepEqual(Array.from(shared), [1, 2]);
+	// overlapping views of one buffer
+	var buf = new ArrayBuffer(32);
+	invalid(function () { transformPoints({ count: 2, x: new Float64Array(buf, 0, 2), y: new Float64Array(2), z: new Float64Array(buf, 8, 2) }, T, { inPlace: true }); }, "\"x\" and \"z\" share memory");
+	// the copy is not affected, and distinct views of one buffer are fine in place
+	var r = transformPoints({ count: 2, x: shared, y: shared, z: new Float64Array(2) }, T);
+	assert.deepEqual(Array.from(r.x), [2, 3]);
+	var ok = new Float64Array(6);
+	var inPl = transformPoints({ count: 2, x: ok.subarray(0, 2), y: ok.subarray(2, 4), z: ok.subarray(4, 6) }, T, { inPlace: true });
+	assert.deepEqual(Array.from(ok), [1, 1, 1, 1, 1, 1]);
+	assert.equal(inPl.count, 2);
+});

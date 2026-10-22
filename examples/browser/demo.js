@@ -123,14 +123,16 @@ function colourOpts() {
 var cloud = null;      // the points on screen, kept so colour changes and edits never re-read the file
 var lastRead = null;   // the points last read: Reset goes back to them (every edit makes a copy)
 var edited = false;    // cloud is an edit of lastRead, so Save writes it rather than re-reading
+var transformed = false;   // cloud has been through Transform since the last read or Reset
 var readCrop = null;   // { polygon, boundary, tolerance } of the last read (world), or null
 var ext = null;        // the cloud's local extent { minX … maxZ, midZ }
 
 // Decode out of sight (the library's worker, its chunks on every core), show progress, then
 // build the cloud once. Only the read filters (classes, returns, bounds, max points, dedupe)
 // need a new read; colour changes recolour the points kept here. crop: a polygon in world
-// coordinates to read inside (the Edit tab's "Read inside polygon"), or nothing.
-async function read(crop) {
+// coordinates to read inside (the Edit tab's "Read inside polygon"), or nothing; note is
+// appended to the status line when the read finishes.
+async function read(crop, note) {
 	if (!info) return;
 	if (readJob) await stop();
 	$("viewerEmpty").classList.add("hidden");
@@ -156,14 +158,14 @@ async function read(crop) {
 	try {
 		cloud = lastRead = await readJob.promise;
 		readCrop = crop || null;
-		edited = false; selection = null; splitAt = -1;
+		edited = false; transformed = false; selection = null; splitAt = -1;
 		var secs = (performance.now() - t0) / 1000;
 		$("progress").value = 1;
 		setStatus("Building the view…");
 		await new Promise(function (r) { requestAnimationFrame(function () { setTimeout(r, 0); }); });   // paint before the build
 		display(true);
 		var drawn = viewer.drawnCount(), showing = drawn < cloud.count ? " (showing " + fmt(drawn) + ")" : "";
-		if (crop) setStatus("Read inside polygon: " + fmt(info.header.pointCount) + " → " + fmt(cloud.count) + " points in " + Math.round(secs * 1000) + " ms" + showing);
+		if (crop) setStatus("Read inside polygon: " + fmt(info.header.pointCount) + " → " + fmt(cloud.count) + " points in " + Math.round(secs * 1000) + " ms" + showing + (note || ""));
 		else setStatus("Read " + fmt(cloud.count) + " points in " + secs.toFixed(1) + " s" + showing);
 		// every record is decoded (thinning picks from all of them), so the rate is over the whole file
 		$("stats").textContent = (crop ? "read " : "decoded ") + fmt(info.header.pointCount) + " points in " + secs.toFixed(1) + " s (" + fmt(Math.round(info.header.pointCount / Math.max(secs, 0.001))) + " pts/s) · kept " + fmt(cloud.count) + (crop ? " inside the polygon" : "");
@@ -391,6 +393,7 @@ function edit(name, make) {
 	var ms = since(t0);
 	cloud = out.cloud;
 	edited = true;
+	if (out.transformed) transformed = true;
 	if (!out.keep) { selection = null; splitAt = -1; }
 	if (out.splitAt !== undefined) splitAt = out.splitAt;
 	display(false);
@@ -418,20 +421,22 @@ function transform() {
 		var scale = $("scale").value.trim() === "" ? 1 : Number($("scale").value);
 		if (!(scale > 0)) throw new Error("scale must be greater than 0");
 		var T = makeTransform({ shift: triple($("shift").value, 0), rotateZ: Number($("rotateZ").value) || 0, scale: scale, about: about });
-		return { cloud: transformPoints(cloud, T), keep: true };
+		return { cloud: transformPoints(cloud, T), keep: true, transformed: true };
 	});
 }
 // Read the file again inside the polygon: the outline is local, the read wants world coordinates
 function cropRead() {
 	if (poly.length < 6) { setStatus("Read inside polygon: draw a polygon first (three or more vertices)", true); return; }
 	var world = poly.map(function (v, i) { return v + (i % 2 ? origin.y : origin.x); });
-	read({ polygon: world, boundary: $("boundary").value, tolerance: Number($("tolerance").value) || 0 });
+	// The read is in file coordinates, so after a Transform the outline (drawn over the moved cloud) is not what is cropped
+	var note = transformed ? " · crop reads the file in its own coordinates; the outline was drawn over the transformed cloud" : "";
+	read({ polygon: world, boundary: $("boundary").value, tolerance: Number($("tolerance").value) || 0 }, note);
 }
 function reset() {
 	if (!lastRead) return;
 	var before = cloud.count, t0 = performance.now();
 	cloud = lastRead;
-	edited = false; selection = null; splitAt = -1;
+	edited = false; transformed = false; selection = null; splitAt = -1;
 	display(false);
 	showStats();
 	showSelection();

@@ -12,7 +12,7 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { countOf, columnsOf, sameType } from "./columns.js";
+import { countOf, columnsOf, sameType, checkNoSharedMemory } from "./columns.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -142,7 +142,7 @@ export function transformBounds(T, b) {
  * column's own type. Copy by default (new x, y, z; every other column
  * shared by reference). inPlace writes into the input's x, y and z
  * arrays and returns a new object holding them (the input object itself
- * is not changed). The result is { count, <columns> } only: bounds and
+ * is not changed; x, y and z must not share memory). The result is { count, <columns> } only: bounds and
  * stats are not carried, they would be stale.
  * @param {object} cols - point columns with x, y and z (k = 1, not BigInt).
  * @param {{m: ArrayLike<number>, t: ArrayLike<number>}} T - from makeTransform, or any affine map.
@@ -164,6 +164,7 @@ export function transformPoints(cols, T, options) {
 		return col;
 	});
 	var inPlace = !!opt.inPlace;
+	if (inPlace) checkNoSharedMemory(cols, [{ name: "x" }, { name: "y" }, { name: "z" }]);
 	var x = a[0], y = a[1], z = a[2];
 	var ox = inPlace ? x : sameType(x, n);
 	var oy = inPlace ? y : sameType(y, n);

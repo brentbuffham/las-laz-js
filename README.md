@@ -80,15 +80,18 @@ classification classificationFlags scannerChannel scanAngle userData pointSource
 red green blue nir`. Fields a point format does not hold are left out. `scanAngle` is in
 degrees for every format.
 
-`index` is one more field, for every format: each kept point's record number in the file (0-based,
-counted after every filter and `maxPoints`). It is a `Uint32Array`, or a `Float64Array` for a file
-of more than 4,294,967,295 points. It is an ordinary column, so keep, remove, split and merge carry
-it, and it tells you which records of the file are left.
+`index` is one more field, for every format: the column is present for the points the filters and
+`maxPoints` keep, and each value is that record's position in the file (0-based; it is not
+renumbered after filtering). It is a `Uint32Array`, or a `Float64Array` for a file of more than
+4,294,967,295 points. It is an ordinary column, so keep, remove, split and merge carry it, and it
+tells you which records of the file are left.
 
 Filters run on the raw record before it is decoded, so a filtered-out point costs a byte read.
 `polygon` is a crop on read: only the points inside it are decoded and held, so a site region of
 a large file never costs the whole file in memory. It needs at least 3 vertices (a flat list of
-x, y pairs, implicitly closed) and combines with the other filters and `maxPoints`.
+x, y pairs, implicitly closed) and combines with the other filters and `maxPoints`. A LAZ crop
+saves memory and field decoding but still decompresses every chunk (there is no spatial index), so
+its time is close to a full read.
 `maxPoints` keeps exactly that many of the points that pass the filters, spread evenly over
 the whole file; with filters set it first counts the passing points, which reads the file twice.
 
@@ -134,7 +137,9 @@ var wanted = intersectSelections(inSite, ground);                // also unionSe
 in the columns' own coordinates; the interior is the even-odd rule, so a concave polygon works.
 Points on the boundary are kept by `boundary: "touching"` (the default) and dropped by `"inside"`,
 so the two differ by exactly the boundary points, and `splitPoints` by one polygon loses and
-duplicates nothing. `minZ` / `maxZ` add a height limit. `thinSelection` is the reader's
+duplicates nothing. Coordinates are not exact in binary, so a point mathematically on an edge may not
+count as on it at `tolerance: 0`; use a small tolerance (for example 1e-6 of the units) to catch
+boundary points. `minZ` / `maxZ` add a height limit. `thinSelection` is the reader's
 `maxPoints` rule: `keepPoints(all, thinSelection(n, t))` gives the points
 `readPoints({ maxPoints: t })` does.
 
@@ -162,7 +167,9 @@ that input's points, and its name is listed in `result.filled`. A column named `
 Float64 over Float32 over the integer types; an Int32 or Uint32 with a Float32 gives Float64
 (Float32 holds integers exactly only to 2^24). Signed with unsigned integers merge only when the
 signed type is strictly wider (Int16 with Uint8 is Int16; Int8 with Uint8, or Int32 with Uint32,
-is `INVALID_ARGUMENT`). Coordinates must already share one frame.
+is `INVALID_ARGUMENT`). An input with no points is ignored when the type is chosen, so an empty
+Int8 column does not block a Uint16 one; a column only an empty input has keeps its type.
+Coordinates must already share one frame.
 
 ### Transform
 
@@ -187,7 +194,8 @@ Any affine map fits, so a fitted registration can be passed the same way; it is 
 column-major `Matrix4`. `makeTransform` takes `shift`, `about`, `scale` and either `rotateZ` or
 `rotate` (a row-major 3×3; not both). `transformPoints` needs `x`, `y` and `z`, computes in
 Float64 and stores in the columns' own types. It returns a new `{ count, columns }` object either
-way: with `inPlace` the arrays in it are the input's, overwritten. On read, the order is the one
+way: with `inPlace` the arrays in it are the input's, overwritten (and `x`, `y` and `z` must not
+share memory, or it throws `INVALID_ARGUMENT`). On read, the order is the one
 above.
 
 ### Interleave for a renderer

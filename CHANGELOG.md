@@ -28,7 +28,11 @@ Point operations.
   Filters apply in file coordinates; the result's bounds and `dedupe` are in output coordinates,
   and the worker's elevation colour range follows the transform.
 - Changed: an omitted (or `null`) `bounds` limit is now open. Before, a missing limit kept nothing.
-  `polygon: null` means no polygon.
+  `polygon: null` means no polygon. `selectBox` and the `minZ` / `maxZ` of `selectPolygon` read a
+  `null` bound as open too.
+- `dedupe` moves every column (k values per point, such as an interleaved `positions` or `rgb`) with
+  the kept points; other properties pass through. `transformPoints` with `inPlace` refuses x, y or z
+  that share memory. `mergePoints` ignores a zero-point input when widening types.
 - Demo: an Edit tab (polygon, box and class selections; keep, delete, split, transform, crop on
   read) and LAZ export.
 - Docs: README "Point operations".

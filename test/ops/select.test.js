@@ -145,3 +145,12 @@ test("thinning identity on a built 1000-point file", async function () {
 	assert.equal(await identity(las, {}, 37), 1000);
 	assert.equal(await identity(las, { classes: [2] }, 37), 250);
 });
+test("selectBox: a null bound is open, as the reader's bounds are", function () {
+	assert.deepEqual(Array.from(selectBox(c, { minX: null, maxX: 3 })), [0, 1, 2, 3]);
+	assert.deepEqual(Array.from(selectBox(c, { minX: 7, maxX: null, minZ: null, maxZ: null })), [7, 8, 9]);
+	assert.deepEqual(Array.from(selectBox(c, { minX: null, maxX: null, minY: null, maxY: null })), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+	// a null Z bound alone does not ask for z
+	assert.deepEqual(Array.from(selectBox({ count: 1, x: new Float64Array(1), y: new Float64Array(1) }, { minZ: null })), [0]);
+	// the polygon's Z limits read the same way
+	assert.deepEqual(Array.from(lib.selectPolygon(c, [-1, -1, 11, -1, 11, 3, -1, 3], { minZ: null, maxZ: 20 })), [0, 1, 2]);
+});

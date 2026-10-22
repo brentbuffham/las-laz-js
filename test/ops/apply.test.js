@@ -392,3 +392,22 @@ test("mergePoints: column names that are Object.prototype members work; count an
 	// "count" cannot be a typed array in a valid input, but a typed-array count is refused as a count
 	expectCode(function () { mergePoints([{ count: new Uint8Array(1) }]); }, /list\[0\]/);
 });
+
+test("mergePoints: a zero-point input does not take part in type widening", function () {
+	var m = mergePoints([{ count: 0, x: new Int8Array(0) }, { count: 2, x: new Uint16Array([1, 2]) }]);
+	assert.ok(m.x instanceof Uint16Array);
+	assert.deepEqual(Array.from(m.x), [1, 2]);
+	// otherwise Int8 with Uint16 would throw (the values would wrap)
+	var flip = mergePoints([{ count: 2, x: new Uint16Array([1, 2]) }, { count: 0, x: new Int8Array(0) }]);
+	assert.ok(flip.x instanceof Uint16Array);
+	// a column only the empty input has keeps its type
+	var only = mergePoints([{ count: 0, w: new Int16Array(0) }, { count: 1, x: new Uint8Array([1]) }]);
+	assert.ok(only.w instanceof Int16Array);
+	assert.equal(only.w.length, 1);
+	// two empty inputs still widen with each other
+	var empties = mergePoints([{ count: 0, v: new Int8Array(0) }, { count: 0, v: new Int16Array(0) }]);
+	assert.ok(empties.v instanceof Int16Array);
+	// a BigInt column in an empty input does not clash with a number column
+	var big = mergePoints([{ count: 0, v: new BigInt64Array(0) }, { count: 1, v: new Float64Array([1]) }]);
+	assert.ok(big.v instanceof Float64Array);
+});

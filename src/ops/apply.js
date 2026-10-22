@@ -8,24 +8,9 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { columnsOf, checkSelection, countOf, widestType, sameType } from "./columns.js";
+import { columnsOf, checkSelection, countOf, widestType, sameType, gather, checkNoSharedMemory } from "./columns.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
-
-// dst[i] = src[sel[i]] (k values each). dst may be src: i <= sel[i], so
-// ascending writes never overwrite a value still to be read.
-function gather(src, dst, k, sel) {
-	var n = sel.length;
-	if (k === 1) {
-		for (var i = 0; i < n; i++) dst[i] = src[sel[i]];
-		return;
-	}
-	for (var p = 0; p < n; p++) {
-		var from = sel[p] * k;
-		var to = p * k;
-		for (var j = 0; j < k; j++) dst[to + j] = src[from + j];
-	}
-}
 
 // dst gets every point of src not in sel, in order. dst may be src: the
 // write position never passes the read position.
@@ -43,22 +28,6 @@ function gatherComplement(src, dst, k, count, sel) {
 // A column on the output; defineProperty so a column named "__proto__" stays a column.
 function setColumn(out, name, a) {
 	Object.defineProperty(out, name, { value: a, enumerable: true, writable: true, configurable: true });
-}
-
-// In-place compaction writes into every column's buffer, so two columns
-// whose byte ranges overlap would corrupt each other: refuse before any write.
-function checkNoSharedMemory(cols, list) {
-	for (var i = 0; i < list.length; i++) {
-		var a = cols[list[i].name];
-		if (a.byteLength === 0) continue;
-		for (var j = i + 1; j < list.length; j++) {
-			var b = cols[list[j].name];
-			if (b.byteLength === 0 || a.buffer !== b.buffer) continue;
-			if (a.byteOffset < b.byteOffset + b.byteLength && b.byteOffset < a.byteOffset + a.byteLength) {
-				throw bad("inPlace: columns \"" + list[i].name + "\" and \"" + list[j].name + "\" share memory");
-			}
-		}
-	}
 }
 
 // Shared body of keep / remove / split: validate once, then one pass per column.
@@ -119,7 +88,8 @@ export function splitPoints(cols, sel) {
  * in first-appearance order. A column missing from an input with points is
  * 0 for those points and its name is listed in `filled`. A column's k must
  * agree across inputs (a zero-point input has no k to disagree with); its
- * type is the widest across inputs, and merging signed with unsigned
+ * type is the widest across the inputs that have points (a zero-point input
+ * is ignored, unless no input with points has the column), and merging signed with unsigned
  * integers that would wrap throws. Coordinates must already share a frame.
  * @param {object[]} list - point-column objects.
  * @returns {object} { count, <every column>, filled: string[] }.
@@ -142,12 +112,12 @@ export function mergePoints(list) {
 			if (c.name === "count" || c.name === "filled") throw bad("column \"" + c.name + "\" in list[" + li + "] is a reserved name; rename it before merging");
 			found[c.name] = true;
 			var e = info[c.name];
-			if (!e) { e = info[c.name] = { k: 0, types: [] }; names.push(c.name); }
+			if (!e) { e = info[c.name] = { k: 0, types: [], emptyTypes: [] }; names.push(c.name); }
 			if (n > 0) {
 				if (e.k !== 0 && e.k !== c.k) throw bad("column \"" + c.name + "\" has k = " + e.k + " in an earlier input but k = " + c.k + " in list[" + li + "]");
 				e.k = c.k;
 			}
-			e.types.push(globalThis[Object.prototype.toString.call(cols[c.name]).slice(8, -1)]);
+			(n > 0 ? e.types : e.emptyTypes).push(globalThis[Object.prototype.toString.call(cols[c.name]).slice(8, -1)]);
 		});
 		total += n;
 		return { n: n, found: found };
@@ -157,7 +127,7 @@ export function mergePoints(list) {
 	names.forEach(function (name) {
 		var e = info[name];
 		var k = e.k || 1;
-		var Type = widestType(e.types, name);
+		var Type = widestType(e.types.length > 0 ? e.types : e.emptyTypes, name);
 		var dst = new Type(total * k);
 		var at = 0;
 		perInput.forEach(function (inp, i) {

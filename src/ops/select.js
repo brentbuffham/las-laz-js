@@ -32,14 +32,14 @@ function table(list, name) {
 
 function bound(box, key) {
 	var v = box[key];
-	if (v === undefined) return undefined;
+	if (v === undefined || v === null) return undefined;
 	if (typeof v !== "number" || v !== v) throw bad(key + " must be a number");
 	return v;
 }
 
 /**
  * Indices of the points inside a box, bounds inclusive. An omitted
- * (undefined) bound is no limit. Needs x and y; z only when minZ or
+ * (undefined) or null bound is no limit, as in the reader's bounds. Needs x and y; z only when minZ or
  * maxZ is given.
  * @param {object} cols - point columns.
  * @param {{minX?:number, maxX?:number, minY?:number, maxY?:number, minZ?:number, maxZ?:number}} box
