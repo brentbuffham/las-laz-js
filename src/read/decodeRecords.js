@@ -18,11 +18,19 @@
 // reaches total (Bresenham), so record ceil(j * total / target) - 1
 // is the j-th kept. acc is carried from window to window. The rule
 // itself is thinStep in ops/select.js (thinSelection uses it too).
+//
+// opts.transform { m, t } registers the points while reading: per kept
+// record, world = raw * scale + offset, then the transform (Float64),
+// then minus localOrigin, then Float32 when asked. Filters (keep) see
+// the raw record, so they work in file coordinates. With a transform
+// all three world coordinates are computed whichever of x / y / z are
+// wanted. Without one, the offset and origin fold into one constant.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { POINT_FORMATS } from "../format/PointFormats.js";
 import { thinStep } from "../ops/select.js";
+import { checkTransform } from "../ops/transform.js";
 
 /** Fields decoded when opts.fields is not given (colour added when the format has it). */
 export var DEFAULT_FIELDS = Object.freeze(["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "classification"]);
@@ -75,7 +83,8 @@ export function resolveFields(header, fields) {
  * Decode a window of whole point records.
  * @param {Uint8Array} bytes - whole records, the first at bytes[0].
  * @param {object} header - from parseHeader.
- * @param {object} [opts] - { fields, keep, thin, localOrigin, float32, into, firstIndex }
+ * @param {object} [opts] - { fields, keep, thin, localOrigin, float32, transform, into, firstIndex }
+ *   transform: { m, t } applied in Float64 to the world coordinates before localOrigin is subtracted
  *   into: { cols, at } decodes straight into existing columns from index at
  *   (each sized for every record that can be kept) and returns only { count }
  *   firstIndex: the file record number of bytes[0] (default 0); the index column holds
@@ -97,6 +106,9 @@ export function decodeRecords(bytes, header, opts) {
 	var oz = origin && isFinite(origin.z) ? origin.z : 0;
 	var f32 = !!(opts.float32 && origin);
 	var first = opts.firstIndex > 0 ? opts.firstIndex : 0;
+	var T = opts.transform ? checkTransform(opts.transform, "transform") : null;
+	var m0 = 0, m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 0, m6 = 0, m7 = 0, m8 = 0, t0 = 0, t1 = 0, t2 = 0;
+	if (T) { m0 = T.m[0]; m1 = T.m[1]; m2 = T.m[2]; m3 = T.m[3]; m4 = T.m[4]; m5 = T.m[5]; m6 = T.m[6]; m7 = T.m[7]; m8 = T.m[8]; t0 = T.t[0]; t1 = T.t[1]; t2 = T.t[2]; }
 
 	var into = opts.into || null;
 	var cols = into ? into.cols : {};
@@ -107,6 +119,8 @@ export function decodeRecords(bytes, header, opts) {
 	var ext = fmt.extended;
 	var want = {};
 	fields.forEach(function (name) { want[name] = true; });
+	var wantPos = !!(T && (want.x || want.y || want.z));
+	var wx = header.offset.x, wy = header.offset.y, wz = header.offset.z;
 
 	var k = into ? into.at : 0;
 	for (var i = 0; i < n; i++) {
@@ -114,9 +128,18 @@ export function decodeRecords(bytes, header, opts) {
 		if (keep && !keep(view, at)) continue;
 		if (thin && !thinStep(thin)) continue;
 		if (want.index) cols.index[k] = first + i;
-		if (want.x) cols.x[k] = view.getInt32(at, LE) * sx + tx;
-		if (want.y) cols.y[k] = view.getInt32(at + 4, LE) * sy + ty;
-		if (want.z) cols.z[k] = view.getInt32(at + 8, LE) * sz + tz;
+		if (wantPos) {
+			var px = view.getInt32(at, LE) * sx + wx;
+			var py = view.getInt32(at + 4, LE) * sy + wy;
+			var pz = view.getInt32(at + 8, LE) * sz + wz;
+			if (want.x) cols.x[k] = m0 * px + m1 * py + m2 * pz + t0 - ox;
+			if (want.y) cols.y[k] = m3 * px + m4 * py + m5 * pz + t1 - oy;
+			if (want.z) cols.z[k] = m6 * px + m7 * py + m8 * pz + t2 - oz;
+		} else {
+			if (want.x) cols.x[k] = view.getInt32(at, LE) * sx + tx;
+			if (want.y) cols.y[k] = view.getInt32(at + 4, LE) * sy + ty;
+			if (want.z) cols.z[k] = view.getInt32(at + 8, LE) * sz + tz;
+		}
 		if (want.intensity) cols.intensity[k] = view.getUint16(at + 12, LE);
 		var rb = view.getUint8(at + 14);
 		if (ext) {

@@ -25,6 +25,7 @@ import { createChunkDecoder } from "./laz/decompressChunk.js";
 import { createLazPool, defaultThreads } from "./laz/pool.js";
 import { makeKeep, countKept } from "./filter/filters.js";
 import { dedupe } from "./filter/dedupe.js";
+import { checkTransform } from "./ops/transform.js";
 import { openScratchSyncWriter } from "./io/ScratchBinaryFile.js";
 
 var DEFAULT_WINDOW = 64 * 1024 * 1024;
@@ -179,7 +180,7 @@ LasReader.prototype._plan = async function () {
 
 /**
  * Iterate the selected points window by window.
- * @param {object} [opts] - fields, classes, returns, bounds, polygon (crop; with boundary "touching" | "inside" and tolerance), maxPoints, localOrigin, float32, onProgress, signal
+ * @param {object} [opts] - fields, classes, returns, bounds, polygon (crop; with boundary "touching" | "inside" and tolerance), maxPoints, transform ({ m, t } from makeTransform: world coordinates are transformed in Float64 before localOrigin is subtracted; filters apply in file coordinates), localOrigin, float32, onProgress, signal
  * @returns {AsyncGenerator<object>} PointColumns per window
  */
 LasReader.prototype.chunks = async function* (opts) {
@@ -192,6 +193,7 @@ LasReader.prototype.chunks = async function* (opts) {
 // makes decodeRecords write straight into readPoints' result columns.
 LasReader.prototype._scan = async function* (opts, into) {
 	var h = this.header;
+	if (opts.transform) checkTransform(opts.transform, "transform");
 	var plan = await this._plan();
 	var keep = makeKeep(opts, h);
 	var fields = resolveFields(h, opts.fields);
@@ -208,7 +210,7 @@ LasReader.prototype._scan = async function* (opts, into) {
 		var kept = 0, w = 0;
 		for await (var bytes of windowBytes(plan, pool, buf, opts.signal)) {
 			var win = list[w];
-			var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, firstIndex: win.firstRecord, into: into ? into(win) : null });
+			var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, transform: opts.transform, firstIndex: win.firstRecord, into: into ? into(win) : null });
 			kept += cols.count;
 			w++;
 			if (typeof opts.onProgress === "function") opts.onProgress(w / list.length, "read " + kept + " points");
