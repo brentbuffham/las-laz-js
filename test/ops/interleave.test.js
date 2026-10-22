@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { interleavePositions } from "../../src/ops/interleave.js";
 import * as lib from "../../src/index.js";
 
-// 3 points, x / y in the millions (Float32 would lose the decimals of the offset)
+// 3 points, x / y in the millions; whole values, so Float32 holds them exactly before any shift
 var c = {
 	count: 3,
 	x: Float64Array.from([500001, 500002, 500003]),
@@ -42,3 +42,41 @@ test("into too short, a bad layout or a bad into type throws", function () {
 });
 test("count 0 writes nothing", function () { assert.equal(interleavePositions({ count: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0) }).length, 0); });
 test("interleavePositions is exported from the entry point", function () { assert.equal(lib.interleavePositions, interleavePositions); });
+
+// Fractional world coordinates: Float32 rounds at 2^-5 near 500000, so
+// storing x and subtracting the origin afterwards gives a different value.
+test("the origin is subtracted before the Float32 store", function () {
+	var fc = {
+		count: 1,
+		x: Float64Array.from([500000.123456]),
+		y: Float64Array.from([7000000.654321]),
+		z: Float64Array.from([0])
+	};
+	var p = interleavePositions(fc, { origin: { x: 500000, y: 7000000 } });
+	var x = fc.x[0], y = fc.y[0];
+	assert.equal(p[0], Math.fround(x - 500000));
+	assert.equal(p[1], Math.fround(y - 7000000));
+	assert.notEqual(p[0], Math.fround(x) - 500000);
+	assert.notEqual(p[1], Math.fround(y) - 7000000);
+});
+test("at must be a whole number ≥ 0", function () {
+	[-1, 1.5, NaN].forEach(function (at) {
+		assert.throws(function () { interleavePositions(c, { at: at }); }, /at/);
+	});
+});
+test("xyz needs z; xy works without z", function () {
+	var noZ = { count: 3, x: c.x, y: c.y };
+	assert.throws(function () { interleavePositions(noZ); }, /needs a z column/);
+	assert.deepEqual(Array.from(interleavePositions(noZ, { layout: "xy", origin: { x: 500000, y: 7000000 } })), [1, 1, 2, 2, 3, 3]);
+});
+test("a non-finite origin axis is ignored", function () {
+	var p = interleavePositions(c, { origin: { x: NaN, y: 7000000, z: 0 } });
+	assert.equal(p[0], 500001);
+	assert.equal(p[1], 1);
+});
+test("float32: false with a Float32Array into writes into that array", function () {
+	var into = new Float32Array(9);
+	var p = interleavePositions(c, { into: into, float32: false, origin: { x: 500000, y: 7000000 } });
+	assert.equal(p, into);
+	assert.deepEqual(Array.from(into), [1, 1, 10, 2, 2, 20, 3, 3, 30]);
+});
