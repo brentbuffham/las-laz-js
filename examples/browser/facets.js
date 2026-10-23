@@ -5,11 +5,12 @@
 // typed windows). Colours by facet or joint set (the Colour tab's list),
 // outlines on the cloud, the sets table with Select set (the set's
 // points become the selection, to Classify, delete or crop), a hover
-// line, and CSV downloads. Results are in the cloud's local frame; CSV
+// line, a stereonet (stereonet.js) and CSV downloads. Results are in the cloud's local frame; CSV
 // centroids are world coordinates.
 //==========================================================
 
 import { findFacets, jointSets } from "../../src/index.js";
+import { drawStereonet } from "./stereonet.js";
 
 // 8 distinct set colours, then grey for points in no set
 var SET_RGB = [[230, 25, 75], [60, 180, 75], [67, 99, 216], [245, 130, 49], [145, 30, 180], [66, 212, 244], [240, 50, 230], [191, 239, 69]];
@@ -26,7 +27,7 @@ export function setCss(id) { var c = setRgb(id); return "rgb(" + c[0] + "," + c[
 
 /**
  * @param {object} ctx - $, viewer, setStatus, fmt, since, select(name, make), recolour(), keepPoints,
- *   and getters cloud, origin, selection; onSets(result) (the stereonet, Task 6).
+ *   and getters cloud, origin, selection.
  */
 export function initFacets(ctx) {
 	var $ = ctx.$, fmt = ctx.fmt;
@@ -83,7 +84,7 @@ export function initFacets(ctx) {
 		try { res.sets = jointSets(res.f.facets, setOptions()); } catch (err) { status(err.message, true); return; }
 		res.pointSet = res.sets.pointFamily(res.facet);
 		showSets();
-		if (ctx.onSets) ctx.onSets(res);
+		drawStereonet($("stereonet"), res.f.facets, res.sets.families, res.sets.family, setCss);
 	}
 	function showSets() {
 		var t = $("facSetTable"), s = res && res.sets;
@@ -154,9 +155,10 @@ export function initFacets(ctx) {
 		ctx.viewer.clearOutlines();
 		showSets();
 		$("facSetInfo").textContent = "";
-		if (ctx.onSets) ctx.onSets(null);
+		drawStereonet($("stereonet"), null, null, null, setCss);
 		if (why) status(why);
 	}
+	drawStereonet($("stereonet"), null, null, null, setCss);
 	$("facRun").addEventListener("click", run);
 	$("facSets").addEventListener("click", function () { if (res) { sets(); ctx.recolour(); } });
 	$("facSetMode").addEventListener("change", function () {
