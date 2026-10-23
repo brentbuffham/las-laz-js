@@ -169,11 +169,13 @@ Roadmap revised 2026-10-23 (Brent): categorise first (small), registration befor
 - **0.8.0 — registration (spec `2026-10-23-register-0.8.0-design.md`):** `fitTransform` (rigid,
   level, scale) from control points matched by name or from picked pairs, leave-one-out
   residuals; `alignCloud` with optional point-to-plane ICP.
-- **0.9.0 — facets and joint sets** (as CloudCompare's facet tool): planar region growing on
-  0.7.0's normals and residuals, dip / dip direction per facet, families by orientation;
-  per-point facet and family columns ("tags"); facet and family tables, each facet with its
-  outline as a closed 3D polygon on its plane (traced from an in-plane grid, no
-  triangulation); written back as LAS 1.4 extra bytes.
+- **0.9.0 — facets and joint sets** (spec `2026-10-23-facets-0.9.0-design.md`; as CloudCompare's
+  facet tool): planar region growing on 0.7.0's normals and residuals, dip / dip direction per
+  facet, joint sets by orientation (automatic, a count, or windows) with Fisher statistics;
+  per-point facet and set columns in memory; each facet with its outline as a closed 3D
+  polygon on its plane (traced from an in-plane grid, no triangulation).
+- **0.9.1 — extra bytes:** read and write the LAS 1.4 Extra Bytes VLR, LAS and LAZ, so any file's
+  extra bytes survive a save and the facet / set columns can be written back.
 - **0.10.0 — level of detail:** large clouds split into tiles held in binary scratch (memory or a
   temp disk store, `ScratchBinaryFile`) and loaded by view, for Kirra #129.
 
