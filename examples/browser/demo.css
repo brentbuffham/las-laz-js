@@ -268,3 +268,18 @@ progress { width: 160px; height: 8px; accent-color: var(--accent); }
 .form-grid select { width: 100%; }
 #tab-edit h3 { padding-top: 10px; border-top: 1px solid var(--border); }
 #tab-edit h3:first-of-type { padding-top: 0; border-top: 0; }
+
+.pick-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.pick-label {
+	position: absolute;
+	left: 0;
+	top: 0;
+	padding: 1px 5px;
+	border-radius: 3px;
+	font-size: 11px;
+	font-family: var(--mono);
+	color: #fff;
+	white-space: nowrap;
+}
+.pick-label.moving { background: #ff2d95; }
+.pick-label.reference { background: #ff9f1a; color: #111; }

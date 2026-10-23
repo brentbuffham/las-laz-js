@@ -823,4 +823,4 @@ window.addEventListener("drop", function (e) {
 	$("dropOverlay").classList.add("hidden");
 	if (e.dataTransfer.files[0]) openFile(e.dataTransfer.files[0]);
 });
-window.lasDemo = { openFile: openFile, read: read, save: save };
+window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer };   // for checks from the console

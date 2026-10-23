@@ -6,7 +6,10 @@
 // Each streamed chunk becomes one THREE.Points; hover picks the
 // nearest point under the cursor in screen space. The Edit tab draws
 // a polygon on a horizontal plane (planePoint, setOutline) and looks
-// straight down to do it (topView).
+// straight down to do it (topView). The Register tab adds a second,
+// reference cloud (setReference), numbered pick markers on either
+// cloud (setMarkers, with HTML labels kept on their points) and
+// picking on one layer (pick(..., layer)).
 //==========================================================
 
 import * as THREE from "three";
@@ -32,6 +35,20 @@ export function createViewer(container) {
 	// drawn over the points (no depth test) so the outline never hides behind them
 	var lineMaterial = new THREE.LineBasicMaterial({ color: 0xff2d95, depthTest: false });
 	var dotMaterial = new THREE.PointsMaterial({ color: 0xff2d95, size: 7, sizeAttenuation: false, depthTest: false });
+	// the reference cloud (Register tab): one THREE.Points of its own, picked separately
+	var ref = null;   // { points, positions, count }
+	var refBox = new THREE.Box3();
+	// pick markers: dots on both clouds (moving magenta, reference orange) and their HTML labels
+	var markerGroup = new THREE.Group();
+	scene.add(markerGroup);
+	var markerMaterials = {
+		moving: new THREE.PointsMaterial({ color: 0xff2d95, size: 9, sizeAttenuation: false, depthTest: false }),
+		reference: new THREE.PointsMaterial({ color: 0xff9f1a, size: 9, sizeAttenuation: false, depthTest: false })
+	};
+	var markers = [];   // { x, y, z, el }
+	var labelLayer = document.createElement("div");
+	labelLayer.className = "pick-labels";
+	container.appendChild(labelLayer);
 
 	function background() {
 		var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -48,10 +65,23 @@ export function createViewer(container) {
 	window.addEventListener("resize", resize);
 	resize();
 
+	// keep each marker's label on its point
+	function placeLabels() {
+		if (!markers.length) return;
+		var w = container.clientWidth, h = container.clientHeight, v = new THREE.Vector3();
+		markers.forEach(function (mk) {
+			v.set(mk.x, mk.y, mk.z).project(camera);
+			var off = v.z > 1;
+			mk.el.style.display = off ? "none" : "";
+			if (!off) mk.el.style.transform = "translate(" + Math.round((v.x * 0.5 + 0.5) * w + 6) + "px, " + Math.round((-v.y * 0.5 + 0.5) * h - 18) + "px)";
+		});
+	}
+
 	(function loop() {
 		requestAnimationFrame(loop);
 		controls.update();
 		renderer.render(scene, camera);
+		placeLabels();
 	})();
 
 	return {
@@ -78,11 +108,12 @@ export function createViewer(container) {
 			drawn += count;
 			return count;
 		},
-		/** Frame the whole cloud. */
+		/** Frame the whole cloud (and the reference cloud, when there is one). */
 		fit: function () {
-			if (box.isEmpty()) return;
-			var centre = box.getCenter(new THREE.Vector3());
-			var size = box.getSize(new THREE.Vector3()).length() || 1;
+			var all = box.clone().union(refBox);
+			if (all.isEmpty()) return;
+			var centre = all.getCenter(new THREE.Vector3());
+			var size = all.getSize(new THREE.Vector3()).length() || 1;
 			controls.target.copy(centre);
 			camera.position.set(centre.x - size * 0.6, centre.y - size * 0.8, centre.z + size * 0.6);
 			camera.near = size / 10000; camera.far = size * 20;
@@ -141,21 +172,74 @@ export function createViewer(container) {
 			});
 		},
 		drawnCount: function () { return drawn; },
-		/** Nearest drawn point to a screen position, within maxPx: { chunk, index } or null. */
-		pick: function (clientX, clientY, maxPx) {
+		/** The reference cloud: positions Float32Array (x,y,z, local like the main cloud), colours Uint8Array (r,g,b); replaces any before. */
+		setReference: function (positions, colours) {
+			this.clearReference();
+			var geom = new THREE.BufferGeometry();
+			geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+			geom.setAttribute("color", new THREE.BufferAttribute(colours, 3, true));
+			geom.computeBoundingBox();
+			refBox.copy(geom.boundingBox);
+			ref = { points: new THREE.Points(geom, material), positions: positions, count: positions.length / 3 };
+			scene.add(ref.points);
+		},
+		/** Remove the reference cloud. */
+		clearReference: function () {
+			if (!ref) return;
+			scene.remove(ref.points);
+			ref.points.geometry.dispose();
+			ref = null;
+			refBox.makeEmpty();
+		},
+		/** Show or hide a layer: "moving" (the main cloud) or "reference". */
+		setVisible: function (layer, on) {
+			if (layer === "reference") { if (ref) ref.points.visible = on; }
+			else group.visible = on;
+		},
+		/** Pick markers: [{ x, y, z (local), label, layer: "moving" | "reference" }]; setMarkers([]) removes them. */
+		setMarkers: function (list) {
+			while (markerGroup.children.length) { var o = markerGroup.children.pop(); o.geometry.dispose(); }
+			labelLayer.innerHTML = "";
+			markers = [];
+			["moving", "reference"].forEach(function (layer) {
+				var mine = (list || []).filter(function (m) { return (m.layer || "moving") === layer; });
+				if (!mine.length) return;
+				var pos = new Float32Array(mine.length * 3);
+				mine.forEach(function (m, i) {
+					pos[i * 3] = m.x; pos[i * 3 + 1] = m.y; pos[i * 3 + 2] = m.z;
+					var el = document.createElement("span");
+					el.className = "pick-label " + layer;
+					el.textContent = m.label;
+					labelLayer.appendChild(el);
+					markers.push({ x: m.x, y: m.y, z: m.z, el: el });
+				});
+				var geom = new THREE.BufferGeometry();
+				geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+				var dots = new THREE.Points(geom, markerMaterials[layer]);
+				dots.renderOrder = 2;
+				markerGroup.add(dots);
+			});
+			placeLabels();
+		},
+		/**
+		 * Nearest drawn point to a screen position, within maxPx. layer "moving" (default): the main
+		 * cloud, { chunk, index } or null; "reference": the reference cloud, { index } or null.
+		 */
+		pick: function (clientX, clientY, maxPx, layer) {
 			var rect = renderer.domElement.getBoundingClientRect();
 			var mx = clientX - rect.left, my = clientY - rect.top;
 			var v = new THREE.Vector3(), best = null, bestD = maxPx * maxPx;
-			for (var c = 0; c < chunks.length; c++) {
-				var pos = chunks[c].positions;
+			var layers = layer === "reference" ? (ref ? [ref] : []) : chunks;
+			for (var c = 0; c < layers.length; c++) {
+				var pos = layers[c].positions;
 				// sample at most ~200k points per pick so hover stays smooth on big clouds
-				var step = Math.max(1, Math.floor(chunks[c].count / 200000));
-				for (var i = 0; i < chunks[c].count; i += step) {
+				var step = Math.max(1, Math.floor(layers[c].count / 200000));
+				for (var i = 0; i < layers[c].count; i += step) {
 					v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).project(camera);
 					if (v.z > 1) continue;
 					var sx = (v.x * 0.5 + 0.5) * rect.width - mx, sy = (-v.y * 0.5 + 0.5) * rect.height - my;
 					var d = sx * sx + sy * sy;
-					if (d < bestD) { bestD = d; best = { chunk: c, index: i }; }
+					if (d < bestD) { bestD = d; best = layer === "reference" ? { index: i } : { chunk: c, index: i }; }
 				}
 			}
 			return best;
