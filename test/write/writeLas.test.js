@@ -216,3 +216,42 @@ test("formats 6-10 refuse an EPSG-only CRS, and write WKT without GeoKeys", asyn
 	var legacy = await openLas(await writeLas(columns(2), { version: "1.2", pointFormat: 3, crs: { epsg: 28350 } }));
 	assert.equal(legacy.crs.epsg, 28350);                // formats 0-5 keep GeoKeys
 });
+
+// Classes above 31 in point formats 0-5 (5 bits): refused, never masked
+function classCloud(n, at, cls) {
+	var c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n), classification: new Uint8Array(n) };
+	for (var i = 0; i < n; i++) { c.x[i] = 477000 + i; c.y[i] = 6770000 + i; c.classification[i] = 2; }
+	if (at >= 0) c.classification[at] = cls;
+	return c;
+}
+
+test("a class above 31 is refused in formats 0-5", async function () {
+	for (var fmt of [0, 1, 2, 3]) {
+		await assert.rejects(writeLas(classCloud(10, 4, 32), { pointFormat: fmt }),
+			{ message: "point 4 has class 32; point formats 0-5 hold classes 0-31 — write point format 6 or higher" });
+	}
+	await assert.rejects(writeLas(classCloud(10, 4, 32), { pointFormat: 1, compress: true }), /point 4 has class 32/);
+});
+
+test("classes 0-31 still write in formats 0-5, 0-255 in 6+", async function () {
+	var a = await openLas(await writeLas(classCloud(10, 3, 31), { pointFormat: 3 }));
+	assert.equal((await a.readPoints({ fields: ["classification"] })).classification[3], 31);
+	var b = await openLas(await writeLas(classCloud(10, 3, 255), { version: "1.4", pointFormat: 6 }));
+	assert.equal((await b.readPoints({ fields: ["classification"] })).classification[3], 255);
+});
+
+test("createLasWriter names the global point", async function () {
+	var all = classCloud(300, 250, 40), wrote = 0;
+	var sink = { write: function (bytes) { wrote += bytes.length; } };
+	var w = await createLasWriter(sink, { pointFormat: 1, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 } });
+	var parts = batches(all, [0, 100, 200, 300]);
+	await w.writePoints(parts[0]);
+	await w.writePoints(parts[1]);
+	var afterTwo = wrote;
+	await assert.rejects(w.writePoints(parts[2]), /point 250 has class 40/);
+	assert.equal(wrote, afterTwo);
+	assert.ok(afterTwo >= 200 * 28);
+	// LAZ, chunks of 100
+	var z = await createLasWriter({ write: function () {} }, { pointFormat: 1, compress: true, chunkSize: 100, threads: 1, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 } });
+	await assert.rejects(z.writePoints(all), /point 250 has class 40/);
+});

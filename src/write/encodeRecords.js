@@ -61,7 +61,9 @@ export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, 
 			out.setInt16(p + 18, Math.max(-30000, Math.min(30000, Math.round(get.scanAngle(i) / 0.006))), LE);
 		} else {
 			out.setUint8(p + 14, (ret & 7) + (num & 7) * 8 + dir * 64 + edge * 128); // bits-ok
-			out.setUint8(p + 15, (get.classification(i) & 31) + (get.classificationFlags(i) & 7) * 32); // bits-ok
+			var cls = get.classification(i);
+			if (cls > 31) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point " + ((first || 0) + i) + " has class " + cls + "; point formats 0-5 hold classes 0-31 — write point format 6 or higher");
+			out.setUint8(p + 15, cls + (get.classificationFlags(i) & 7) * 32); // bits-ok
 			out.setInt8(p + 16, Math.max(-90, Math.min(90, Math.round(get.scanAngle(i)))));
 			out.setUint8(p + 17, get.userData(i));
 		}
