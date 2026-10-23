@@ -427,7 +427,10 @@ your cloud, then the same point on the reference), Fit (with ICP if ticked), App
 grid control file, then the scan's target file or pick targets on the cloud and name them. Both
 show each pair's residuals, the left-out residual and the worst pair, preview the fit before Apply,
 undo it, and copy the transform as JSON. Apply moves the cloud to a new local origin, so a scan
-moved kilometres onto the grid keeps its millimetres.
+moved kilometres onto the grid keeps its millimetres. The reference is read about its own centre
+and, when it lies more than 10 km from your cloud (a raw scan near 0,0 against a scan on the grid),
+is drawn shifted over it so both can be picked; the picks keep its true coordinates. A click picks
+the surface in front, from every point drawn.
 
 ## LAZ
 

@@ -22,7 +22,8 @@ Register: put a scan onto the mine grid or onto another cloud.
   and 32.6 mm → 1.6 mm (34 M points, 9.9 s) largest error over the scan.
 - Demo: a Register tab — align to a reference cloud by picked pairs (with ICP), or GCP from a control
   file and a target file or named picks; residuals with the left-out residual and the worst pair,
-  preview, Apply (re-based to a new local origin), Undo, Copy transform.
+  preview, Apply (re-based to a new local origin), Undo, Copy transform. A far reference (a raw scan
+  near 0,0 against one on the grid) is read about its own centre and drawn shifted over the scan.
 - Demo: Save writes every point. It saved at most 5,000,000 points before: the Write tab thinned to a
   5 M page limit, and an unedited save re-read the file with the Read tab's Max points (5 M by default), so a
   55 M-point scan saved as under 5 M. Now an unedited save streams the whole file (every record that passes
