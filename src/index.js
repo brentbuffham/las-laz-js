@@ -34,6 +34,7 @@ export { fitTransform } from "./register/fit.js";
 export { parseControlPoints, matchControlPoints } from "./register/controlPoints.js";
 export { alignCloud } from "./register/align.js";
 export { poleOf, orientationOf, poleFromOrientation } from "./facets/orientation.js";
+export { findFacets } from "./facets/findFacets.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
