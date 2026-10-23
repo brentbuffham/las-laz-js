@@ -92,6 +92,17 @@ function extraBytesDescriptor(name) {
 	return d;
 }
 
+/** A fixture's extra bytes as columns extra0, extra1, … (u8): byte j of point i is (i * (j + 3) + (i >> 4)) % 256. */
+export function fixtureExtraColumns(fx) {
+	var out = {};
+	for (var j = 0; j < fx.extra; j++) {
+		var c = new Uint8Array(fx.points);
+		for (var i = 0; i < fx.points; i++) c[i] = (i * (j + 3) + (i >> 4)) % 256;
+		out["extra" + j] = c;
+	}
+	return out;
+}
+
 /** The uncompressed LAS file a fixture was made from. */
 export function fixtureLas(fx) {
 	var pts = fixturePoints(fx);
@@ -104,8 +115,8 @@ export function fixtureLas(fx) {
 	var bytes = buildLas({ version: fx.version, pointFormat: fx.pointFormat, scale: { x: 0.001, y: 0.001, z: 0.001 }, offset: { x: 477000, y: 6770000, z: 0 }, points: pts, vlrs: vlrs, extraBytes: fx.extra });
 	if (fx.extra) {
 		var v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-		var start = v.getUint32(96, true), len = v.getUint16(105, true), base = len - fx.extra;
-		for (var i = 0; i < pts.length; i++) for (var j = 0; j < fx.extra; j++) bytes[start + i * len + base + j] = (i * (j + 3) + (i >> 4)) % 256;
+		var start = v.getUint32(96, true), len = v.getUint16(105, true), base = len - fx.extra, cols = fixtureExtraColumns(fx);
+		for (var i = 0; i < pts.length; i++) for (var j = 0; j < fx.extra; j++) bytes[start + i * len + base + j] = cols["extra" + j][i];
 	}
 	return bytes;
 }

@@ -18,7 +18,7 @@ import { parseHeader } from "../../src/format/LasHeader.js";
 import { MemorySource } from "../../src/io/MemorySource.js";
 import { LASZIP_USER_ID, LASZIP_RECORD_ID } from "../../src/laz/LazVlr.js";
 import { LAZ_MANIFEST, fixtureBytes, decompressAll } from "../helpers/lazFixtureFiles.js";
-import { LAZ_FIXTURES, fixturePoints } from "../helpers/lazFixtureData.js";
+import { LAZ_FIXTURES, fixturePoints, fixtureExtraColumns } from "../helpers/lazFixtureData.js";
 import { createLazPool, defaultThreads } from "../../src/laz/pool.js";
 import { createChunkCompressor } from "../../src/laz/compressChunk.js";
 import { ArithmeticEncoder } from "../../src/laz/ArithmeticEncoder.js";
@@ -70,17 +70,17 @@ function memorySink(size) {
 	return sink;
 }
 
-// Ruling R4: every fixture whose records PDAL kept (not f8: PDAL padded its records). The writer
-// has no extra-bytes columns, so it cannot produce a fixture's extra bytes: those fixtures (f3x,
-// f7x) keep the chunk-level byte test (test/laz/compress.test.js) only.
+// Ruling R4: every fixture whose records PDAL kept (not f8: PDAL padded its records). Since 0.9.2
+// the fixtures with extra bytes (f3x, f7x) go through the writer too, as u8 fields extra0, extra1, …
 Object.keys(LAZ_MANIFEST).filter(function (name) {
 	return LAZ_MANIFEST[name].pdalKeptRecords;
 }).forEach(function (name) {
 	var fx = LAZ_FIXTURES.find(function (f) { return f.name === name; });
-	var skip = fx.extra ? "the writer has no extra-bytes columns, so it cannot write " + name + "'s " + fx.extra + " extra bytes (chunk-level test only)" : false;
-	test(name + ": point data is PDAL's, byte for byte", { skip: skip }, async function () {
+	test(name + ": point data is PDAL's, byte for byte", async function () {
 		var pdal = fixtureBytes(name), h = parseHeader(new MemorySource(pdal));
-		var ours = await writeLas(toColumns(fixturePoints(fx)), { compress: true, version: "1." + h.versionMinor, pointFormat: h.pointFormat, scale: h.scale, offset: h.offset });
+		var cols = Object.assign(toColumns(fixturePoints(fx)), fixtureExtraColumns(fx));
+		var extraBytes = Object.keys(fixtureExtraColumns(fx)).map(function (n) { return { name: n, type: "u8" }; });
+		var ours = await writeLas(cols, { compress: true, version: "1." + h.versionMinor, pointFormat: h.pointFormat, scale: h.scale, offset: h.offset, extraBytes: extraBytes });
 		var oh = parseHeader(new MemorySource(ours));
 		assert.equal(oh.compressed, true);
 		assert.equal(oh.recordLength, h.recordLength);
