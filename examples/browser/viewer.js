@@ -46,6 +46,10 @@ export function createViewer(container) {
 		reference: new THREE.PointsMaterial({ color: 0xff9f1a, size: 9, sizeAttenuation: false, depthTest: false })
 	};
 	var markers = [];   // { x, y, z, el }
+	// facet outlines (Facets tab): line loops drawn over the points
+	var outlineGroup = new THREE.Group();
+	scene.add(outlineGroup);
+	var facetLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.8 });
 	var labelLayer = document.createElement("div");
 	labelLayer.className = "pick-labels";
 	container.appendChild(labelLayer);
@@ -190,6 +194,23 @@ export function createViewer(container) {
 			ref.points.geometry.dispose();
 			ref = null;
 			refBox.makeEmpty();
+		},
+		/** Facet outlines: closed loops, each a Float32Array x, y, z, … (local, like the cloud). */
+		setOutlines: function (loops, visible) {
+			this.clearOutlines();
+			loops.forEach(function (pos) {
+				if (pos.length < 9) return;
+				var geom = new THREE.BufferGeometry();
+				geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+				var line = new THREE.LineLoop(geom, facetLineMaterial);
+				line.renderOrder = 1;
+				outlineGroup.add(line);
+			});
+			outlineGroup.visible = visible !== false;
+		},
+		/** Remove the facet outlines. */
+		clearOutlines: function () {
+			while (outlineGroup.children.length) { var o = outlineGroup.children.pop(); o.geometry.dispose(); }
 		},
 		/** Show or hide a layer: "moving" (the main cloud) or "reference". */
 		setVisible: function (layer, on) {

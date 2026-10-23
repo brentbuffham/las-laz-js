@@ -290,3 +290,8 @@ progress { width: 160px; height: 8px; accent-color: var(--accent); }
 #pairTable tr.worst td { color: var(--error); }
 #pairTable .icon-button.small { width: 20px; height: 20px; font-size: 12px; padding: 0; }
 #gcpPickTable input { width: 7em; }
+
+#tab-facets h3 { padding-top: 10px; border-top: 1px solid var(--border); }
+#facSetTable .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; }
+.button.small { padding: 2px 8px; font-size: 12px; }
+.stereonet { display: block; width: 100%; max-width: 360px; margin: 10px auto; }

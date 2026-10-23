@@ -21,6 +21,7 @@ import {
 import { createViewer } from "./viewer.js";
 import { initRegister } from "./register.js";
 import { createPartsSink } from "./fileParts.js";
+import { initFacets } from "./facets.js";
 
 // ?drawCap=N lowers the cap, to try a cloud bigger than what is drawn with a small file
 var DRAW_CAP = Math.floor(Number(new URLSearchParams(location.search).get("drawCap"))) || 20000000;
@@ -197,6 +198,7 @@ async function read(crop, note) {
 		showStats();
 		showSelection();
 		register.onRead();
+		facets.onRead();
 		$("writeButton").disabled = false;
 	} catch (err) {
 		setStatus(err.code === "ABORTED" ? "Stopped" : err.message, err.code !== "ABORTED");
@@ -228,7 +230,8 @@ function display(refit) {
 // The normal colours, then the Split view's outside part dimmed grey and the selection yellow
 function colours() {
 	if ($("colourBy").value === "rgb" && !cloud.red) $("colourBy").value = "elevation";   // this format holds no colour
-	var c = $("colourBy").value === "roughness" ? roughColours() : colourize(drawn, colourOpts());
+	var by = $("colourBy").value;
+	var c = by === "roughness" ? roughColours() : by === "facet" || by === "set" ? facets.colours(drawn, drawnIdx, by) : colourize(drawn, colourOpts());
 	for (var j = 0; j < drawn.count; j++) {
 		var i = drawnIdx ? drawnIdx[j] : j;
 		if (splitAt >= 0 && i >= splitAt) for (var d = j * 3; d < j * 3 + 3; d++) c[d] = 70 + c[d] * 0.2;
@@ -462,6 +465,7 @@ function edit(name, make) {
 	beforeSmooth = null; $("undoSmoothButton").disabled = true;
 	beforeClassify = null; $("undoClassifyButton").disabled = true;
 	register.onEdit(name);
+	facets.onEdit(name, cloud.count !== before);
 	if (out.transformed) transformed = true;
 	if (!out.keep) { selection = null; splitAt = -1; }
 	if (out.splitAt !== undefined) splitAt = out.splitAt;
@@ -623,6 +627,7 @@ function reset() {
 	showStats();
 	showSelection();
 	register.onRead();
+	facets.onRead();
 	setStatus("Reset: " + fmt(before) + " → " + fmt(cloud.count) + " points in " + since(t0) + " ms (the last read)");
 }
 
@@ -769,7 +774,8 @@ $("viewer").addEventListener("mousemove", function (e) {
 		var c = cloud, i = drawnIdx ? drawnIdx[hit.index] : hit.index;
 		$("hud").textContent = "X " + (c.x[i] + origin.x).toFixed(3) + "  Y " + (c.y[i] + origin.y).toFixed(3) + "  Z " + (c.z[i] + origin.z).toFixed(3) +
 			"  · class " + c.classification[i] + "  · intensity " + c.intensity[i] + "  · return " + c.returnNumber[i] +
-			(c.index ? "  · record " + c.index[i] : "");
+			(c.index ? "  · record " + c.index[i] : "") +
+			(function () { var f = facets.facetOf(i); return f ? "  · facet " + f.id + " " + f.dip.toFixed(0) + "/" + ("00" + f.dipDirection.toFixed(0)).slice(-3) + (f.set ? " set " + f.set : "") : ""; })();
 	});
 });
 
@@ -843,4 +849,9 @@ var register = initRegister({
 	setOrigin: function (o) { origin = o; },
 	get cloud() { return cloud; }, get origin() { return origin; }, get drawn() { return drawn; }, get drawnIdx() { return drawnIdx; }
 });
-window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, get cloud() { return cloud; }, get origin() { return origin; } };   // for checks from the console
+// The Facets tab, the same way
+var facets = initFacets({
+	$: $, viewer: viewer, setStatus: setStatus, fmt: fmt, since: since, select: select, recolour: recolour, keepPoints: keepPoints,
+	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; }
+});
+window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets };   // for checks from the console

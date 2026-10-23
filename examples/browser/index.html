@@ -41,6 +41,7 @@
 				<button class="tab" data-tab="read" role="tab">Read</button>
 				<button class="tab" data-tab="edit" role="tab">Edit</button>
 				<button class="tab" data-tab="register" role="tab">Register</button>
+				<button class="tab" data-tab="facets" role="tab">Facets</button>
 				<button class="tab" data-tab="colour" role="tab">Colour</button>
 				<button class="tab" data-tab="stats" role="tab">Stats</button>
 				<button class="tab" data-tab="write" role="tab">Write</button>
@@ -222,6 +223,40 @@
 				</div>
 			</div>
 
+			<div class="tab-body hidden" id="tab-facets">
+				<p class="muted small">Splits the selection (draw a polygon round the wall, Inside polygon) or the whole cloud into facets, flat patches, with <code>findFacets</code>, and groups them into joint sets with <code>jointSets</code>. Dip 90 is vertical; dip direction is a bearing from north. The page pauses while it runs.</p>
+				<h3>Facets</h3>
+				<div class="form-grid">
+					<label>Max distance (m) <input type="number" id="facMaxDist" value="0.3" min="0.01" step="0.05" title="Neighbours: the k nearest within this distance (as Denoise)"></label>
+					<label>Max angle (°) <input type="number" id="facMaxAngle" value="10" min="1" max="89" step="1" title="A point joins a facet when its normal is within this angle of the facet's"></label>
+					<label>Plane distance (m) <input type="number" id="facPlaneDist" placeholder="measured" min="0" step="0.005" title="… and it lies within this distance of the facet's plane; blank = 3 x the measured noise"></label>
+					<label>Min area (m²) <input type="number" id="facMinArea" value="1" min="0" step="0.5"></label>
+				</div>
+				<div class="row wrap">
+					<button class="button" id="facRun">Find facets</button>
+					<label class="small">Show outlines <input type="checkbox" id="facOutlines" checked></label>
+				</div>
+				<h3>Joint sets</h3>
+				<label class="field">Sets
+					<select id="facSetMode">
+						<option value="auto">Automatic</option>
+						<option value="count">Count</option>
+						<option value="windows">Windows</option>
+					</select>
+				</label>
+				<label class="field" id="facSetAngleRow">Max angle (°) <input type="number" id="facSetAngle" value="15" min="1" max="89" step="1" title="A facet joins the nearest set within this angle; broad sets (K under ~100) need more"></label>
+				<label class="field hidden" id="facSetCountRow">Count <input type="number" id="facSetCount" value="3" min="1" step="1"></label>
+				<label class="field hidden" id="facWindowsRow">Windows <input type="text" id="facWindows" placeholder="72/135/12; 40/300/10" title="dip/dip direction/angle for each set, separated by ;"></label>
+				<div class="row"><button class="button" id="facSets">Recompute sets</button></div>
+				<table class="grid-table" id="facSetTable"></table>
+				<p class="muted small" id="facSetInfo"></p>
+				<svg id="stereonet" class="stereonet" viewBox="-110 -110 220 220" role="img" aria-label="Stereonet of the facet poles"></svg>
+				<div class="row wrap">
+					<button class="button" id="facCsvFacets">Facets CSV</button>
+					<button class="button" id="facCsvSets">Sets CSV</button>
+				</div>
+			</div>
+
 			<div class="tab-body hidden" id="tab-colour">
 				<label class="field">Colour by
 					<select id="colourBy">
@@ -229,6 +264,8 @@
 						<option value="rgb">RGB</option>
 						<option value="intensity">Intensity</option>
 						<option value="classification">Classification</option>
+						<option value="facet" title="Each facet its own colour (Facets tab); points in no facet grey">Facet</option>
+						<option value="set" title="Each joint set its colour (Facets tab); points in no set grey">Joint set</option>
 						<option value="roughness" title="Each point's RMS distance from its fitted plane (Edit tab's k and max distance)">Roughness</option>
 					</select>
 				</label>
