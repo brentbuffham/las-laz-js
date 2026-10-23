@@ -35,6 +35,7 @@ export { parseControlPoints, matchControlPoints } from "./register/controlPoints
 export { alignCloud } from "./register/align.js";
 export { poleOf, orientationOf, poleFromOrientation } from "./facets/orientation.js";
 export { findFacets } from "./facets/findFacets.js";
+export { jointSets } from "./facets/jointSets.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
