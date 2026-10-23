@@ -125,8 +125,18 @@ function options(opts, fn) {
 	return { k: k, maxD2: opts.maxDistance * opts.maxDistance, maxDistance: opts.maxDistance, onProgress: opts.onProgress, fn: fn };
 }
 
-// Fit point p's plane into fit; false with fewer than 3 neighbours or no plane
-function fitAt(index, p, o, P, D, fit) {
+/**
+ * Fit point p's plane (it and its k nearest within maxD2) into fit; false with fewer than 3
+ * neighbours or no plane. Internal (alignCloud's normals); not exported from the package entry.
+ * @param {object} index - from buildKdTree.
+ * @param {number} p - point number.
+ * @param {{k: number, maxD2: number}} o
+ * @param {Uint32Array} P - k entries of scratch.
+ * @param {Float64Array} D - k entries of scratch.
+ * @param {Float64Array} fit - 7 entries, as fitPlane's out.
+ * @returns {boolean}
+ */
+export function fitAt(index, p, o, P, D, fit) {
 	var co = index.coords, X = co.x, Y = co.y, Z = co.z, st = co.stride, i = p * st;
 	var m = kdNearest(index, X[i], Y[i], Z[i], o.k, o.maxD2, p, P, D);
 	if (m < 3) { fit[0] = 0; fit[1] = 0; fit[2] = 0; fit[3] = NaN; return false; }

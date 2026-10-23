@@ -32,6 +32,7 @@ export { denoisePoints } from "./ops/denoise.js";
 export { classifyPoints, ASPRS_CLASSES } from "./ops/classify.js";
 export { fitTransform } from "./register/fit.js";
 export { parseControlPoints, matchControlPoints } from "./register/controlPoints.js";
+export { alignCloud } from "./register/align.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
