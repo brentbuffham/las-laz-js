@@ -28,10 +28,15 @@ export function parseClassLookup(vlrs) {
 	if (!r || !r.bytes) return out;
 	var b = r.bytes;
 	if (b.length % ENTRY !== 0) throw new LasError(ERROR_CODES.BAD_VLR, "the classification lookup VLR is " + b.length + " bytes, not a multiple of 16");
+	// Only names the writer would write back (printable ASCII, not all spaces), so a file's names
+	// always survive a save; an entry with any other byte is left out, as a blank one is
 	for (var p = 0; p < b.length; p += ENTRY) {
-		var name = "";
-		for (var i = 1; i <= NAME && b[p + i] !== 0; i++) name += String.fromCharCode(b[p + i]);
-		if (name && !(b[p] in out)) out[b[p]] = name;
+		var name = "", ok = true;
+		for (var i = 1; i <= NAME && b[p + i] !== 0; i++) {
+			if (b[p + i] < 0x20 || b[p + i] > 0x7E) ok = false;
+			name += String.fromCharCode(b[p + i]);
+		}
+		if (ok && name.trim() && !(b[p] in out)) out[b[p]] = name;
 	}
 	return out;
 }
@@ -49,7 +54,7 @@ export function buildClassLookup(classNames) {
 		var code = Number(key);
 		if (!Number.isInteger(code) || code < 0 || code > 255) throw bad("classNames: " + key + " is not a class code 0-255");
 		var name = classNames[key];
-		if (typeof name !== "string" || name.length < 1 || name.length > NAME) throw bad("classNames[" + code + "] must be a name of 1 to 15 characters");
+		if (typeof name !== "string" || !name.trim() || name.length > NAME) throw bad("classNames[" + code + "] must be a name of 1 to 15 characters, not all spaces");
 		for (var i = 0; i < name.length; i++) {
 			var ch = name.charCodeAt(i);
 			if (ch < 0x20 || ch > 0x7E) throw bad("classNames[" + code + "] = \"" + name + "\" is not printable ASCII");

@@ -219,7 +219,7 @@ test("formats 6-10 refuse an EPSG-only CRS, and write WKT without GeoKeys", asyn
 
 // Classes above 31 in point formats 0-5 (5 bits): refused, never masked
 function classCloud(n, at, cls) {
-	var c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n), classification: new Uint8Array(n) };
+	var c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n), classification: new Uint8Array(n), returnNumber: new Uint8Array(n).fill(1), numberOfReturns: new Uint8Array(n).fill(1) };
 	for (var i = 0; i < n; i++) { c.x[i] = 477000 + i; c.y[i] = 6770000 + i; c.classification[i] = 2; }
 	if (at >= 0) c.classification[at] = cls;
 	return c;
@@ -240,7 +240,8 @@ test("classes 0-31 still write in formats 0-5, 0-255 in 6+", async function () {
 	assert.equal((await b.readPoints({ fields: ["classification"] })).classification[3], 255);
 });
 
-test("createLasWriter names the global point", async function () {
+// As the int32 overflow message (writeLaz.test.js): the point's index in the caller's points, the batch passed
+test("the streaming writers name the point's index in the caller's batch", async function () {
 	var all = classCloud(300, 250, 40), wrote = 0;
 	var sink = { write: function (bytes) { wrote += bytes.length; } };
 	var w = await createLasWriter(sink, { pointFormat: 1, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 } });
@@ -248,10 +249,27 @@ test("createLasWriter names the global point", async function () {
 	await w.writePoints(parts[0]);
 	await w.writePoints(parts[1]);
 	var afterTwo = wrote;
-	await assert.rejects(w.writePoints(parts[2]), /point 250 has class 40/);
+	await assert.rejects(w.writePoints(parts[2]), { message: /^point 50 has class 40/ });
 	assert.equal(wrote, afterTwo);
 	assert.ok(afterTwo >= 200 * 28);
-	// LAZ, chunks of 100
-	var z = await createLasWriter({ write: function () {} }, { pointFormat: 1, compress: true, chunkSize: 100, threads: 1, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 } });
-	await assert.rejects(z.writePoints(all), /point 250 has class 40/);
+	for (var threads of [1, 2]) {
+		var z = await createLasWriter({ write: function () {} }, { pointFormat: 1, compress: true, chunkSize: 100, threads: threads, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 } });
+		await z.writePoints(parts[0]);
+		await z.writePoints(parts[1]);
+		await assert.rejects(z.writePoints(parts[2]), { message: /^point 50 has class 40/ }, "LAZ, threads " + threads);
+	}
+});
+
+test("a refused batch leaves the streaming LAS writer's totals as they were", async function () {
+	var file = new Uint8Array(1 << 16), sink = { write: function (bytes, pos) { file.set(bytes, pos); } };
+	var w = await createLasWriter(sink, { pointFormat: 1, scale: SCALE, offset: { x: 477000, y: 6770000, z: 0 } });
+	await w.writePoints(classCloud(100, -1, 0));
+	var bad = classCloud(100, 90, 40);
+	for (var i = 0; i < 100; i++) bad.x[i] += 5000;   // 5 km east: would widen the bounds
+	await assert.rejects(w.writePoints(bad), /has class 40/);
+	await w.close();
+	var h = parseHeader(new MemorySource(file));
+	assert.equal(h.pointCount, 100);
+	assert.equal(h.pointsByReturn.reduce(function (s, v) { return s + v; }, 0), 100);
+	assert.ok(h.bounds.maxX < 477100, "maxX " + h.bounds.maxX);
 });

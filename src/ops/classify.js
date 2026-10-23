@@ -70,26 +70,37 @@ function mayChangeTable(o) {
  *   whose class is listed (not with overwrite). inPlace: overwrite the input's classification array
  *   and return the input's columns object.
  * @returns {{columns: object, changed: number}} the columns (a copy with a new classification
- *   array, every other column shared, unless inPlace) and how many points changed class.
+ *   array, every other column shared and stats dropped, unless inPlace, which keeps the input's
+ *   stats.classCounts true) and how many points changed class.
  * @throws {LasError} INVALID_ARGUMENT naming the bad argument.
  */
 export function classifyPoints(cols, selection, code, options) {
 	var o = options === undefined ? {} : options;
 	if (o === null || typeof o !== "object") throw bad("options must be an object");
+	["overwrite", "inPlace"].forEach(function (k) {
+		if (o[k] !== undefined && typeof o[k] !== "boolean") throw bad(k + " must be true or false (got " + JSON.stringify(o[k]) + ")");
+	});
 	if (!isCode(code)) throw bad("code must be a class code, a whole number 0-255 (got " + code + ")");
 	var n = countOf(cols);
 	var cls = needColumn(cols, "classification", "classifyPoints");
 	var sel = checkSelection(selection, n);
 	var may = mayChangeTable(o);
 	var out = cols, target = cls;
+	// readPoints' stats.classCounts: a copy drops stats (stale, as transformPoints drops it);
+	// inPlace keeps the input's counts true
+	var counts = o.inPlace && cols.stats && cols.stats.classCounts ? cols.stats.classCounts : null;
 	if (!o.inPlace) {
 		target = Uint8Array.from(cls);
 		out = Object.assign({}, cols, { classification: target });
+		delete out.stats;
 	}
 	var changed = 0;
 	for (var j = 0; j < sel.length; j++) {
 		var i = sel[j], k = target[i];
-		if (may[k] && k !== code) { target[i] = code; changed++; }
+		if (may[k] && k !== code) {
+			target[i] = code; changed++;
+			if (counts) { if (--counts[k] === 0) delete counts[k]; counts[code] = (counts[code] || 0) + 1; }
+		}
 	}
 	return { columns: out, changed: changed };
 }

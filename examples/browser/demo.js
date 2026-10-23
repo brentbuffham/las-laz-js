@@ -527,7 +527,7 @@ function addClass() {
 	var code = Number($("newClassCode").value), name = $("newClassName").value;
 	if (!Number.isInteger(code) || code < 64 || code > 255) { setStatus("Add class: the code must be a whole number 64-255 (user classes)", true); return; }
 	if (classNames[code]) { setStatus("Add class: " + code + " is already \"" + classNames[code] + "\"", true); return; }
-	if (!/^[\x20-\x7E]{1,15}$/.test(name)) { setStatus("Add class: the name must be 1 to 15 plain characters (LAS stores 15, ASCII)", true); return; }
+	if (!/^[\x20-\x7E]{1,15}$/.test(name) || !name.trim()) { setStatus("Add class: the name must be 1 to 15 plain characters (LAS stores 15, ASCII)", true); return; }
 	classNames[code] = name;
 	$("newClassName").value = "";
 	refreshClassSelect(code);

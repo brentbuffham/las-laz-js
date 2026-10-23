@@ -65,6 +65,7 @@ test("bad names and codes are refused", function () {
 	assert.throws(function () { buildClassLookup({ 64: "Sixteen chars ab" }); }, /15/);
 	assert.throws(function () { buildClassLookup({ 64: "Bänch" }); }, function (e) { return /ASCII/.test(e.message) && /64/.test(e.message) && e.code === "INVALID_ARGUMENT"; });
 	assert.throws(function () { buildClassLookup({ 64: "" }); }, /64/);
+	assert.throws(function () { buildClassLookup({ 64: "   " }); }, /64/);
 	assert.throws(function () { buildClassLookup({ 64: 7 }); }, /64/);
 	assert.throws(function () { buildClassLookup({ 256: "x" }); }, /code/);
 	assert.throws(function () { buildClassLookup({ "-1": "x" }); }, /code/);
@@ -125,4 +126,14 @@ test("a malformed lookup VLR from other software still opens, with no names", as
 
 test("parseClassLookup is exported", function () {
 	assert.equal(lib.parseClassLookup, parseClassLookup);
+});
+
+// Read only what the writer will write back: a file's names always survive a save
+test("names the writer would refuse are left out on read", function () {
+	var e = entry(5, "V g"); e[2] = 0xE9;                // "Vég" in Latin-1
+	var spaces = entry(9, "               ");             // a blank entry padded with spaces
+	var tab = entry(11, "Road\tway");
+	var got = parseClassLookup([vlr(e.concat(spaces, tab, entry(64, "Bench face ")))]);
+	assert.deepEqual(got, { 64: "Bench face " });
+	assert.doesNotThrow(function () { buildClassLookup(got); });
 });

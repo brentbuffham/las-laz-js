@@ -462,7 +462,7 @@ export async function createLasWriter(sink, opts) {
 	return {
 		writePoints: async function (points) {
 			var buf = new Uint8Array(points.count * len);
-			encodeRecords(points, s.fmt, len, so, opts.localOrigin, new DataView(buf.buffer), 0, totals, totals.count);
+			encodeRecords(points, s.fmt, len, so, opts.localOrigin, new DataView(buf.buffer), 0, totals);
 			// Reserve this batch's place BEFORE awaiting, so calls made without
 			// waiting for each other never land on the same bytes
 			var pos = start + totals.count * len;

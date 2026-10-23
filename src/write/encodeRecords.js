@@ -35,6 +35,13 @@ export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, 
 	var oz = origin && isFinite(origin.z) ? origin.z : 0;
 	var get = {};
 	["intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scannerChannel", "scanAngle", "userData", "pointSourceId", "gpsTime", "red", "green", "blue", "nir"].forEach(function (n) { get[n] = col(cols, n); });
+	// Formats 0-5 store a class in 5 bits: refuse a higher one before anything (totals included) is touched
+	if (!fmt.extended) {
+		for (var c = 0; c < cols.count; c++) {
+			var cls = get.classification(c);
+			if (cls > 31) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point " + ((first || 0) + c) + " has class " + cls + "; point formats 0-5 hold classes 0-31 — write point format 6 or higher");
+		}
+	}
 	var b = totals.bounds;
 	for (var i = 0; i < cols.count; i++) {
 		var p = at + i * recordLength;
@@ -61,9 +68,7 @@ export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, 
 			out.setInt16(p + 18, Math.max(-30000, Math.min(30000, Math.round(get.scanAngle(i) / 0.006))), LE);
 		} else {
 			out.setUint8(p + 14, (ret & 7) + (num & 7) * 8 + dir * 64 + edge * 128); // bits-ok
-			var cls = get.classification(i);
-			if (cls > 31) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point " + ((first || 0) + i) + " has class " + cls + "; point formats 0-5 hold classes 0-31 — write point format 6 or higher");
-			out.setUint8(p + 15, cls + (get.classificationFlags(i) & 7) * 32); // bits-ok
+			out.setUint8(p + 15, get.classification(i) + (get.classificationFlags(i) & 7) * 32); // bits-ok (checked 0-31 above)
 			out.setInt8(p + 16, Math.max(-90, Math.min(90, Math.round(get.scanAngle(i)))));
 			out.setUint8(p + 17, get.userData(i));
 		}

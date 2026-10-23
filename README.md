@@ -190,8 +190,10 @@ ASPRS_CLASSES[2];                                                 // "Ground" (c
 A point that already has a class keeps it by default: only points at 0 (created, never
 classified) or 1 (unclassified) change. `overwrite: true` changes every selected point; `only`
 lists the classes that may change (not with `overwrite`). `changed` counts points whose class
-actually changed. The copy shares every other column with the input; `inPlace: true` overwrites
-the input's `classification` array instead. Codes 23–63 are reserved and 64–255 are yours: name
+actually changed. The copy shares every other column with the input and drops a `readPoints`
+result's `stats` (its class counts would be stale); `inPlace: true` overwrites the input's
+`classification` array instead and keeps its `stats.classCounts` true. `overwrite` and `inPlace`
+must be `true` or `false`, so a stray string such as `"false"` is refused, never taken as true. Codes 23–63 are reserved and 64–255 are yours: name
 them with the writer's `classNames` and other LAS tools show the names. Point formats 0–5 hold
 only classes 0–31 (see Writing).
 
@@ -409,7 +411,8 @@ an EPSG code alone is refused for them — the library has no projection databas
 into WKT.
 
 `classNames: { 64: "Bench face", 65: "Crest" }` writes the Classification Lookup VLR (codes
-0–255, names of 1 to 15 printable ASCII characters); `openLas` reads it back as `classNames`.
+0–255, names of 1 to 15 printable ASCII characters, not all spaces); `openLas` reads it back as
+`classNames`, keeping only names it could write again, so a file's names always survive a save.
 Point formats 0–5 store a class in 5 bits, so a class above 31 there is refused, naming the
 point (`point 4 has class 64; point formats 0-5 hold classes 0-31 — write point format 6 or
 higher`); write point format 6, or 7 / 8 to keep RGB, in LAS 1.4.

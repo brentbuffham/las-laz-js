@@ -128,3 +128,27 @@ test("bad arguments are refused, naming the argument", function () {
 	assert.throws(function () { classifyPoints(c, Uint32Array.from([2, 1]), 2); }, /is not above/);
 	assert.throws(function () { classifyPoints(c, sel, 2, null); }, /options/);
 });
+
+// readPoints results carry stats.classCounts: the copy drops it (it would be stale, as transformPoints
+// drops it); inPlace keeps the input's counts true to the new classes
+test("stats.classCounts is never left stale", function () {
+	var c = cloud(15), sel = selection(16, 0.5);
+	var counts = {};
+	for (var i = 0; i < N; i++) counts[c.classification[i]] = (counts[c.classification[i]] || 0) + 1;
+	c.stats = { count: N, classCounts: counts };
+	var r = classifyPoints(c, sel, 64);
+	assert.equal(r.columns.stats, undefined);
+	assert.equal(c.stats.classCounts, counts);
+	classifyPoints(c, sel, 64, { inPlace: true });
+	var want = {};
+	for (i = 0; i < N; i++) want[c.classification[i]] = (want[c.classification[i]] || 0) + 1;
+	assert.deepEqual(c.stats.classCounts, want);
+});
+
+test("overwrite and inPlace must be true or false", function () {
+	var c = cloud(17), sel = Uint32Array.from([1, 2]);
+	["false", 0, 1, null].forEach(function (v) {
+		assert.throws(function () { classifyPoints(c, sel, 2, { overwrite: v }); }, /overwrite/);
+		assert.throws(function () { classifyPoints(c, sel, 2, { inPlace: v }); }, /inPlace/);
+	});
+});
