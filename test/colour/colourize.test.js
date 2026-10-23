@@ -58,12 +58,43 @@ test("intensity without a range clips at the 2nd and 98th percentiles (one hot s
 	assert.ok(c[98 * 3] >= 250, "the 98th value is near white, not dark grey");
 });
 
-test("classification: conventional viewer colours; unknown codes grey", function () {
-	var c = colourize({ count: 3, classification: Uint8Array.from([2, 9, 99]) }, { by: "classification" });
+test("classification: conventional viewer colours", function () {
+	var c = colourize({ count: 2, classification: Uint8Array.from([2, 9]) }, { by: "classification" });
 	assert.deepEqual(rgbAt(c, 0), CLASS_COLOURS[2]);
 	assert.deepEqual(rgbAt(c, 1), CLASS_COLOURS[9]);
-	assert.deepEqual(rgbAt(c, 2), [128, 128, 128]);
 	assert.deepEqual(CLASS_COLOURS[2], [165, 113, 78]);
+});
+
+// The 0.7.0 table, unchanged
+var TABLE_018 = { 0: [128, 128, 128], 1: [170, 170, 170], 2: [165, 113, 78], 3: [144, 238, 144], 4: [34, 139, 34], 5: [0, 100, 0], 6: [220, 60, 40], 7: [255, 0, 255], 8: [255, 215, 0], 9: [30, 144, 255], 10: [139, 69, 19], 11: [90, 90, 90], 12: [255, 255, 0], 13: [0, 255, 255], 14: [0, 206, 209], 15: [148, 0, 211], 16: [186, 85, 211], 17: [205, 133, 63], 18: [255, 20, 147] };
+function classColour(code) { return rgbAt(colourize({ count: 1, classification: Uint8Array.from([code]) }, { by: "classification" }), 0); }
+
+test("classes 0-18 keep their colours", function () {
+	for (var k = 0; k <= 18; k++) {
+		assert.deepEqual(CLASS_COLOURS[k], TABLE_018[k]);
+		assert.deepEqual(classColour(k), TABLE_018[k]);
+	}
+});
+
+test("19-22 have entries", function () {
+	for (var k = 19; k <= 22; k++) {
+		assert.ok(Array.isArray(CLASS_COLOURS[k]) && CLASS_COLOURS[k].length === 3, "class " + k);
+		assert.deepEqual(classColour(k), CLASS_COLOURS[k]);
+	}
+});
+
+test("other codes get stable distinct colours", function () {
+	var seen = {};
+	for (var k = 23; k <= 255; k++) {
+		var a = classColour(k);
+		assert.deepEqual(classColour(k), a, "same code, same colour");
+		assert.notDeepEqual(a, [128, 128, 128], "code " + k + " is not grey");
+		if (k >= 64 && k <= 127) {
+			var key = a.join(",");
+			assert.ok(!seen[key], "codes " + seen[key] + " and " + k + " share a colour");
+			seen[key] = k;
+		}
+	}
 });
 
 test("ramps are exposed; a missing field or unknown mode is INVALID_ARGUMENT", function () {

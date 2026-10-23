@@ -14,6 +14,7 @@
 //   so one hot return does not wash the rest out.
 // classification: conventional viewer colours. ASPRS defines the
 //   codes, not colours; these follow common LiDAR-viewer practice.
+//   A code with no entry (23-255) gets its own stable colour.
 //
 // createChunkColourizer colours a STREAM of chunks with one set of
 // rules, so neighbouring windows match: elevation over the file's
@@ -55,9 +56,25 @@ export var CLASS_COLOURS = Object.freeze({
 	15: [148, 0, 211],   // transmission tower
 	16: [186, 85, 211],  // wire-structure connector
 	17: [205, 133, 63],  // bridge deck
-	18: [255, 20, 147]   // high noise
+	18: [255, 20, 147],  // high noise
+	19: [255, 165, 0],   // overhead structure
+	20: [160, 82, 45],   // ignored ground
+	21: [240, 248, 255], // snow
+	22: [112, 128, 144]  // temporal exclusion
 });
-var UNKNOWN = [128, 128, 128];
+
+// A code with no entry (reserved 23-63, user 64-255) gets its own stable colour: hues spread by
+// the golden angle, saturation 0.65, lightness 0.55, so user classes are told apart.
+function hashedClassColour(code) {
+	var h = (code * 137.508) % 360, s = 0.65, l = 0.55;
+	var a = s * Math.min(l, 1 - l);
+	function f(k) { var t = (k + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(t - 3, 9 - t, 1)))); }
+	return [f(0), f(8), f(4)];
+}
+
+// RGB for every code 0-255, built once
+var CLASS_RGB = new Uint8Array(256 * 3);
+for (var code = 0; code < 256; code++) CLASS_RGB.set(CLASS_COLOURS[code] || hashedClassColour(code), code * 3);
 
 function need(points, name) {
 	if (!points[name]) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "colourize by this mode needs the \"" + name + "\" field; read it with fields: [..., \"" + name + "\"]");
@@ -129,8 +146,8 @@ export function colourize(points, opts) {
 			var cls = need(points, "classification");
 			out = new Uint8Array(n * 3);
 			for (i = 0; i < n; i++) {
-				var c = CLASS_COLOURS[cls[i]] || UNKNOWN;
-				out[i * 3] = c[0]; out[i * 3 + 1] = c[1]; out[i * 3 + 2] = c[2];
+				var c = cls[i] * 3;
+				out[i * 3] = CLASS_RGB[c]; out[i * 3 + 1] = CLASS_RGB[c + 1]; out[i * 3 + 2] = CLASS_RGB[c + 2];
 			}
 			return out;
 		}
