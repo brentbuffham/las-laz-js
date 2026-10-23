@@ -295,6 +295,9 @@ A handheld scan reads a flat bench as a band centimetres thick. Remove the stray
 - **`pointNormals`** gives each point the unit normal of the plane through it and its neighbours
   (pointing up) and the residual, the RMS distance of those points from the plane: a roughness
   map. Fewer than 3 neighbours, or points all on one line: normal (0, 0, 0), residual NaN.
+  `start` / `end` fit only points `start` … `end − 1` (their neighbours still come from the whole
+  cloud), so the result is that slice of a full run, bit for bit: split a big cloud across
+  workers, each with the whole cloud and its own range, and join the slices.
   **`estimateNoise`** is the median residual over up to 100,000 points spread through the cloud.
 
 On a 1 M-point handheld scan (Node, one thread): `selectOutliers` 2.5 s, `estimateNoise` 0.7 s,
@@ -619,7 +622,7 @@ the doubles, finds them equal and writes no change. Point formats 0–3 are writ
   write or in `close()` — and `writePoints` and `close` keep rejecting with it. Start a new
   writer. After a successful `close()`, both reject (`ABORTED`, "the LAZ writer is closed").
 - **Extra bytes** are not written (the writers have never written them): a file read with
-  extra bytes is written without them. They arrive with 0.9.1.
+  extra bytes is written without them. They arrive with 0.9.2.
 - The streaming writer needs `scale` and `offset` up front, as for LAS.
 
 ## In a Worker

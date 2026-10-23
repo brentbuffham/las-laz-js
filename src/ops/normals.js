@@ -12,6 +12,7 @@
 // shared with denoisePoints, which weights it.
 //==========================================================
 
+import { LasError, ERROR_CODES } from "../errors.js";
 import { checkK, checkMaxDistance, progress } from "../index/knn.js";
 import { buildKdTree, kdNearest } from "../index/kdtree.js";
 import { thinSelection } from "./select.js";
@@ -143,24 +144,37 @@ export function fitAt(index, p, o, P, D, fit) {
 	return fitPlane(X, Y, Z, st, p, P, m, null, fit);
 }
 
+// start / end: whole numbers, 0 <= start <= end <= count
+function range(opts, count) {
+	opts = opts || {};
+	var start = opts.start === undefined ? 0 : opts.start, end = opts.end === undefined ? count : opts.end;
+	if (!Number.isInteger(start) || start < 0 || start > count) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "start must be a whole number from 0 to the point count (" + count + "), not " + start);
+	if (!Number.isInteger(end) || end < 0 || end > count) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "end must be a whole number from 0 to the point count (" + count + "), not " + end);
+	if (start > end) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "start (" + start + ") must not be after end (" + end + ")");
+	return { start: start, end: end };
+}
+
 /**
  * Each point's surface normal and residual, from a plane fitted to it and its neighbours.
+ * With start / end, only points start ... end - 1 are fitted, their neighbours still found in the
+ * whole cloud, so a range is that slice of the full run bit for bit (workers can split a cloud).
  * @param {object} cols - point columns (x, y, z or a k = 3 positions column).
- * @param {{k?: number, maxDistance: number, onProgress?: function(number, number)}} opts - k 16.
- * @returns {{normal: Float32Array, residual: Float32Array}} normal 3 values a point (0, 0, 0 with
- *   fewer than 3 neighbours); residual NaN there
+ * @param {{k?: number, maxDistance: number, start?: number, end?: number,
+ *   onProgress?: function(number, number)}} opts - k 16; start 0; end the point count.
+ * @returns {{normal: Float32Array, residual: Float32Array}} for the range's points, the first at
+ *   0: normal 3 values a point (0, 0, 0 with fewer than 3 neighbours); residual NaN there
  */
 export function pointNormals(cols, opts) {
-	var o = options(opts, "pointNormals");
-	var tick = progress(o.onProgress, cols.count);
-	var index = buildKdTree(cols, "pointNormals"), n = index.count;
-	var normal = new Float32Array(3 * n), residual = new Float32Array(n);
+	var o = options(opts, "pointNormals"), r = range(opts, cols.count), m = r.end - r.start;
+	var tick = progress(o.onProgress, m);
+	var index = buildKdTree(cols, "pointNormals");
+	var normal = new Float32Array(3 * m), residual = new Float32Array(m);
 	var P = new Uint32Array(o.k), D = new Float64Array(o.k), fit = new Float64Array(7);
-	for (var p = 0; p < n; p++) {
-		fitAt(index, p, o, P, D, fit);
-		normal[3 * p] = fit[0]; normal[3 * p + 1] = fit[1]; normal[3 * p + 2] = fit[2];
-		residual[p] = fit[3];
-		tick(p + 1);
+	for (var i = 0; i < m; i++) {
+		fitAt(index, r.start + i, o, P, D, fit);
+		normal[3 * i] = fit[0]; normal[3 * i + 1] = fit[1]; normal[3 * i + 2] = fit[2];
+		residual[i] = fit[3];
+		tick(i + 1);
 	}
 	return { normal: normal, residual: residual };
 }

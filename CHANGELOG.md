@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.1 (2026-10-24)
+
+Normals by range, for workers (trimesh-build-js 0.3.0).
+
+- `pointNormals(cols, { k, maxDistance, start, end })` fits only points `start` … `end − 1`, their
+  neighbours still searched in the whole cloud, so a range is that slice of a full run, bit for
+  bit. `normal` / `residual` hold the range's points, the first at 0; `onProgress` counts them. A
+  `start` or `end` that is not a whole number from 0 to the point count, or a `start` after
+  `end`, is refused (`INVALID_ARGUMENT`). Without them, nothing changes.
+- Demo: Facets DXF layers take the demo's set colours (the nearest distinct ACI), polylines BYLAYER.
+- Extra bytes move to 0.9.2.
+
 ## 0.9.0 (2026-10-23)
 
 Facets and joint sets (Kirra #127).

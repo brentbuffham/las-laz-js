@@ -164,3 +164,35 @@ test("points on one line have no plane: zero normal, NaN residual", function () 
 	assert.ok(Array.from(res.normal).every(function (v) { return v === 0; }));
 	assert.ok(Array.from(res.residual).every(Number.isNaN));
 });
+
+test("a start / end range gives that slice of the full run, neighbours from the whole cloud", function () {
+	var c = tilted(30, { noise: 0.01, seed: 8 }), full = pointNormals(c, { maxDistance: 0.3 });
+	[[0, 1600], [0, 1], [37, 512], [1200, 1600], [800, 800]].forEach(function (r) {
+		var part = pointNormals(c, { maxDistance: 0.3, start: r[0], end: r[1] });
+		assert.equal(part.residual.length, r[1] - r[0], "residual length " + r);
+		assert.equal(part.normal.length, 3 * (r[1] - r[0]), "normal length " + r);
+		assert.deepEqual(Array.from(part.normal), Array.from(full.normal.subarray(3 * r[0], 3 * r[1])), "normals " + r);
+		assert.deepEqual(Array.from(part.residual), Array.from(full.residual.subarray(r[0], r[1])), "residuals " + r);
+	});
+	// start alone runs to the end; end alone starts at 0
+	assert.deepEqual(Array.from(pointNormals(c, { maxDistance: 0.3, start: 1500 }).residual), Array.from(full.residual.subarray(1500)));
+	assert.deepEqual(Array.from(pointNormals(c, { maxDistance: 0.3, end: 100 }).residual), Array.from(full.residual.subarray(0, 100)));
+	// slices joined back are the full run
+	var a = pointNormals(c, { maxDistance: 0.3, end: 700 }), b = pointNormals(c, { maxDistance: 0.3, start: 700 });
+	assert.deepEqual(Array.from(a.normal).concat(Array.from(b.normal)), Array.from(full.normal));
+});
+
+test("a range's onProgress counts the range's points", function () {
+	var last = null;
+	pointNormals(tilted(0), { maxDistance: 0.3, start: 100, end: 400, onProgress: function (d, t) { last = [d, t]; } });
+	assert.deepEqual(last, [300, 300]);
+});
+
+test("a bad start or end is refused, naming it", function () {
+	var c = tilted(0);
+	[-1, 1.5, 1601, NaN, "3", null].forEach(function (v) {
+		assert.throws(function () { pointNormals(c, { maxDistance: 0.3, start: v }); }, { code: "INVALID_ARGUMENT", message: /start/ }, "start " + v);
+		assert.throws(function () { pointNormals(c, { maxDistance: 0.3, end: v }); }, { code: "INVALID_ARGUMENT", message: /end/ }, "end " + v);
+	});
+	assert.throws(function () { pointNormals(c, { maxDistance: 0.3, start: 500, end: 400 }); }, { code: "INVALID_ARGUMENT", message: /start.*end/ });
+});
