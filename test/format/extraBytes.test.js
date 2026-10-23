@@ -160,6 +160,8 @@ test("a no-data value the type cannot hold is read as none", function () {
 	var r = parse([{ code: 1, name: "a", noData: 300 }, { code: 2, name: "b", noData: -5 }]);
 	assert.equal(r.fields[0].noData, null);
 	assert.equal(r.fields[1].noData, -5);
+	// per value for the array types
+	assert.deepEqual(parse([{ code: 11, name: "p", noData: [300, 7] }]).fields[0].noData, [null, 7]);
 });
 
 test("a scale of 0 (every value the offset) is read as no scale", function () {
