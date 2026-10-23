@@ -18,7 +18,8 @@ import { parseHeader } from "./format/LasHeader.js";
 import { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 import { parseCrs } from "./format/LasCrs.js";
 import { parseClassLookup } from "./format/ClassLookup.js";
-import { decodeRecords, resolveFields, columnType } from "./read/decodeRecords.js";
+import { decodeRecords, resolveFields, columnType, columnWidth } from "./read/decodeRecords.js";
+import { parseExtraBytes } from "./format/ExtraBytes.js";
 import { windows, lazWindows } from "./read/windows.js";
 import { findLazVlr } from "./laz/LazVlr.js";
 import { readChunks } from "./laz/chunkTable.js";
@@ -124,6 +125,11 @@ export function LasReader(src, header, vlrs, evlrs, windowSize) {
 	/** Class names from the Classification Lookup VLR, { code: name } ({} when there is none, or it is malformed). */
 	this.classNames = {};
 	try { this.classNames = parseClassLookup(vlrs.concat(evlrs)); } catch (e) { this.classNames = {}; }   // names only: never stops a read
+	var eb = parseExtraBytes(vlrs.concat(evlrs), header);
+	/** The extra-bytes fields (parseExtraBytes): name, column, type, k, size, at, scale, offset, noData, min, max, description. */
+	this.extraBytes = eb.fields;
+	/** Why the Extra Bytes VLR was not used (its bytes are then one raw "extraBytes" column), or null. */
+	this.extraBytesProblem = eb.problem;
 	/** True for LAZ (compressed points). */
 	this.compressed = header.compressed;
 	/** The parsed LASzip VLR of a LAZ file (compressor, chunk size, items), else null. */
@@ -200,7 +206,7 @@ LasReader.prototype._scan = async function* (opts, into) {
 	if (opts.transform) checkTransform(opts.transform, "transform");
 	var plan = await this._plan();
 	var keep = makeKeep(opts, h);
-	var fields = resolveFields(h, opts.fields);
+	var fields = resolveFields(h, opts.fields, this.extraBytes);
 	var list = plan.list;
 	var pool = await this._pool(plan);
 	try {
@@ -214,7 +220,7 @@ LasReader.prototype._scan = async function* (opts, into) {
 		var kept = 0, w = 0;
 		for await (var bytes of windowBytes(plan, pool, buf, opts.signal)) {
 			var win = list[w];
-			var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, transform: opts.transform, firstIndex: win.firstRecord, into: into ? into(win) : null });
+			var cols = decodeRecords(bytes, h, { fields: fields, keep: keep, thin: thin, localOrigin: opts.localOrigin, float32: opts.float32, transform: opts.transform, firstIndex: win.firstRecord, into: into ? into(win) : null, extraBytes: this.extraBytes });
 			kept += cols.count;
 			w++;
 			if (typeof opts.onProgress === "function") opts.onProgress(w / list.length, "read " + kept + " points");
@@ -271,7 +277,10 @@ LasReader.prototype.readPoints = async function (opts) {
 	var h = this.header;
 	var chunkOpts = Object.assign({}, opts);
 	delete chunkOpts.dedupe;
-	var fields = resolveFields(h, opts.fields);
+	var fields = resolveFields(h, opts.fields, this.extraBytes);
+	var xo = { extraBytes: this.extraBytes, float32: opts.float32, localOrigin: opts.localOrigin };
+	var width = {};
+	fields.forEach(function (f) { width[f] = columnWidth(f, xo); });   // values a point: k for an extra column
 	// Allocate once when the count is known (no filters: every point, or
 	// maxPoints of them; filters + maxPoints: at most maxPoints), so the
 	// peak is the result itself. Filters alone: grow by doubling.
@@ -279,18 +288,19 @@ LasReader.prototype.readPoints = async function (opts) {
 	var cap = !filtered ? (opts.maxPoints > 0 ? Math.min(opts.maxPoints, h.pointCount) : h.pointCount)
 		: (opts.maxPoints > 0 ? Math.min(opts.maxPoints, h.pointCount) : 0);
 	var acc = {}, n = 0;
-	fields.forEach(function (f) { acc[f] = new (columnType(f, opts, h))(cap || 1024); });
+	fields.forEach(function (f) { acc[f] = new (columnType(f, xo, h))((cap || 1024) * width[f]); });
+	var room = cap || 1024;
 	function into(win) {
 		// A known cap is never exceeded, so it never grows; filters alone grow by doubling
-		if (!cap && n + win.count > acc[fields[0]].length) {
-			var size = Math.max(n + win.count, acc[fields[0]].length * 2);
-			fields.forEach(function (f) { var g = new acc[f].constructor(size); g.set(acc[f].subarray(0, n)); acc[f] = g; });
+		if (!cap && n + win.count > room) {
+			room = Math.max(n + win.count, room * 2);
+			fields.forEach(function (f) { var g = new acc[f].constructor(room * width[f]); g.set(acc[f].subarray(0, n * width[f])); acc[f] = g; });
 		}
 		return { cols: acc, at: n };
 	}
 	for await (var c of this._scan(chunkOpts, into)) n += c.count;
 	var out = { count: n };
-	fields.forEach(function (f) { out[f] = acc[f].length === n ? acc[f] : acc[f].slice(0, n); });
+	fields.forEach(function (f) { out[f] = acc[f].length === n * width[f] ? acc[f] : acc[f].slice(0, n * width[f]); });
 	if (opts.dedupe) out = dedupe(out, opts.dedupe, { z: !!opts.dedupeZ });
 	out.bounds = boundsOf(out, opts.localOrigin);
 	out.stats = statsOf(out);
@@ -344,7 +354,7 @@ function statsOf(c) {
  */
 LasReader.prototype.readPointsToScratch = async function (opts) {
 	opts = opts || {};
-	var fields = resolveFields(this.header, opts.fields);
+	var fields = resolveFields(this.header, opts.fields, this.extraBytes);
 	var prefix = opts.prefix || ("las-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8));
 	var where = { root: opts.root, dir: opts.dir };
 	var writers = {}, ids = {}, types = {};

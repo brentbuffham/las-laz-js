@@ -25,12 +25,18 @@
 // the raw record, so they work in file coordinates. With a transform
 // all three world coordinates are computed whichever of x / y / z are
 // wanted. Without one, the offset and origin fold into one constant.
+//
+// opts.extraBytes (reader.extraBytes, format/ExtraBytes.js) adds the
+// file's extra-bytes columns: k values a point, interleaved; a scaled
+// field as Float64 (raw x scale + offset, its no-data value NaN), an
+// unscaled one in its stored type, raw bytes as Uint8Array.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { POINT_FORMATS } from "../format/PointFormats.js";
 import { thinStep } from "../ops/select.js";
 import { checkTransform } from "../ops/transform.js";
+import { EXTRA_TYPES } from "../format/ExtraBytes.js";
 
 /** Fields decoded when opts.fields is not given (colour added when the format has it). */
 export var DEFAULT_FIELDS = Object.freeze(["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "classification"]);
@@ -66,24 +72,53 @@ function available(fmt) {
 /**
  * The field list a read will produce for a header.
  * @param {object} header
- * @param {string[]} [fields]
+ * @param {string[]} [fields] - "extra" stands for every extra column
+ * @param {object[]} [extra] - the file's extra-bytes fields (reader.extraBytes)
  * @returns {string[]}
  */
-export function resolveFields(header, fields) {
+export function resolveFields(header, fields, extra) {
 	var fmt = POINT_FORMATS[header.pointFormat];
 	var have = available(fmt);
-	var want = fields ? fields.slice() : DEFAULT_FIELDS.concat(fmt.fields.red ? ["red", "green", "blue"] : []);
-	want.forEach(function (name) {
-		if (!FIELD_TYPES[name]) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "unknown field \"" + name + "\"");
+	var named = (extra || []).map(function (f) { return f.column; });
+	var want = [];
+	(fields ? fields : DEFAULT_FIELDS.concat(fmt.fields.red ? ["red", "green", "blue"] : [])).forEach(function (name) {
+		var list = name === "extra" ? named : [name];
+		list.forEach(function (n) { if (want.indexOf(n) < 0) want.push(n); });
 	});
-	return want.filter(function (name) { return have[name]; });
+	want.forEach(function (name) {
+		if (!FIELD_TYPES[name] && named.indexOf(name) < 0) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "unknown field \"" + name + "\"" + (named.length ? " (this file's extra columns: " + named.join(", ") + ")" : ""));
+	});
+	return want.filter(function (name) { return have[name] || named.indexOf(name) >= 0; });
+}
+
+function extraOf(name, opts) {
+	var list = opts && opts.extraBytes;
+	if (!list) return null;
+	for (var i = 0; i < list.length; i++) if (list[i].column === name) return list[i];
+	return null;
+}
+function isSet(v) { return v !== null && v !== undefined; }
+function scaledField(f) { return f.type !== "raw" && (isSet(f.scale) || isSet(f.offset)); }
+var EXTRA_ARRAYS = { u8: Uint8Array, i8: Int8Array, u16: Uint16Array, i16: Int16Array, u32: Uint32Array, i32: Int32Array, u64: BigUint64Array, i64: BigInt64Array, f32: Float32Array, f64: Float64Array };
+
+// How to read one extra column: where, with which getter, and per value its scale, offset and no-data
+function extraPlan(f) {
+	var e = f.type === "raw" ? null : EXTRA_TYPES[f.type], scaled = scaledField(f), k = f.k;
+	function per(v, fill) { var out = []; for (var j = 0; j < k; j++) { var x = Array.isArray(v) ? v[j] : v; out.push(isSet(x) ? x : fill); } return out; }
+	return {
+		column: f.column, at: f.at, k: k, raw: !e, get: e && e.get, size: e ? e.size : 1, scaled: scaled,
+		mul: per(f.scale, 1), add: per(f.offset, 0),
+		// no-data compared with the raw value, in its own kind (BigInt for 64-bit integers)
+		nd: per(scaled ? f.noData : null, null).map(function (x) { return x === null ? null : e.big ? BigInt(x) : x; })
+	};
 }
 
 /**
  * Decode a window of whole point records.
  * @param {Uint8Array} bytes - whole records, the first at bytes[0].
  * @param {object} header - from parseHeader.
- * @param {object} [opts] - { fields, keep, thin, localOrigin, float32, transform, into, firstIndex }
+ * @param {object} [opts] - { fields, keep, thin, localOrigin, float32, transform, into, firstIndex, extraBytes }
+ *   extraBytes: the file's extra fields (reader.extraBytes), so fields may name their columns
  *   transform: { m, t } applied in Float64 to the world coordinates before localOrigin is subtracted
  *   into: { cols, at } decodes straight into existing columns from index at
  *   (each sized for every record that can be kept) and returns only { count }
@@ -94,7 +129,7 @@ export function resolveFields(header, fields) {
 export function decodeRecords(bytes, header, opts) {
 	opts = opts || {};
 	var fmt = POINT_FORMATS[header.pointFormat];
-	var fields = resolveFields(header, opts.fields);
+	var fields = resolveFields(header, opts.fields, opts.extraBytes);
 	var len = header.recordLength;
 	var n = Math.floor(bytes.length / len);
 	var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -112,7 +147,8 @@ export function decodeRecords(bytes, header, opts) {
 
 	var into = opts.into || null;
 	var cols = into ? into.cols : {};
-	if (!into) fields.forEach(function (name) { cols[name] = new (columnType(name, opts, header))(n); });
+	if (!into) fields.forEach(function (name) { cols[name] = new (columnType(name, opts, header))(n * columnWidth(name, opts)); });
+	var xs = fields.map(function (name) { var f = extraOf(name, opts); return f ? extraPlan(f) : null; }).filter(Boolean);
 	var F = fmt.fields;
 	var sx = header.scale.x, sy = header.scale.y, sz = header.scale.z;
 	var tx = header.offset.x - ox, ty = header.offset.y - oy, tz = header.offset.z - oz;
@@ -169,10 +205,18 @@ export function decodeRecords(bytes, header, opts) {
 		if (want.green) cols.green[k] = view.getUint16(at + F.green.offset, LE);
 		if (want.blue) cols.blue[k] = view.getUint16(at + F.blue.offset, LE);
 		if (want.nir) cols.nir[k] = view.getUint16(at + F.nir.offset, LE);
+		for (var x = 0; x < xs.length; x++) {
+			var X = xs[x], col = cols[X.column], o = k * X.k, base = at + X.at;
+			if (X.raw) { for (var j = 0; j < X.k; j++) col[o + j] = bytes[base + j]; continue; }
+			for (j = 0; j < X.k; j++) {
+				var r = view[X.get](base + j * X.size, LE);
+				col[o + j] = !X.scaled ? r : r === X.nd[j] ? NaN : Number(r) * X.mul[j] + X.add[j];
+			}
+		}
 		k++;
 	}
 	if (into) return { count: k - into.at };
-	if (k < n) fields.forEach(function (name) { cols[name] = cols[name].slice(0, k); });
+	if (k < n) fields.forEach(function (name) { cols[name] = cols[name].slice(0, k * columnWidth(name, opts)); });
 	cols.count = k;
 	return cols;
 }
@@ -181,12 +225,26 @@ export function decodeRecords(bytes, header, opts) {
  * The typed-array type a field is decoded into (x / y / z are Float32
  * when float32 is asked for with a local origin).
  * @param {string} name
- * @param {{float32?:boolean, localOrigin?:object}} [opts]
+ * @param {{float32?:boolean, localOrigin?:object, extraBytes?:object[]}} [opts] - extraBytes: the file's extra fields
  * @param {{pointCount?:number}} [header] - index is Float64 when the file holds more than 4294967295 points
  * @returns {Function}
  */
 export function columnType(name, opts, header) {
+	var f = FIELD_TYPES[name] ? null : extraOf(name, opts);
+	if (f) return f.type === "raw" ? Uint8Array : scaledField(f) ? Float64Array : EXTRA_ARRAYS[f.type];
 	if (name === "index") return header && header.pointCount > 4294967295 ? Float64Array : Uint32Array;
 	var f32 = !!(opts && opts.float32 && opts.localOrigin);
 	return f32 && (name === "x" || name === "y" || name === "z") ? Float32Array : FIELD_TYPES[name];
+}
+
+/**
+ * Values a point in a field's column: 1, or k for an extra-bytes field (2 or 3 for the array
+ * types, the byte count for raw).
+ * @param {string} name
+ * @param {{extraBytes?: object[]}} [opts]
+ * @returns {number}
+ */
+export function columnWidth(name, opts) {
+	var f = FIELD_TYPES[name] ? null : extraOf(name, opts);
+	return f ? f.k : 1;
 }
