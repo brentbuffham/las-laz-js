@@ -302,6 +302,8 @@ export function initFacets(ctx) {
 			void countChanged;
 			if (!/^(Classify|Undo classify)$/.test(name)) { picked = null; clear(res ? "cleared: the points changed (" + name + "); find facets again" : ""); }
 		},
-		result: function () { return res; }
+		result: function () { return res; },
+		/** Per cloud point its facet (0 none) and joint set (0 none; null before Joint sets), for Save; null with no facets. */
+		columns: function () { return res ? { facet: res.facet, joint_set: res.pointSet } : null; }
 	};
 }

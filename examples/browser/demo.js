@@ -101,6 +101,7 @@ function showHeader() {
 		var tr = v.insertRow();
 		[r.userId, r.recordId, r.length, r.description].forEach(function (c) { tr.insertCell().textContent = c; });
 	});
+	showExtraBytes();
 	var sel = $("writeFormat");
 	sel.innerHTML = "";
 	for (var f = 0; f <= 10; f++) { var o = document.createElement("option"); o.value = f; o.textContent = f; sel.appendChild(o); }
@@ -108,6 +109,32 @@ function showHeader() {
 	$("writeVersion").value = h.pointFormat >= 6 ? "1.4" : "1.2";
 	$("writeCompress").checked = !!info.compressed;
 	writeChoice();
+}
+
+// The file's extra-bytes fields: name (column when it differs), type, scale / offset, no-data, description
+function showExtraBytes() {
+	var list = info.extraBytes || [], t = $("extraTable");
+	$("extraEmpty").classList.toggle("hidden", list.length > 0);
+	$("extraProblem").classList.toggle("hidden", !info.extraBytesProblem);
+	$("extraProblem").textContent = info.extraBytesProblem ? "The Extra Bytes VLR is not used: " + info.extraBytesProblem + ". Its bytes are read raw." : "";
+	t.innerHTML = list.length ? "<tr><th>Name</th><th>Type</th><th>Scale / offset</th><th>No-data</th><th>Description</th></tr>" : "";
+	list.forEach(function (e) {
+		var tr = t.insertRow();
+		var so = e.scale === null && e.offset === null ? "—" : [e.scale === null ? 1 : e.scale, e.offset === null ? 0 : e.offset].join(" / ");
+		[(e.name || "(undocumented)") + (e.column !== e.name ? " [" + e.column + "]" : ""), e.type === "raw" ? "raw × " + e.size : e.k > 1 ? e.type + " × " + e.k : e.type,
+			so, e.noData === null ? "—" : String(e.noData), e.description || ""].forEach(function (c) { tr.insertCell().textContent = c; });
+	});
+}
+// Extra fields the writer can write (types 1-10 and raw), and the array ones it drops
+function writableExtra() { return (info.extraBytes || []).filter(function (e) { return e.type === "raw" || e.k === 1; }); }
+function droppedExtra() { return (info.extraBytes || []).filter(function (e) { return e.type !== "raw" && e.k > 1; }).map(function (e) { return e.name; }); }
+// Point i's extra values as text, "name value"
+function extraText(c, i) {
+	return (info.extraBytes || []).filter(function (e) { return c[e.column]; }).map(function (e) {
+		var vals = [];
+		for (var j = 0; j < e.k; j++) { var v = c[e.column][i * e.k + j]; vals.push(typeof v === "bigint" ? String(v) : v !== v ? "no data" : String(Math.round(v * 1e6) / 1e6)); }
+		return "  · " + (e.name || e.column) + " " + vals.join(" ");
+	}).join("");
 }
 
 // --- read --------------------------------------------------------------------
@@ -168,7 +195,7 @@ async function read(crop, note) {
 	var t0 = performance.now();
 	var tol = Number($("dedupe").value) || 0;
 	readJob = call("readPoints", Object.assign({
-		fields: ["x", "y", "z", "classification", "intensity", "returnNumber", "numberOfReturns", "index"].concat(hasRgb ? ["red", "green", "blue"] : []),
+		fields: ["x", "y", "z", "classification", "intensity", "returnNumber", "numberOfReturns", "index"].concat(hasRgb ? ["red", "green", "blue"] : []).concat(info.extraBytes && info.extraBytes.length ? ["extra"] : []),
 		classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(),
 		maxPoints: Number($("maxPoints").value) || 0, dedupe: tol > 0 ? tol : undefined,
 		localOrigin: fileOrigin, float32: true
@@ -654,12 +681,18 @@ function writeChoice() {
 	$("writeButton").textContent = $("writeCompress").checked ? "Save as LAZ" : "Save as LAS";
 }
 
-// The edited cloud's own columns (the fields read, relative to the origin), points a to b
-function editedBatch(a, b) {
+// The edited cloud's own columns (the fields read, relative to the origin, and the writable extra
+// columns, k values a point), points a to b; with facet columns, those too
+function editedBatch(a, b, facetCols) {
 	var c = cloud, out = { count: b - a };
 	["x", "y", "z", "classification", "intensity", "returnNumber", "numberOfReturns", "red", "green", "blue"].forEach(function (k) {
 		if (c[k]) out[k] = c[k].subarray(a, b);
 	});
+	writableExtra().forEach(function (e) {
+		var k = e.type === "raw" ? e.size : 1;
+		if (c[e.column]) out[e.column] = c[e.column].subarray(a * k, b * k);
+	});
+	if (facetCols) Object.keys(facetCols).forEach(function (k) { if (facetCols[k]) out[k] = facetCols[k].subarray(a, b); });
 	return out;
 }
 
@@ -697,7 +730,15 @@ async function openTarget(name) {
 async function save() {
 	var h = info.header, F = POINT_FORMATS[h.pointFormat].fields;
 	var wf = Number($("writeFormat").value), compress = $("writeCompress").checked;
-	var fromEdit = edited, target = null;
+	var fc = $("writeFacets").checked ? facets.columns() : null;   // Save with facet / set: the cloud as read, two more fields
+	var fromEdit = edited || !!fc, target = null;
+	var extra = writableExtra(), dropped = droppedExtra();
+	if (fc) {
+		extra = extra.filter(function (e) { return e.name !== "facet" && e.name !== "joint_set" && e.column !== "facet" && e.column !== "joint_set"; });
+		extra.push({ name: "facet", type: "u32", description: "las-laz-js findFacets" });
+		if (fc.joint_set) extra.push({ name: "joint_set", type: "u16", description: "las-laz-js jointSets" });
+		else fc = { facet: fc.facet };
+	}
 	var name = file.name.replace(/\.[^.]*$/, "") + "-las-laz-js" + (compress ? ".laz" : ".las");
 	$("writeResult").className = "muted small";
 	try {
@@ -710,7 +751,7 @@ async function save() {
 		if (info.crs.wkt || (info.crs.epsg && wf < 6)) crs = { wkt: info.crs.wkt, epsg: info.crs.epsg };
 		else if (info.crs.epsg) note = " The source has only an EPSG code, which point formats 6–10 cannot carry (they need WKT), so no coordinate system was written.";
 		var names = Object.keys(classNames).length ? classNames : undefined;   // the lookup VLR: the file's names and the classes added
-		var opts = { version: $("writeVersion").value, pointFormat: wf, crs: crs, classNames: names, compress: compress, software: "las-laz-js demo" };
+		var opts = { version: $("writeVersion").value, pointFormat: wf, crs: crs, classNames: names, compress: compress, software: "las-laz-js demo", extraBytes: extra };
 		var t0 = performance.now(), total, done = 0, w;
 		var tick = function (n) { done += n; $("progress").value = total ? done / total : 0; $("writeResult").textContent = "Writing " + fmt(done) + " of " + fmt(total) + " points…"; };
 		if (fromEdit) {
@@ -719,7 +760,7 @@ async function save() {
 			var b = extent(cloud), wb = { minX: b.minX + origin.x, maxX: b.maxX + origin.x, minY: b.minY + origin.y, maxY: b.maxY + origin.y, minZ: b.minZ + origin.z, maxZ: b.maxZ + origin.z };
 			w = await createLasWriter(target.sink, Object.assign(opts, { scale: h.scale, offset: chooseScaleOffset(wb).offset, localOrigin: origin }));
 			for (var a = 0; a < total; a += WRITE_BATCH) {
-				var batch = editedBatch(a, Math.min(total, a + WRITE_BATCH));
+				var batch = editedBatch(a, Math.min(total, a + WRITE_BATCH), fc);
 				await w.writePoints(batch);
 				tick(batch.count);
 			}
@@ -733,7 +774,7 @@ async function save() {
 			var src = await openLas(file, { windowSize: Number($("windowMb").value) * 1048576 });
 			for await (var chunk of src.chunks(Object.assign({
 				fields: ["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scanAngle", "userData", "pointSourceId"]
-					.concat(F.gpsTime ? ["gpsTime"] : []).concat(F.red ? ["red", "green", "blue"] : []).concat(F.nir ? ["nir"] : []),
+					.concat(F.gpsTime ? ["gpsTime"] : []).concat(F.red ? ["red", "green", "blue"] : []).concat(F.nir ? ["nir"] : []).concat(extra.length ? ["extra"] : []),
 				classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter()
 			}, readCrop || {}))) {
 				await w.writePoints(chunk);
@@ -745,9 +786,11 @@ async function save() {
 		var ms = since(t0);
 		var back = (await openLas(out)).header.pointCount;
 		var ok = back === closed.count;
-		var what = fromEdit ? ", the edited cloud: x y z, class, intensity, returns" + (cloud.red ? ", colour" : "") +
+		var kept = extra.length ? "; extra bytes: " + extra.length + " field" + (extra.length === 1 ? "" : "s") + " (" + extra.map(function (e) { return e.name || "undocumented"; }).join(", ") + ")" : "";
+		if (dropped.length) kept += " (not written: " + dropped.join(", ") + " — array types are read, not written)";
+		var what = fromEdit ? (edited ? ", the edited cloud" : ", the cloud as read") + ": x y z, class, intensity, returns" + (cloud.red ? ", colour" : "") +
 			(readThinned ? "; the read was thinned to Max points, so set Max points to 0 and read again to edit and save every point" : "") : "";
-		$("writeResult").textContent = "Saved " + target.name + (target.onDisk ? "" : " (downloaded)") + " (" + fmt(out.size) + " bytes, " + fmt(closed.count) + " points" + what + ", written in " + ms + " ms). Round trip: " + (ok ? "OK, the header holds the same count." : "MISMATCH (" + fmt(back) + " in the header)") + note;
+		$("writeResult").textContent = "Saved " + target.name + (target.onDisk ? "" : " (downloaded)") + " (" + fmt(out.size) + " bytes, " + fmt(closed.count) + " points" + what + kept + ", written in " + ms + " ms). Round trip: " + (ok ? "OK, the header holds the same count." : "MISMATCH (" + fmt(back) + " in the header)") + note;
 		$("writeResult").className = ok ? "muted small" : "error small";
 	} catch (err) {
 		if (target) try { await target.abort(); } catch (e) { /* already closed */ }
@@ -775,7 +818,7 @@ $("viewer").addEventListener("mousemove", function (e) {
 		var c = cloud, i = drawnIdx ? drawnIdx[hit.index] : hit.index;
 		$("hud").textContent = "X " + (c.x[i] + origin.x).toFixed(3) + "  Y " + (c.y[i] + origin.y).toFixed(3) + "  Z " + (c.z[i] + origin.z).toFixed(3) +
 			"  · class " + c.classification[i] + "  · intensity " + c.intensity[i] + "  · return " + c.returnNumber[i] +
-			(c.index ? "  · record " + c.index[i] : "") +
+			(c.index ? "  · record " + c.index[i] : "") + extraText(c, i) +
 			(function () { var f = facets.facetOf(i); return f ? "  · facet " + f.id + " " + f.dip.toFixed(0) + "/" + ("00" + f.dipDirection.toFixed(0)).slice(-3) + (f.set ? " set " + f.set : "") : ""; })();
 	});
 });
@@ -794,6 +837,12 @@ $("abortButton").addEventListener("click", stop);
 $("writeButton").addEventListener("click", save);
 $("writeFormat").addEventListener("change", writeChoice);
 $("writeCompress").addEventListener("change", writeChoice);
+// Save with facet / set: only while there are facets (checked each time the Write tab is shown)
+document.querySelector('.tab[data-tab="write"]').addEventListener("click", function () {
+	var has = !!facets.columns();
+	$("writeFacets").disabled = !has;
+	if (!has) $("writeFacets").checked = false;
+});
 $("colourBy").addEventListener("change", recolour);
 $("ramp").addEventListener("change", recolour);
 $("rangeMin").addEventListener("change", recolour);

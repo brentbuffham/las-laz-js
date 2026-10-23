@@ -53,6 +53,10 @@
 				<table class="kv" id="headerTable"></table>
 				<h3>VLRs</h3>
 				<table class="grid-table" id="vlrTable"></table>
+				<h3>Extra bytes</h3>
+				<p class="muted small" id="extraEmpty">No extra bytes.</p>
+				<p class="error small hidden" id="extraProblem"></p>
+				<table class="grid-table" id="extraTable"></table>
 			</div>
 
 			<div class="tab-body hidden" id="tab-read">
@@ -301,7 +305,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-write">
-				<p class="muted">Writes the whole file — every record that passes the Read tab's class, return, bounds and crop filters, with every field the format holds; Max points only limits what is read for viewing — as a new LAS or LAZ file, streamed in batches through <code>createLasWriter</code>, then checks the count in the written header. After an edit it writes the edited cloud instead (the points read, so set Max points to 0 to edit every point): the fields read (x y z, class, intensity, return and number of returns, colour); a Split cloud is saved whole, both parts. In Chrome and Edge the file goes straight to disk through the Save dialog, at any size; other browsers build it in memory and download it.</p>
+				<p class="muted">Writes the whole file — every record that passes the Read tab's class, return, bounds and crop filters, with every field the format holds; Max points only limits what is read for viewing — as a new LAS or LAZ file, streamed in batches through <code>createLasWriter</code>, then checks the count in the written header. After an edit it writes the edited cloud instead (the points read, so set Max points to 0 to edit every point): the fields read (x y z, class, intensity, return and number of returns, colour, extra bytes); a Split cloud is saved whole, both parts. Extra bytes are kept either way (the deprecated array types are read, not written). <em>Save with facet / set</em> saves the cloud as read with two more extra-bytes fields, <code>facet</code> and <code>joint_set</code>. In Chrome and Edge the file goes straight to disk through the Save dialog, at any size; other browsers build it in memory and download it.</p>
 				<label class="field">LAS version
 					<select id="writeVersion"><option>1.2</option><option>1.4</option></select>
 				</label>
@@ -310,6 +314,9 @@
 				</label>
 				<label class="field">Compress (LAZ)
 					<input type="checkbox" id="writeCompress" title="LAZ for point formats 0–3 and 6–8">
+				</label>
+				<label class="field">Save with facet / set
+					<input type="checkbox" id="writeFacets" disabled title="After Find facets: adds the facet (u32) and joint_set (u16) extra-bytes fields">
 				</label>
 				<div class="row"><button class="button" id="writeButton" disabled>Save as LAS</button></div>
 				<div id="writeResult" class="muted small"></div>
