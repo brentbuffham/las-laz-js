@@ -10,9 +10,11 @@
 // (matchControlPoints) and fitTransform moves the scan onto the grid.
 // Both: a table of each pair's residuals (leave-one-out shows a bad
 // pick), Copy transform ({ m, t } as JSON).
-// Coordinates: picks are kept in world Float64. The reference keeps
-// its own origin (refOrigin, the main cloud's origin when it was read)
-// and is drawn relative to the main cloud's current origin. Apply
+// Coordinates: picks are kept in world Float64. The reference is read
+// about its own centre (so a reference on the grid keeps its mm while
+// the scan sits near 0,0) and drawn relative to the main cloud's
+// origin; more than FAR away it is drawn shifted to sit over the cloud,
+// so both can be picked (display only: picks keep its true coordinates). Apply
 // re-bases the main cloud: Float64 world, transformed, a new origin
 // at the transformed centre, Float32 local again, so a scan moved far
 // (a GCP fit onto the grid) keeps its millimetres on the GPU.
@@ -22,6 +24,7 @@ import { alignCloud, fitTransform, transformPoints, interleavePositions, openLas
 
 var REF_RGB = [63, 182, 201];   // the reference cloud, one flat colour
 var MIN = { rigid: 3, level: 2, scale: 3 };
+var FAR = 10000;   // m: a reference further than this from the cloud is drawn shifted over it
 
 /**
  * @param {object} ctx - the demo's state and helpers: $, viewer, setStatus, fmt, since, colours(),
@@ -47,6 +50,12 @@ export function initRegister(ctx) {
 
 	function status(text, isError) { ctx.setStatus("Register: " + text, isError); }
 	function model() { return $("regModel").value; }
+	// The display shift of the reference: none when near; when far, onto the cloud's origin
+	function refShift() {
+		if (!ref || !ctx.origin) return { x: 0, y: 0, z: 0 };
+		var dx = ref.origin.x - ctx.origin.x, dy = ref.origin.y - ctx.origin.y, dz = ref.origin.z - ctx.origin.z;
+		return Math.hypot(dx, dy, dz) > FAR ? { x: -dx, y: -dy, z: -dz } : { x: 0, y: 0, z: 0 };
+	}
 	function worldOf(i) { var c = ctx.cloud, o = ctx.origin; return [c.x[i] + o.x, c.y[i] + o.y, c.z[i] + o.z]; }
 
 	// The pairs to fit, in either mode: { names, from, to, unmatchedScan?, unmatchedGrid? }
@@ -71,19 +80,24 @@ export function initRegister(ctx) {
 	// --- drawing ----------------------------------------------------------------
 	function drawReference() {
 		if (!ref || !ctx.origin) { viewer.clearReference(); return; }
-		var c = ref.cols, n = c.count, o = ctx.origin;
-		var dx = ref.origin.x - o.x, dy = ref.origin.y - o.y, dz = ref.origin.z - o.z;
+		var c = ref.cols, n = c.count, o = ctx.origin, sh = refShift();
+		var dx = ref.origin.x - o.x + sh.x, dy = ref.origin.y - o.y + sh.y, dz = ref.origin.z - o.z + sh.z;
 		var pos = new Float32Array(n * 3), col = new Uint8Array(n * 3);
 		for (var i = 0; i < n; i++) {
 			pos[i * 3] = c.x[i] + dx; pos[i * 3 + 1] = c.y[i] + dy; pos[i * 3 + 2] = c.z[i] + dz;
 			col[i * 3] = REF_RGB[0]; col[i * 3 + 1] = REF_RGB[1]; col[i * 3 + 2] = REF_RGB[2];
 		}
 		viewer.setReference(pos, col);
+		var far = sh.x || sh.y || sh.z;
+		$("refInfo").textContent = ref.name + " · " + fmt(c.count) + " points" + (far ? " · drawn shifted " + fmt(Math.round(Math.hypot(sh.x, sh.y, sh.z) / 1000)) + " km to sit over your cloud (picks keep its true coordinates)" : "");
 	}
 	function drawMarkers() {
-		var o = ctx.origin, list = [];
+		var o = ctx.origin, list = [], sh = refShift();
 		if (!o) { viewer.setMarkers([]); return; }
-		function add(p, label, layer) { list.push({ x: p[0] - o.x, y: p[1] - o.y, z: p[2] - o.z, label: label, layer: layer }); }
+		function add(p, label, layer) {
+			var s = layer === "reference" ? sh : { x: 0, y: 0, z: 0 };
+			list.push({ x: p[0] - o.x + s.x, y: p[1] - o.y + s.y, z: p[2] - o.z + s.z, label: label, layer: layer });
+		}
 		if (mode === "align") {
 			pairs.forEach(function (p, i) { add(p.from, String(i + 1), "moving"); add(p.to, String(i + 1), "reference"); });
 			if (half) add(half, String(pairs.length + 1), "moving");
@@ -200,14 +214,15 @@ export function initRegister(ctx) {
 	// --- files ----------------------------------------------------------------------
 	async function loadReference(file) {
 		if (!ctx.cloud) { status("read your cloud first, then drop the reference", true); return; }
-		var t0 = performance.now(), o = ctx.origin;
+		var t0 = performance.now();
 		status("reading the reference " + file.name + "…");
 		try {
-			var las = await openLas(file);
-			var pts = await las.readPoints({ fields: ["x", "y", "z"], localOrigin: o, float32: true, maxPoints: ctx.maxPoints() || undefined });
-			ref = { cols: { count: pts.count, x: pts.x, y: pts.y, z: pts.z }, origin: { x: o.x, y: o.y, z: o.z }, name: file.name };
+			// about its own centre: a reference on the grid keeps its mm though the scan is near 0,0
+			var las = await openLas(file), hb = las.header.bounds;
+			var ro = { x: (hb.minX + hb.maxX) / 2, y: (hb.minY + hb.maxY) / 2, z: (hb.minZ + hb.maxZ) / 2 };
+			var pts = await las.readPoints({ fields: ["x", "y", "z"], localOrigin: ro, float32: true, maxPoints: ctx.maxPoints() || undefined });
+			ref = { cols: { count: pts.count, x: pts.x, y: pts.y, z: pts.z }, origin: ro, name: file.name };
 		} catch (err) { status(err.message, true); return; }
-		$("refInfo").textContent = file.name + " · " + fmt(ref.cols.count) + " points";
 		drawReference();
 		viewer.fit();
 		pairs = []; half = null;
@@ -245,11 +260,17 @@ export function initRegister(ctx) {
 			status(note + " in " + ctx.since(t0) + " ms — previewed; Apply to keep it");
 		}, 0); });
 	}
-	// The drawn points moved by T (world), in the current local frame
+	// The drawn points moved by T (world): over the reference as it is drawn (Align), or about
+	// their own new centre (GCP: onto the grid, likely far from where they were)
 	function preview(T) {
-		var d = ctx.drawn, o = ctx.origin, n = d.count;
-		var w = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n) };
-		for (var i = 0; i < n; i++) { w.x[i] = d.x[i] + o.x; w.y[i] = d.y[i] + o.y; w.z[i] = d.z[i] + o.z; }
+		var d = ctx.drawn, o0 = ctx.origin, n = d.count, sh = refShift(), o = o0;
+		if (mode === "align") o = { x: o0.x - sh.x, y: o0.y - sh.y, z: o0.z - sh.z };
+		else {
+			var m = T.m, t = T.t;
+			o = { x: m[0] * o0.x + m[1] * o0.y + m[2] * o0.z + t[0], y: m[3] * o0.x + m[4] * o0.y + m[5] * o0.z + t[1], z: m[6] * o0.x + m[7] * o0.y + m[8] * o0.z + t[2] };
+		}
+		var w = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n) }, i;
+		for (i = 0; i < n; i++) { w.x[i] = d.x[i] + o0.x; w.y[i] = d.y[i] + o0.y; w.z[i] = d.z[i] + o0.z; }
 		var moved = transformPoints(w, T, { inPlace: true });
 		viewer.clear();
 		viewer.addChunk(interleavePositions(moved, { origin: o, float32: true }), ctx.colours(), ctx.DRAW_CAP);
@@ -343,12 +364,20 @@ export function initRegister(ctx) {
 			before = null; $("regUndo").disabled = true;
 			previewing = false;
 		},
+		/** Another file opened: the picks and the scan targets belonged to the last one. */
+		onOpen: function () {
+			pairs = []; half = null; scanPicks = []; scanFile = null; result = null;
+			$("gcpScanInfo").textContent = "none";
+			setPicking(false);
+		},
 		/** A new read or Reset: the frame may have changed; drop the preview and the undo. */
 		onRead: function () {
 			previewing = false; before = null; result = null; half = null;
 			$("regUndo").disabled = true; $("regApply").disabled = true; $("regCopy").disabled = true;
 			drawReference(); drawMarkers(); showPairs();
 		},
-		isPicking: function () { return picking; }
+		isPicking: function () { return picking; },
+		/** For checks from the console. */
+		debug: function () { return { ref: ref, pairs: pairs, scanPicks: scanPicks, scanFile: scanFile, grid: grid, result: result }; }
 	};
 }

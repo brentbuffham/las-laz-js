@@ -28,6 +28,7 @@ var viewer = createViewer($("viewer"));
 var worker = new Worker(new URL("../../src/workers/lasWorker.js", import.meta.url), { type: "module" });
 var nextId = 1, pending = new Map();
 var file = null, info = null, origin = null, readJob = null;
+var fileOrigin = null;   // the open file's own origin (its bounds' centre): every read is about it, though a Register Apply moves origin
 
 // --- worker calls -----------------------------------------------------------
 worker.onmessage = function (event) {
@@ -62,7 +63,8 @@ async function openFile(f) {
 		info = await call("open", { blob: f, windowSize: Number($("windowMb").value) * 1048576 }).promise;
 	} catch (err) { setStatus(err.message, true); return; }
 	var h = info.header;
-	origin = { x: (h.bounds.minX + h.bounds.maxX) / 2, y: (h.bounds.minY + h.bounds.maxY) / 2, z: (h.bounds.minZ + h.bounds.maxZ) / 2 };
+	origin = fileOrigin = { x: (h.bounds.minX + h.bounds.maxX) / 2, y: (h.bounds.minY + h.bounds.maxY) / 2, z: (h.bounds.minZ + h.bounds.maxZ) / 2 };
+	register.onOpen();
 	showHeader();
 	classNames = Object.assign({}, info.classNames || {});
 	refreshClassSelect();
@@ -167,7 +169,7 @@ async function read(crop, note) {
 		fields: ["x", "y", "z", "classification", "intensity", "returnNumber", "numberOfReturns", "index"].concat(hasRgb ? ["red", "green", "blue"] : []),
 		classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(),
 		maxPoints: Number($("maxPoints").value) || 0, dedupe: tol > 0 ? tol : undefined,
-		localOrigin: origin, float32: true
+		localOrigin: fileOrigin, float32: true
 	}, crop || {}), function (m) {
 		if (m.type !== "progress") return;
 		$("progress").value = m.fraction;
@@ -175,7 +177,7 @@ async function read(crop, note) {
 	});
 	try {
 		cloud = lastRead = await readJob.promise;
-		readOrigin = origin;
+		origin = readOrigin = fileOrigin;   // the read is about the file's own origin, whatever an Apply moved
 		beforeSmooth = null; beforeClassify = null;
 		readCrop = crop || null;
 		var maxPts = Number($("maxPoints").value) || 0;
