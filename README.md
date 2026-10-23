@@ -13,7 +13,7 @@ runs in the browser and in Node — and built for files far larger than memory.
 - Point operations on columns: select by box, polygon, class or return; keep, remove, split and
   merge; classify (existing classes kept unless asked); transform coordinates; interleave
   positions for a renderer; find sparse points (dust); register a scan to the grid or to another
-  cloud (control points, picked pairs, ICP);
+  cloud (control points, picked pairs, ICP); find facets and joint sets;
   a voxel neighbour index with nearest, radius and near-ray queries. See Point operations.
 - LAZ: point formats 0–3 and 6–8, read exactly like LAS — the same calls, the same options,
   decoded chunk by chunk in plain JavaScript (no WebAssembly) — and written with
@@ -432,6 +432,75 @@ and, when it lies more than 10 km from your cloud (a raw scan near 0,0 against a
 is drawn shifted over it so both can be picked; the picks keep its true coordinates. A click picks
 the surface in front, from every point drawn.
 
+## Facets
+
+Split a scan into **facets**, flat patches, and group them into **joint sets** (Kirra #127), as
+CloudCompare's Facets tool does, with no dependencies.
+
+```js
+import { findFacets, jointSets, orientationOf } from "las-laz-js";
+
+var f = findFacets(pts, { maxDistance: 0.3 });   // the wall region's points (a selection), any frame
+f.facet;     // Uint32Array per point: its facet (1 … n, largest first), 0 = none
+f.facets;    // [{ id, count, normal, centroid, dip, dipDirection, area, rms, outline }]
+f.planeDistance;
+
+var j = jointSets(f.facets);                     // automatic; or { count: 3 }, or { windows: [{ dip, dipDirection, angle }] }
+j.families;  // [{ id, normal, dip, dipDirection, fisherK, cone95, facets, area }], by area
+j.family;    // per facet: its set, 0 = none
+j.pointFamily(f.facet);   // per point
+```
+
+**Orientation** is Kirra's: dip 0–90 (90 vertical); dip direction a bearing, degrees clockwise
+from north (+Y), east (+X) = 90; x east, y north, z up. `orientationOf(normal)`,
+`poleFromOrientation(dip, dipDirection)` and `poleOf(normal)` convert (a pole is the normal
+pointing up).
+
+**`findFacets`** grows facets from the flattest points (lowest plane-fit residual, 0.7.0's
+`pointNormals`) through each point's k nearest within `maxDistance`: a neighbour joins when its
+normal is within `maxAngle` (default 10°) of the facet's and it lies within `planeDistance`
+(default 3 × the measured noise) of the facet's plane, the plane refitted as the facet grows.
+Facets under `minArea` (default 1, square units) or `minPoints` (20) are dropped. `area` is the
+facet's filled cells on an in-plane grid (`outlineCell`, default 2 × its point spacing), so it
+does not depend on point density; `outline` is the outer edge of its largest patch, a closed
+polygon on its plane (x, y, z per vertex, anticlockwise seen from the pole; holes not traced);
+`rms` is its points' distance from the plane. Pass `normals` (from `pointNormals` with the same
+`k` and `maxDistance`) to try other tolerances without recomputing them.
+
+**`jointSets`** treats poles as axes (a pole and its opposite are one set) weighted by area. The
+automatic mode finds the density peaks by mean-shift with a window of `maxAngle` (default 15°) and
+keeps those gathering `minFacets` (3); each facet joins the nearest set within `maxAngle`, else 0.
+The window should be about 2.5 × a set's spread (1/√K radians): 15° suits sets with K of about
+100 or more; broader sets need a wider window. `count` keeps that many sets (spherical k-means,
+every facet in one); `windows` are your own sets, kept in your order. Per set: the mean pole, Fisher
+K = (N − 1) / (N − R) and the 95 % cone (NaN under 2 facets), the facet count and the area.
+
+**Tuning for real rock.** The defaults suit smooth, clean planes. A blasted or weathered wall is
+rough at the scale of centimetres, so with them facets stop growing at the first bump and stay
+small and few. On a handheld pit-wall scan (tens of millions of points) these worked well:
+`maxDistance` 0.6 (normals fitted over joint-face-sized patches), `maxAngle` 20–30,
+`planeDistance` 2–3 (large: the normal test does the work), `minArea` 0.5, giving 7,000–18,000
+facets and 6–13 joint sets; `jointSets` with `maxAngle` 15 separated the steep sets. A large
+`maxDistance` is slower (normals take longer). Joint **traces** (where a joint cuts the face, a line
+not a face) are not facets; tracing them is later work.
+
+On synthetic walls (9 planes in 3 sets, 5 mm noise) every plane comes back as one facet with its
+dip and dip direction within 0.1° and its area within 2 %; joint sets from Fisher-distributed
+poles come back within 2° and K within 25 %.
+
+**Speed:** growth costs about as much as `pointNormals` (0.7.0); each point is visited at most
+about three times, so rough ground does not regrow (a speck under `minPoints` is dropped for
+good; a point dropped twice stays out). A 2.4 M-point wall region: normals 14 s, facets 15–60 s
+depending on the tolerances (Node).
+
+### In the demo
+
+The Facets tab runs both on the selection (a polygon round the wall) or the whole cloud: colour by
+facet or joint set (points in no set grey), outlines on the cloud, the sets table with **Select**
+(the set's points become the selection, to Classify or delete), an equal-area stereonet, a hover
+readout, and downloads: facets CSV, sets CSV, and **Facets DXF** (each outline a closed 3D polyline,
+a layer per set, world coordinates: the facets as surfaces for CAD or Kirra).
+
 ## LAZ
 
 A LAZ file is opened and read with the same calls as LAS. Each LASzip chunk (50,000 points in
@@ -547,7 +616,7 @@ the doubles, finds them equal and writes no change. Point formats 0–3 are writ
   write or in `close()` — and `writePoints` and `close` keep rejecting with it. Start a new
   writer. After a successful `close()`, both reject (`ABORTED`, "the LAZ writer is closed").
 - **Extra bytes** are not written (the writers have never written them): a file read with
-  extra bytes is written without them. They arrive with 0.7.0.
+  extra bytes is written without them. They arrive with 0.9.1.
 - The streaming writer needs `scale` and `offset` up front, as for LAS.
 
 ## In a Worker

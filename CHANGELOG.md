@@ -1,9 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.9.0 (2026-10-23)
 
-- Demo: the side panel grows with the window (400-520 px, was 340 px) and the tabs wrap onto a second row
-  rather than clip; the Register tab had pushed the tab names past the panel.
+Facets and joint sets (Kirra #127).
+
+- `findFacets(cols, { maxDistance, maxAngle, planeDistance, minArea, minPoints, outlineCell, normals })`
+  splits a cloud into flat facets by region growing on the 0.7.0 normals: per point its facet
+  (0 none); per facet its pole, centroid, dip / dip direction (Kirra's convention), area (an
+  in-plane grid), rms and outline (a closed 3D polygon on its plane). Ids by area. Each point is
+  visited at most about three times, so rough rock does not regrow.
+- `jointSets(facets, { maxAngle, minFacets, count, windows })` groups facets by orientation (axial,
+  area-weighted): automatic (mean-shift), a count (spherical k-means) or your windows; per set the
+  mean pole, Fisher K, the 95 % cone, facets and area; `pointFamily` gives each point its set.
+- `poleOf`, `orientationOf`, `poleFromOrientation`: the orientation convention.
+- Demo: a Facets tab (colours by facet or set, outlines, the sets table with Select, an equal-area
+  stereonet, hover, facets / sets CSV and a Facets DXF of the outlines as 3D polylines, a layer per
+  set); the side panel grows with the window (400-520 px, was 340 px) and the tabs wrap.
 
 ## 0.8.0 (2026-10-23)
 

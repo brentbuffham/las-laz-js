@@ -166,3 +166,24 @@ test("bad options are refused, naming them", function () {
 	assert.throws(function () { findFacets(c, { maxDistance: 0.2, normals: { normal: new Float32Array(3) } }); }, /normals/);
 	assert.throws(function () { findFacets(c, null); }, /options/);
 });
+
+test("minArea above every facet: none kept, every point 0", function () {
+	var f = findFacets(NINE.cols, { maxDistance: 0.2, minArea: 1000, normals: pointNormals(NINE.cols, { k: 16, maxDistance: 0.2 }) });
+	assert.equal(f.facets.length, 0);
+	assert.ok(f.facet.every(function (v) { return v === 0; }));
+});
+
+test("outlineCell sets the area's grid", function () {
+	var c = planesCloud({ planes: [{ centre: [0, 0, 0], dip: 10, dipDirection: 60, width: 4, height: 4 }], spacing: 0.05, noise: 0.002, seed: 8 });
+	var fine = findFacets(c.cols, { maxDistance: 0.2, outlineCell: 0.1 }), coarse = findFacets(c.cols, { maxDistance: 0.2, outlineCell: 1 });
+	assert.ok(Math.abs(fine.facets[0].area - 16) <= 0.05 * 16, "fine " + fine.facets[0].area);
+	assert.ok(coarse.facets[0].area >= fine.facets[0].area, "a coarse grid covers at least as much");
+	assert.ok(Math.abs(coarse.facets[0].area / 1 - Math.round(coarse.facets[0].area)) < 1e-9, "whole cells of 1 m²");
+});
+
+test("onProgress is checked; an empty cloud reports (0, 0)", function () {
+	assert.throws(function () { findFacets(NINE.cols, { maxDistance: 0.2, onProgress: 3 }); }, /onProgress/);
+	var calls = [];
+	findFacets({ count: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0) }, { maxDistance: 0.2, onProgress: function (d, t) { calls.push([d, t]); } });
+	assert.deepEqual(calls, [[0, 0]]);
+});

@@ -45,6 +45,9 @@ export function facetOutline(X, Y, Z, stride, points, centroid, normal, cell) {
 		pa[k] = dx * u[0] + dy * u[1] + dz * u[2]; pb[k] = dx * v[0] + dy * v[1] + dz * v[2];
 		if (pa[k] < amin) amin = pa[k]; if (pb[k] < bmin) bmin = pb[k];
 	}
+	// 0.382 of a cell (the golden ratio's fraction) before the lowest point: a boundary then never
+	// falls on points of a regular grid (spacing cell / n), where rounding would decide their cell
+	amin -= 0.381966 * cell; bmin -= 0.381966 * cell;
 	var imin = 0, imax = 0, jmin = 0, jmax = 0;
 	for (k = 0; k < m; k++) {
 		var i = Math.floor((pa[k] - amin) / cell), j = Math.floor((pb[k] - bmin) / cell);

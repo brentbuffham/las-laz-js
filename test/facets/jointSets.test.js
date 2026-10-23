@@ -130,3 +130,22 @@ test("bad options are refused", function () {
 	assert.throws(function () { jointSets("x"); }, /facets/);
 	assert.throws(function () { jointSets(f, null); }, /options/);
 });
+
+test("more than 2,000 facets: seeds are thinned, the sets still found", function () {
+	var d = threeSets(8, [[70, 135, 150], [40, 300, 150]], 1300), j = jointSets(d.facets);
+	assert.equal(j.families.length, 2);
+	assert.ok(angleBetweenAxes(j.families[0].normal, poleFromOrientation(70, 135)) < 2 || angleBetweenAxes(j.families[0].normal, poleFromOrientation(40, 300)) < 2);
+});
+
+test("facets without an area weigh 1", function () {
+	var j = jointSets([{ normal: [0, 0, 1] }, { normal: [0.01, 0, 1] }, { normal: [0, 0.01, 1] }]);
+	assert.equal(j.families.length, 1);
+	assert.equal(j.families[0].area, 3);
+});
+
+test("more bad input is refused", function () {
+	assert.throws(function () { jointSets([{ normal: [0, 0] }]); }, /facets\[0\]/);
+	assert.throws(function () { jointSets([{ normal: [0, 0, 0] }]); }, /facets\[0\]/);
+	assert.throws(function () { jointSets([], { minFacets: 0 }); }, /minFacets/);
+	assert.throws(function () { jointSets([], { windows: "70/135/12" }); }, /windows/);
+});
