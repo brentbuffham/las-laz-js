@@ -162,12 +162,20 @@ reuse its normals; registration after.
 - **0.7.0 — denoise (spec `2026-10-22-denoise-0.7.0-design.md`):** `nearestPoints`
   (k nearest), `selectOutliers` (PDAL's statistical outlier rule), `pointNormals` /
   `estimateNoise`, and `denoisePoints` (bilateral, edge-preserving, by default; MLS plane fit).
-- **0.8.0 — facets and joint sets** (as CloudCompare's facet tool): planar region growing on
+Roadmap revised 2026-10-23 (Brent): categorise first (small), registration before facets.
+- **0.7.1 — categorise (spec `2026-10-23-classify-0.7.1-design.md`):** `classifyPoints` on a
+  selection, ASPRS and user class names kept in the Classification Lookup VLR; the writer stops
+  masking classes above 31 in point formats 0–5.
+- **0.8.0 — registration (spec `2026-10-23-register-0.8.0-design.md`):** `fitTransform` (rigid,
+  level, scale) from control points matched by name or from picked pairs, leave-one-out
+  residuals; `alignCloud` with optional point-to-plane ICP.
+- **0.9.0 — facets and joint sets** (as CloudCompare's facet tool): planar region growing on
   0.7.0's normals and residuals, dip / dip direction per facet, families by orientation;
   per-point facet and family columns ("tags"); facet and family tables, each facet with its
   outline as a closed 3D polygon on its plane (traced from an in-plane grid, no
   triangulation); written back as LAS 1.4 extra bytes.
-- **0.9.0 — registration:** GCP registration, then ICP-style scan-to-surface alignment.
+- **0.10.0 — level of detail:** large clouds split into tiles held in binary scratch (memory or a
+  temp disk store, `ScratchBinaryFile`) and loaded by view, for Kirra #129.
 
 ## 7. Out of scope
 
