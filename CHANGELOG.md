@@ -1,8 +1,26 @@
 # Changelog
 
-## Unreleased
+## 0.8.0 (2026-10-23)
 
-- Demo: Save writes every point. It streamed nothing over 5,000,000 points before: the Write tab thinned to a
+Register: put a scan onto the mine grid or onto another cloud.
+
+- `fitTransform(from, to, { model, weights })` fits a transform to point pairs, closed form:
+  `"rigid"` (default), `"level"` (rotate about Z + shift) or `"scale"` (rigid + one scale). It
+  returns `{ transform: { m, t }, residuals, dH, dZ, looResiduals, rms, worst, scale, rotateZ }`;
+  `looResiduals` is each pair's residual under the fit made without it, so a bad control point
+  that drags the fit still shows.
+- `parseControlPoints(text, { columns })` reads name, x, y, z rows (comma, semicolon, spaces or tabs;
+  E / N / RL style headers; BOM, CRLF, quotes, a trailing empty column); `matchControlPoints(scan,
+  grid)` pairs them by name and lists the names on one side only.
+- `alignCloud(moving, fixed, { pairs, model, movingOrigin, fixedOrigin, icp })`: the fit from
+  picked pairs, then optional point-to-plane ICP on an even sample (normals fitted only where the
+  sample lands, from each point's k nearest); `converged`, RMS before and after, and the overlap.
+- On real scans with a known answer and 2 cm picking noise: 75.8 mm → 4.6 mm (1 M points, 1.8 s)
+  and 32.6 mm → 1.6 mm (34 M points, 9.9 s) largest error over the scan.
+- Demo: a Register tab — align to a reference cloud by picked pairs (with ICP), or GCP from a control
+  file and a target file or named picks; residuals with the left-out residual and the worst pair,
+  preview, Apply (re-based to a new local origin), Undo, Copy transform.
+- Demo: Save writes every point. It saved at most 5,000,000 points before: the Write tab thinned to a
   5 M page limit, and an unedited save re-read the file with the Read tab's Max points (5 M by default), so a
   55 M-point scan saved as under 5 M. Now an unedited save streams the whole file (every record that passes
   the class, return, bounds and crop filters; Max points only limits what is read for viewing) window by

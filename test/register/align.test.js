@@ -190,3 +190,34 @@ test("bad options are refused", function () {
 	assert.throws(function () { alignCloud(s.moving, FIXED, { pairs: s.pairs, icp: { maxDistance: 0.5, k: 2 } }); }, /k/);
 	assert.throws(function () { alignCloud(s.moving, FIXED, { pairs: s.pairs, icp: { maxDistance: 0.5 }, onProgress: 3 }); }, /onProgress/);
 });
+
+// A plain floor cannot pin the in-plane shift or the rotation about its normal: ICP must still
+// return a finite transform (the ridge keeps the system solvable), and keep the floor in place
+test("a flat floor: ICP stays finite and keeps the floor", function () {
+	var floor = keep(FIXED, function (x, y) { return benchZ(x, y) === 0; });
+	var a = alignCloud(floor, floor, { pairs: { from: [5, 5, 0, 20, 5, 0, 10, 30, 0], to: [5, 5, 0.01, 20, 5, 0.01, 10, 30, 0.01] }, icp: { maxDistance: 0.5 } });
+	a.transform.m.concat(a.transform.t).forEach(function (v) { assert.ok(isFinite(v)); });
+	assert.ok(Math.abs(apply(a.transform, 10, 10, 0)[2]) < 0.002, "the floor stays at z 0 (the picks said 1 cm up)");
+});
+
+// A scanned blasthole: a line of points has no plane, so those reference points give no normal and
+// are skipped; the rest still align
+test("reference points on a line give no normal and are skipped", function () {
+	var s = setup(TRUTH, 12), line = { count: FIXED.count + 400, x: new Float64Array(FIXED.count + 400), y: new Float64Array(FIXED.count + 400), z: new Float64Array(FIXED.count + 400) };
+	line.x.set(FIXED.x); line.y.set(FIXED.y); line.z.set(FIXED.z);
+	for (var i = 0; i < 400; i++) { line.x[FIXED.count + i] = 70; line.y[FIXED.count + i] = 20; line.z[FIXED.count + i] = i * 0.01; }
+	var mv = { count: s.moving.count + 50, x: new Float64Array(s.moving.count + 50), y: new Float64Array(s.moving.count + 50), z: new Float64Array(s.moving.count + 50) };
+	mv.x.set(s.moving.x); mv.y.set(s.moving.y); mv.z.set(s.moving.z);
+	for (i = 0; i < 50; i++) { var q = apply(inverse(TRUTH), 70, 20, i * 0.08); mv.x[s.moving.count + i] = q[0]; mv.y[s.moving.count + i] = q[1]; mv.z[s.moving.count + i] = q[2]; }
+	var a = alignCloud(mv, line, { pairs: s.pairs, icp: { maxDistance: 0.5, sample: mv.count } });
+	assert.ok(a.icp.used < a.icp.sampled, "the line's points were skipped");
+	assert.ok(gap(a.transform, TRUTH, s.centre) < 0.005);
+});
+
+test("more bad options", function () {
+	var s = setup(TRUTH, 13);
+	assert.throws(function () { alignCloud(s.moving, FIXED, null); }, /options/);
+	assert.throws(function () { alignCloud(s.moving, FIXED, { pairs: s.pairs, movingOrigin: "0,0,0" }); }, /movingOrigin/);
+	assert.throws(function () { alignCloud(s.moving, FIXED, { pairs: s.pairs, icp: "yes" }); }, /icp must be/);
+	assert.throws(function () { alignCloud(s.moving, FIXED, { pairs: s.pairs, model: "affine" }); }, /model/);
+});

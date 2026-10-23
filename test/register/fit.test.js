@@ -271,3 +271,10 @@ test("a refit that turns degenerate gives NaN for that pair", function () {
 	assert.ok(f.looResiduals[3] !== f.looResiduals[3], "without pair 3 the rest are one line");
 	for (var i = 0; i < 3; i++) assert.ok(isFinite(f.looResiduals[i]));
 });
+
+test("to is checked as from is", function () {
+	var a = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+	assert.throws(function () { fitTransform(a, "x"); }, /to must be/);
+	var bad = a.slice(); bad[4] = Infinity;
+	assert.throws(function () { fitTransform(a, bad); }, /pair 1: to/);
+});

@@ -74,3 +74,20 @@ test("matchControlPoints", function () {
 	assert.equal(lib.parseControlPoints, parseControlPoints);
 	assert.equal(lib.matchControlPoints, matchControlPoints);
 });
+
+test("quoted names in a space-separated file", function () {
+	var got = parseControlPoints("\"CP 1\" 1 2 3\n\"Peg A\"  4 5 6");
+	assert.deepEqual(got.names, ["CP 1", "Peg A"]);
+	assert.deepEqual(Array.from(got.xyz), [1, 2, 3, 4, 5, 6]);
+	assert.throws(function () { parseControlPoints("\"\" 1 2 3"); }, /no name/);
+});
+
+test("a header without a coordinate column is refused, naming it", function () {
+	assert.throws(function () { parseControlPoints("Name,X,Y\nCP1,1,2"); }, /no z column/);
+	assert.throws(function () { parseControlPoints("Name,E,RL\nCP1,1,2"); }, /no y column/);
+});
+
+test("options and columns must be objects", function () {
+	assert.throws(function () { parseControlPoints("CP1,1,2,3", null); }, /options/);
+	assert.throws(function () { parseControlPoints("CP1,1,2,3", { columns: null }); }, /columns/);
+});

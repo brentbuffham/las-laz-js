@@ -42,8 +42,7 @@ function whole(v, name, min) {
 function cholesky(A, b, n, x) {
 	var tr = 0, i, j, k;
 	for (i = 0; i < n; i++) tr += A[i * n + i];
-	if (!(tr > 0)) return false;
-	for (i = 0; i < n; i++) A[i * n + i] += 1e-12 * tr;
+	for (i = 0; i < n; i++) A[i * n + i] += 1e-12 * tr;   // a zero trace fails the pivot test below
 	for (j = 0; j < n; j++) {
 		var d = A[j * n + j];
 		for (k = 0; k < j; k++) d -= A[j * n + k] * A[j * n + k];

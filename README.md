@@ -12,7 +12,8 @@ runs in the browser and in Node — and built for files far larger than memory.
   colours points; `writeLas` and `createLasWriter` write LAS 1.0–1.4.
 - Point operations on columns: select by box, polygon, class or return; keep, remove, split and
   merge; classify (existing classes kept unless asked); transform coordinates; interleave
-  positions for a renderer; find sparse points (dust);
+  positions for a renderer; find sparse points (dust); register a scan to the grid or to another
+  cloud (control points, picked pairs, ICP);
   a voxel neighbour index with nearest, radius and near-ray queries. See Point operations.
 - LAZ: point formats 0–3 and 6–8, read exactly like LAS — the same calls, the same options,
   decoded chunk by chunk in plain JavaScript (no WebAssembly) — and written with
@@ -216,7 +217,7 @@ var local = await las.readPoints({                       // or while reading
 ```
 
 A transform is a plain object, `{ m, t }`, with `m` nine numbers (a row-major 3×3) and `t` three.
-Any affine map fits, so a fitted registration can be passed the same way; it is not Three.js's
+Any affine map fits, so a fitted registration (`fitTransform`, `alignCloud`, see Register) can be passed the same way; it is not Three.js's
 column-major `Matrix4`. `makeTransform` takes `shift`, `about`, `scale` and either `rotateZ` or
 `rotate` (a row-major 3×3; not both). `transformPoints` needs `x`, `y` and `z`, computes in
 Float64 and stores in the columns' own types. It returns a new `{ count, columns }` object either
@@ -335,6 +336,93 @@ var { keep, map } = dedupeSelection(pts, 0.01);   // { z: true } for 3D
 var unique = keepPoints(pts, keep);               // what dedupe(pts, 0.01) returns
 // map[i]: where input point i went in unique — a dropped point maps to its nearest kept point
 ```
+
+## Register
+
+Put a raw scan onto the mine grid, or onto another cloud, and see how well it fits. The result is
+always a transform `{ m, t }` (world to world), so `transformPoints` or a read's `transform`
+option applies it.
+
+### Control points
+
+```js
+import { parseControlPoints, matchControlPoints, fitTransform } from "las-laz-js";
+
+var grid = parseControlPoints(await surveyFile.text());   // Name,E,N,RL (or X,Y,Z; header optional)
+var scan = parseControlPoints(await targetsFile.text());  // the same names, in the scan's frame
+var pairs = matchControlPoints(scan, grid);               // { names, from, to, unmatchedScan, unmatchedGrid }
+var f = fitTransform(pairs.from, pairs.to, { model: "rigid" });
+f.transform;                      // { m, t }
+f.residuals; f.dH; f.dZ;          // each pair's 3D, horizontal and vertical misfit
+f.looResiduals; f.worst;          // each pair's residual under the fit made WITHOUT it; the worst pair
+f.rms;
+```
+
+`model` is `"rigid"` (rotate and shift, the default; 3 or more pairs not on one line),
+`"level"` (rotate about Z and shift, for a scan levelled by its IMU; 2 or more pairs at different
+XY) or `"scale"` (rigid plus one uniform scale; 3 or more pairs). The fits are closed form
+(Horn's quaternion method; the level fit exactly in 2D), on Float64 offsets from each set's
+centroid, so a scan near 0,0 and a grid at UTM magnitude lose nothing. `weights` (one per pair,
+0 leaves a pair out but still reports it) are optional. A bad control point pulls the fit toward
+itself, so its own residual can look fine: `looResiduals` shows it, and `worst` names it.
+`looResiduals` is NaN at the model's minimum number of pairs.
+
+`parseControlPoints` reads comma, semicolon, or space / tab separated rows of name, x, y, z;
+a header picks the columns (name / id / point / station, x / e / east / easting, y / n / north /
+northing, z / rl / elev / h / height), or `columns: { name, x, y, z }` names them. A BOM, CRLF,
+blank lines, `#` comments, a trailing empty column and double-quoted names are accepted. Every row
+must have as many fields as the first, so a thousands separator (`478,000.1`) is refused, naming
+the line, never read as two numbers. Names match exactly after trimming, case-sensitive.
+
+### Align to a cloud
+
+```js
+import { alignCloud } from "las-laz-js";
+
+var a = alignCloud(scan, reference, {
+	pairs: { from: picksOnScan, to: picksOnReference },   // world coordinates, x, y, z per pick
+	model: "rigid",
+	movingOrigin: [478000, 6772000, 0], fixedOrigin: [478000, 6772000, 0],   // for localOrigin columns
+	icp: { maxDistance: 0.5 }                             // iterations 30, sample 50000, k 16
+});
+a.transform;   // world to world
+a.fit;         // fitTransform's result for the picks
+a.icp;         // { iterations, converged, rmsBefore, rmsAfter, used, sampled }
+```
+
+Without `icp` it is `fitTransform` on the picks. With it, point-to-plane ICP refines the fit on an
+even sample of the scan: each sample point pairs with its nearest reference point within
+`maxDistance`, whose plane is fitted from its `k` nearest; the increment is rigid (about Z only
+for `"level"`, and `"scale"` keeps the picks' scale). Pick three or more points well apart; ICP
+then needs the picks within about `maxDistance` of right, and `maxDistance` must be larger than
+the reference's point spacing (a sparse cloud with a small `maxDistance` finds few pairs: `used`
+says how many). `converged: false` means it stopped at `iterations` still moving by more than
+1e-7 rad or 1e-6 × `maxDistance` (on a noisy scan it creeps along the noise for a while, and the
+result is usually already final), or that too few pairs were found (`used`), when it keeps the
+last transform. It never throws for a poor overlap.
+
+A check on real scans with a known answer (`_dev/benchRegister.mjs`): the scan's odd points,
+moved by a known rigid transform (37.3° about Z, a 0.3° tilt, a 2.6 km shift), stand in for the
+reference; its even points are placed by six control points with 2 cm of picking noise, then ICP
+(`maxDistance` 0.3 m). The error is the largest over the whole scan against the known transform.
+
+| Scan (Node) | Points | Control points only | With ICP | ICP time (tree build included) |
+|---|---|---|---|---|
+| Handheld | 1 M | 75.8 mm | 4.6 mm | 1.8 s |
+| Handheld | 34 M | 32.6 mm | 1.6 mm | 9.9 s |
+| Sparse (about 2.7 m spacing) | 79 k | 33.6 mm | 19.3 mm (`maxDistance` 5 m) | 0.3 s |
+
+This checks the method on real geometry and noise; a field check (surveyed targets on a raw scan)
+is still to come.
+
+### In the demo
+
+The Register tab does both. **Align to a cloud**: open a reference cloud, pick pairs (a point on
+your cloud, then the same point on the reference), Fit (with ICP if ticked), Apply. **GCP**: open the
+grid control file, then the scan's target file or pick targets on the cloud and name them. Both
+show each pair's residuals, the left-out residual and the worst pair, preview the fit before Apply,
+undo it, and copy the transform as JSON. Apply moves the cloud to a new local origin, so a scan
+moved kilometres onto the grid keeps its millimetres.
 
 ## LAZ
 

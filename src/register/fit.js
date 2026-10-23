@@ -34,8 +34,7 @@ function solveLevel(from, to, w, skip, ax, ay, az, bx, by, bz) {
 	}
 	if (!(spread > 1e-24 * big * big)) return null;
 	var theta = Math.atan2(num, den), c = Math.cos(theta), s = Math.sin(theta);
-	var deg = (theta * 180) / Math.PI;
-	if (deg <= -180) deg += 360;
+	var deg = 180 - ((180 - (theta * 180) / Math.PI) % 360);   // in (-180, 180]: -180 becomes 180
 	return {
 		m: [c, -s + 0, 0, s, c, 0, 0, 0, 1],
 		t: [bx - (c * ax - s * ay) + 0, by - (s * ax + c * ay) + 0, bz - az + 0],
@@ -91,7 +90,7 @@ export function solve(from, to, w, model, skip) {
 		ax += wi * from[3 * i]; ay += wi * from[3 * i + 1]; az += wi * from[3 * i + 2];
 		bx += wi * to[3 * i]; by += wi * to[3 * i + 1]; bz += wi * to[3 * i + 2];
 	}
-	if (!(W > 0)) return null;
+	// W is never 0 here: one weighted pair is already degenerate below (its NaN sums fail the checks)
 	ax /= W; ay /= W; az /= W; bx /= W; by /= W; bz /= W;
 	if (model === "level") return solveLevel(from, to, w, skip, ax, ay, az, bx, by, bz);
 	// S = sum w a' b'^T and the from set's covariance, on centred offsets
