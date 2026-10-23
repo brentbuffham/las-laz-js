@@ -37,12 +37,13 @@ export function setRgb(id) {
 export function setCss(id) { var c = setRgb(id); return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
 
 /**
- * @param {object} ctx - $, viewer, setStatus, fmt, since, select(name, make), clearSelection(), recolour(), keepPoints,
+ * @param {object} ctx - $, viewer, setStatus, fmt, since, setSelection(sel, name), clearSelection(), recolour(), keepPoints,
  *   and getters cloud, origin, selection.
  */
 export function initFacets(ctx) {
 	var $ = ctx.$, fmt = ctx.fmt;
 	var res = null;   // { f (findFacets on the run's points), idx (run point -> cloud point, or null), facet (per cloud point), sets, pointSet }
+	var picked = null;   // after Select: { sel (the set's points), before (the selection it replaced, or null) }
 
 	function status(t, err) { ctx.setStatus("Facets: " + t, err); }
 	// Fisher K: huge for near-perfect planes, so capped in the table
@@ -115,12 +116,15 @@ export function initFacets(ctx) {
 		for (var i = 0; i < s.family.length; i++) if (!s.family[i]) none++;
 		$("facSetInfo").textContent = s.families.length + " sets · " + none + " of " + s.family.length + " facets in no set";
 	}
+	// Select a set: its points REPLACE the selection (the one replaced is kept, so Clear facets can
+	// put it back: the wall region drawn before, or nothing)
 	function selectSet(id) {
-		ctx.select("Set " + id, function () {
-			var out = [], ps = res.pointSet;
-			for (var i = 0; i < ps.length; i++) if (ps[i] === id) out.push(i);
-			return Uint32Array.from(out);
-		});
+		var out = [], ps = res.pointSet;
+		for (var i = 0; i < ps.length; i++) if (ps[i] === id) out.push(i);
+		var before = picked && ctx.selection === picked.sel ? picked.before : ctx.selection;
+		var sel = Uint32Array.from(out);
+		picked = { sel: sel, before: before };
+		ctx.setSelection(sel, "Set " + id + ": " + fmt(sel.length) + " points selected");
 		showScope();
 		ctx.setStatus($("status").textContent + " · Find facets now runs on this selection (Clear selection for the whole cloud)");
 	}
@@ -216,6 +220,10 @@ export function initFacets(ctx) {
 	drawStereonet($("stereonet"), null, null, null, setCss);
 	$("facRun").addEventListener("click", function () { showScope(); run(); });
 	$("facClear").addEventListener("click", function () {
+		// a selection made by Select goes too: back to the one it replaced
+		if (picked && ctx.selection === picked.sel) ctx.setSelection(picked.before, "Selection restored");
+		picked = null;
+		showScope();
 		if (!res) return;
 		clear("cleared");
 		if ($("colourBy").value === "facet" || $("colourBy").value === "set") $("colourBy").value = "elevation";
@@ -245,7 +253,7 @@ export function initFacets(ctx) {
 			return { id: f.id, dip: f.dip, dipDirection: f.dipDirection, set: res.pointSet ? res.pointSet[i] : 0 };
 		},
 		/** A new read or Reset: the facets belonged to the last points. */
-		onRead: function () { clear(); showScope(); },
+		onRead: function () { clear(); picked = null; showScope(); },
 		/** The selection changed (another tab): keep the scope line true. */
 		onSelection: showScope,
 		/** An edit: one that changes the points (count, or coordinates: Register, Transform, Smooth) clears the facets. */

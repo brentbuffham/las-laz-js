@@ -852,7 +852,14 @@ var register = initRegister({
 });
 // The Facets tab, the same way
 var facets = initFacets({
-	$: $, viewer: viewer, setStatus: setStatus, fmt: fmt, since: since, select: select, clearSelection: clearSelection, recolour: recolour, keepPoints: keepPoints,
+	$: $, viewer: viewer, setStatus: setStatus, fmt: fmt, since: since, clearSelection: clearSelection, recolour: recolour, keepPoints: keepPoints,
+	// replace the selection (not add to it), redraw and say so
+	setSelection: function (s, name) {
+		selection = s && s.length ? s : null;
+		if (cloud) viewer.setColours(colours());
+		showSelection();
+		setStatus(name);
+	},
 	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; }
 });
 window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets };   // for checks from the console
