@@ -4,6 +4,10 @@
 // read/decodeRecords.js: same field offsets (format/PointFormats),
 // same bit layouts. Missing columns are written as 0. Bit packing
 // acts on single field bytes (marked // bits-ok).
+// Extra-bytes fields (a layout from format/ExtraBytes.js) come from
+// their columns, which must be there: every value of a batch is checked
+// (and its raw min / max taken) before any byte is written, so a refused
+// batch changes nothing; then each is quantised again as it is written.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -11,6 +15,59 @@ import { POINT_FORMATS } from "../format/PointFormats.js";
 
 var LE = true;
 var INT32_MAX = 2147483647, INT32_MIN = -2147483648;
+
+function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
+
+// One extra field's raw value for point i of col: a Number, or a BigInt for a 64-bit integer type
+function rawOf(f, col, i, first) {
+	var e = f.elem, v = col[i], r, label = "extra bytes field \"" + f.name + "\": point " + (first + i);
+	if (f.scaled) {
+		v = Number(v);
+		if (v !== v) {
+			if (f.noData === null) throw bad(label + " is NaN and the field has no noData to write it as");
+			return e.big ? BigInt(f.noData) : f.noData;
+		}
+		r = (v - (f.offset === null ? 0 : f.offset)) / (f.scale === null ? 1 : f.scale);
+		if (e.int) {
+			r = Math.round(r);
+			if (!Number.isSafeInteger(r)) throw bad(label + ": " + v + " is " + r + " raw, outside " + e.name + "'s range (" + e.min + " to " + e.max + ")");
+		}
+	} else if (e.int) {
+		if (typeof v === "bigint") r = v;
+		else if (typeof v !== "number" || !Number.isInteger(v)) throw bad(label + ": " + v + " is not a whole number (" + e.name + ")");
+		else if (!Number.isSafeInteger(v)) throw bad(label + ": " + v + " is past 2^53, where Numbers are not exact; give 64-bit values as a BigInt64Array / BigUint64Array");
+		else r = v;
+	} else r = Number(v);
+	if (e.big) {
+		r = BigInt(r);
+		if (r < e.min || r > e.max) throw bad(label + ": " + v + " is outside " + e.name + "'s range (" + e.min + " to " + e.max + ")");
+	} else if (r === r && isFinite(r) && (r < e.min || r > e.max)) {
+		throw bad(label + ": " + v + (f.scaled ? " is " + r + " raw," : " is") + " outside " + e.name + "'s range (" + e.min + " to " + e.max + ")");
+	}
+	return r;
+}
+
+// Check every extra value of the batch; per field its raw { min, max } (no-data and NaN left out), or null
+function checkExtra(cols, extra, first) {
+	return extra.map(function (f) {
+		var col = cols[f.column], label = "extra bytes field \"" + f.name + "\"", w = f.code === 0 ? f.size : 1;
+		if (col === undefined || col === null) throw bad(label + ": column \"" + f.column + "\" is missing from the points");
+		if (!(ArrayBuffer.isView(col) || Array.isArray(col))) throw bad(label + ": column \"" + f.column + "\" must be a typed array or an array");
+		if (col.length !== cols.count * w) throw bad(label + ": column \"" + f.column + "\" has length " + col.length + ", not " + cols.count * w + " (" + w + " a point)");
+		if (f.code === 0) {
+			if (!(col instanceof Uint8Array)) for (var j = 0; j < col.length; j++) if (!(Number.isInteger(col[j]) && col[j] >= 0 && col[j] <= 255)) throw bad(label + ": byte " + j + " of the raw column is " + col[j] + ", not 0-255");
+			return null;
+		}
+		var nd = f.noData === null ? null : f.elem.big ? BigInt(f.noData) : f.noData, lo = null, hi = null;
+		for (var i = 0; i < cols.count; i++) {
+			var r = rawOf(f, col, i, first);
+			if (r !== r || r === nd) continue;
+			if (lo === null || r < lo) lo = r;
+			if (hi === null || r > hi) hi = r;
+		}
+		return lo === null ? null : { min: lo, max: hi };
+	});
+}
 
 function zero() { return 0; }
 function col(cols, name) { var c = cols[name]; return c ? function (i) { return c[i]; } : zero; }
@@ -26,8 +83,10 @@ function col(cols, name) { var c = cols[name]; return c ? function (i) { return 
  * @param {number} at
  * @param {object} totals - updated: bounds (quantised world values) and byReturn counts
  * @param {number} [first=0] - the index of cols' first point in the caller's points (named in errors)
+ * @param {object[]} [extra] - extra-bytes fields (layoutExtraBytes(...).fields); totals.extra gains their raw min / max
  */
-export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, at, totals, first) {
+export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, at, totals, first, extra) {
+	first = first || 0;
 	var fmt = POINT_FORMATS[pointFormat];
 	var F = fmt.fields;
 	var ox = origin && isFinite(origin.x) ? origin.x : 0;
@@ -42,6 +101,8 @@ export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, 
 			if (cls > 31) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point " + ((first || 0) + c) + " has class " + cls + "; point formats 0-5 hold classes 0-31 — write point format 6 or higher");
 		}
 	}
+	var xs = extra && extra.length ? extra : null;
+	var ranges = xs ? checkExtra(cols, xs, first) : null;
 	var b = totals.bounds;
 	for (var i = 0; i < cols.count; i++) {
 		var p = at + i * recordLength;
@@ -80,5 +141,19 @@ export function encodeRecords(cols, pointFormat, recordLength, so, origin, out, 
 			out.setUint16(p + F.blue.offset, get.blue(i), LE);
 		}
 		if (F.nir) out.setUint16(p + F.nir.offset, get.nir(i), LE);
+		if (xs) {
+			for (var x = 0; x < xs.length; x++) {
+				var xf = xs[x], xc = cols[xf.column];
+				if (xf.code === 0) { for (var j = 0; j < xf.size; j++) out.setUint8(p + xf.at + j, xc[i * xf.size + j]); }
+				else out[xf.elem.set](p + xf.at, rawOf(xf, xc, i, first), LE);
+			}
+		}
 	}
+	// the batch is written: its ranges join the totals
+	if (ranges) ranges.forEach(function (r, k) {
+		var t = totals.extra[k];
+		if (!r) return;
+		if (!t) totals.extra[k] = { min: r.min, max: r.max };
+		else { if (r.min < t.min) t.min = r.min; if (r.max > t.max) t.max = r.max; }
+	});
 }

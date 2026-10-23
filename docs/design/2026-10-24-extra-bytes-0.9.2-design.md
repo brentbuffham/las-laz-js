@@ -97,8 +97,9 @@ await writeLas(p, { extraBytes: las.extraBytes });   // read -> save keeps every
   1.4 only). Each descriptor:
   - `name` (ASCII, 1–32 characters; empty only for `"raw"`, written as undocumented bytes), `type` (`"u8"` … `"f64"` or the codes 1–10, or
     `"raw"` / 0), `column` (default `name`), `size` (bytes, `"raw"` only), `scale`, `offset`,
-    `noData` (raw), `description` (ASCII, up to 32). Other properties (`k`, `at`, `min`, `max`,
-    read from a file) are ignored, so the reader's list can be passed back as it is.
+    `noData` (raw), `description` (ASCII, up to 32). Other properties (`at`, `min`, `max`, read
+    from a file) are ignored, so the reader's list can be passed back as it is; `k` above 1 on a
+    typed field (a deprecated array read from a file) is refused: read, not written.
   - A `"raw"` descriptor is written as type 0 with its size in `options` (the reader's
     undocumented field, `name: ""`, stays unnamed); one over 255 bytes is written as several type-0 descriptors of up
     to 255 (it reads back as `extraBytes`, `extraBytes_2`, …: the bytes are the same).

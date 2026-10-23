@@ -19,6 +19,11 @@
 // version / format pair is REFUSED (Kirra silently downgraded the
 // format), and the coordinate system is written (GeoKey EPSG
 // record 34735 and / or a WKT record 2112) — Kirra wrote no VLRs.
+//
+// extraBytes adds fields after the point format (format/ExtraBytes.js):
+// the record grows by their sizes, the Extra Bytes VLR (raw min / max of
+// what was written) goes in the header, and LAZ carries them in its
+// Byte / Byte14 item.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -27,6 +32,7 @@ import { chooseScaleOffset } from "./scaleOffset.js";
 import { encodeRecords } from "./encodeRecords.js";
 import { lazVlrFor, LASZIP_USER_ID, LASZIP_RECORD_ID } from "../laz/LazVlr.js";
 import { buildClassLookup, CLASS_LOOKUP_USER_ID, CLASS_LOOKUP_RECORD_ID } from "../format/ClassLookup.js";
+import { layoutExtraBytes, buildExtraBytes, EXTRA_BYTES_USER_ID, EXTRA_BYTES_RECORD_ID } from "../format/ExtraBytes.js";
 import { createChunkCompressor } from "../laz/compressChunk.js";
 import { encodeChunkTable } from "../laz/chunkTable.js";
 import { createLazPool, defaultThreads } from "../laz/pool.js";
@@ -94,23 +100,25 @@ function settle(points, opts) {
 	if (fmt >= 6 && minor < 4) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point format " + fmt + " needs LAS 1.4 (asked for " + version + ")");
 	if ((fmt === 4 || fmt === 5) && minor < 3) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point format " + fmt + " needs LAS 1.3 or later (asked for " + version + ")");
 	var classLookup = opts.classNames === undefined ? null : buildClassLookup(opts.classNames);
-	return { version: version, minor: minor, fmt: fmt, opts: opts, classLookup: classLookup, laz: lazSetup(fmt, opts) };
+	var extra = layoutExtraBytes(opts.extraBytes === undefined || opts.extraBytes === null ? [] : opts.extraBytes, POINT_FORMATS[fmt].size);
+	return { version: version, minor: minor, fmt: fmt, opts: opts, classLookup: classLookup, extra: extra.fields.length ? extra : null, recordLength: extra.recordLength, laz: lazSetup(fmt, opts, extra.recordLength) };
 }
 
 // compress: the LASzip VLR and the chunk compressor. chunkSize is ignored without compress.
-function lazSetup(fmt, opts) {
+function lazSetup(fmt, opts, recordLength) {
 	if (!opts.compress) return null;
 	var chunkSize = opts.chunkSize == null ? DEFAULT_CHUNK_SIZE : opts.chunkSize;
 	if (!Number.isInteger(chunkSize) || chunkSize < 1 || chunkSize > MAX_CHUNK_SIZE) {
 		throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "chunkSize must be a whole number of points from 1 to " + MAX_CHUNK_SIZE + " (got " + chunkSize + ")");
 	}
-	var len = POINT_FORMATS[fmt].size;
+	var len = recordLength;
 	var made = lazVlrFor(fmt, len, chunkSize);   // UNSUPPORTED for formats 4, 5, 9, 10
 	return { chunkSize: chunkSize, vlr: made.vlr, vlrBytes: made.bytes, compress: createChunkCompressor(made.vlr, len) };
 }
 
-function freshTotals() {
-	return { count: 0, byReturn: new Array(15).fill(0), bounds: { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity } };
+// extra: per extra-bytes field, the raw { min, max } written so far (null: none yet)
+function freshTotals(s) {
+	return { count: 0, byReturn: new Array(15).fill(0), bounds: { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity }, extra: s.extra ? s.extra.fields.map(function () { return null; }) : null };
 }
 
 // Header + VLR bytes for the given totals
@@ -119,6 +127,7 @@ function headerBytes(s, so, totals) {
 	var headerSize = HEADER_SIZE[s.version];
 	var vlrs = crsRecords(o.crs, s.fmt);
 	if (s.classLookup) vlrs.push({ userId: CLASS_LOOKUP_USER_ID, recordId: CLASS_LOOKUP_RECORD_ID, description: "Classification", bytes: s.classLookup });
+	if (s.extra) vlrs.push({ userId: EXTRA_BYTES_USER_ID, recordId: EXTRA_BYTES_RECORD_ID, description: "Extra Bytes", bytes: buildExtraBytes(s.extra, totals.extra) });
 	if (s.laz) vlrs.push({ userId: LASZIP_USER_ID, recordId: LASZIP_RECORD_ID, description: "http://laszip.org", bytes: s.laz.vlrBytes });
 	var vlrSize = vlrs.reduce(function (n, r) { return n + 54 + r.bytes.length; }, 0);
 	var out = new Uint8Array(headerSize + vlrSize);
@@ -142,7 +151,7 @@ function headerBytes(s, so, totals) {
 	v.setUint32(96, headerSize + vlrSize, LE);
 	v.setUint32(100, vlrs.length, LE);
 	v.setUint8(104, s.laz ? s.fmt + 128 : s.fmt);   // bit 7: compressed
-	v.setUint16(105, fmt.size, LE);
+	v.setUint16(105, s.recordLength, LE);
 	var legacyOk = s.fmt < 6 && totals.count < 4294967296;
 	v.setUint32(107, legacyOk ? totals.count : 0, LE);
 	for (var i = 0; i < 5; i++) v.setUint32(111 + i * 4, legacyOk ? totals.byReturn[i] : 0, LE);
@@ -189,7 +198,9 @@ function boundsOfPoints(points, origin) {
  * @param {object} [opts] - version, pointFormat, scale, offset, crs {epsg|wkt}, classNames ({ code: name }, written as
  *   the Classification Lookup VLR), software, systemId, date, localOrigin, as ("bytes" | "blob"),
  *   compress (write LAZ), chunkSize (points per LAZ chunk, default 50000; only with compress),
- *   threads (LAZ compression workers: default automatic, from 4 chunks and at most 4 workers; 1 = this thread; n = n workers)
+ *   threads (LAZ compression workers: default automatic, from 4 chunks and at most 4 workers; 1 = this thread; n = n workers),
+ *   extraBytes (fields after the point format: [{ name, type ("u8" … "f64", "raw"), column?, size? (raw), scale?, offset?,
+ *   noData? (raw), description? }], values from points[column || name]; a reader's extraBytes can be passed as they are)
  * @returns {Promise<Uint8Array|Blob>}
  */
 export async function writeLas(points, opts) {
@@ -197,8 +208,8 @@ export async function writeLas(points, opts) {
 	var o = s.opts;
 	var so = (o.scale && o.offset) ? { scale: o.scale, offset: o.offset } : chooseScaleOffset(boundsOfPoints(points, o.localOrigin));
 	if (o.scale && !o.offset) so = { scale: o.scale, offset: chooseScaleOffset(boundsOfPoints(points, o.localOrigin)).offset };
-	var len = POINT_FORMATS[s.fmt].size;
-	var totals = freshTotals();
+	var len = s.recordLength;
+	var totals = freshTotals(s);
 	if (s.laz) {
 		var parts = await lazParts(points, s, so, len, totals);
 		return o.as === "blob" ? new Blob(parts, { type: "application/octet-stream" }) : joinParts(parts);
@@ -207,19 +218,24 @@ export async function writeLas(points, opts) {
 	// size does not depend on the totals; the header is filled in last
 	var headLength = headerBytes(s, so, totals).length;
 	var out = new Uint8Array(headLength + points.count * len);
-	encodeRecords(points, s.fmt, len, so, o.localOrigin, new DataView(out.buffer), headLength, totals);
+	encodeRecords(points, s.fmt, len, so, o.localOrigin, new DataView(out.buffer), headLength, totals, 0, extraFields(s));
 	totals.count = points.count;
 	out.set(headerBytes(s, so, totals), 0);
 	return o.as === "blob" ? new Blob([out], { type: "application/octet-stream" }) : out;
 }
 
-// Columns a..b of a PointColumns (views where the columns are typed arrays)
+function extraFields(s) { return s.extra ? s.extra.fields : null; }
+
+// Columns a..b of a PointColumns (views where the columns are typed arrays); a column of k values
+// a point (an extra-bytes raw or array column) is cut at a * k .. b * k
 function rangeOf(cols, a, b) {
 	if (a === 0 && b === cols.count) return cols;
 	var out = { count: b - a };
 	for (var k in cols) {
 		var c = cols[k];
-		if (k !== "count" && c && typeof c.length === "number") out[k] = typeof c.subarray === "function" ? c.subarray(a, b) : c.slice(a, b);
+		if (k === "count" || !c || typeof c.length !== "number") continue;
+		var w = cols.count && Number.isInteger(c.length / cols.count) ? c.length / cols.count : 1;
+		out[k] = typeof c.subarray === "function" ? c.subarray(a * w, b * w) : c.slice(a * w, b * w);
 	}
 	return out;
 }
@@ -339,7 +355,7 @@ function lazChunks(s, so, len, totals, place, poolAt, makePool) {
 				for (var a = 0; a < points.count;) {
 					var n = Math.min(size - filled % size, points.count - a);
 					room(filled + n);
-					encodeRecords(rangeOf(points, a, a + n), s.fmt, len, so, s.opts.localOrigin, view, filled * len, totals, first + a);
+					encodeRecords(rangeOf(points, a, a + n), s.fmt, len, so, s.opts.localOrigin, view, filled * len, totals, first + a, extraFields(s));
 					filled += n;
 					a += n;
 					totals.count += n;
@@ -452,8 +468,8 @@ export async function createLasWriter(sink, opts) {
 	if (!opts.scale || !opts.offset) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "createLasWriter needs scale and offset up front (the bounds are not known until the end)");
 	var s = settle({ count: 0, x: [], y: [] }, opts); // no columns yet: format defaults to 0
 	var so = { scale: opts.scale, offset: opts.offset };
-	var len = POINT_FORMATS[s.fmt].size;
-	var totals = freshTotals();
+	var len = s.recordLength;
+	var totals = freshTotals(s);
 	var put = positionedWrite(sink);
 	var start = headerBytes(s, so, totals).length;
 	if (s.laz) return createLazWriter(s, so, len, totals, put, start);
@@ -462,7 +478,7 @@ export async function createLasWriter(sink, opts) {
 	return {
 		writePoints: async function (points) {
 			var buf = new Uint8Array(points.count * len);
-			encodeRecords(points, s.fmt, len, so, opts.localOrigin, new DataView(buf.buffer), 0, totals);
+			encodeRecords(points, s.fmt, len, so, opts.localOrigin, new DataView(buf.buffer), 0, totals, 0, extraFields(s));
 			// Reserve this batch's place BEFORE awaiting, so calls made without
 			// waiting for each other never land on the same bytes
 			var pos = start + totals.count * len;
