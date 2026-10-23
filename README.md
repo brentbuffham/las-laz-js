@@ -11,7 +11,8 @@ runs in the browser and in Node — and built for files far larger than memory.
   thinning, a polygon crop, a coordinate transform and the original point index; `colourize`
   colours points; `writeLas` and `createLasWriter` write LAS 1.0–1.4.
 - Point operations on columns: select by box, polygon, class or return; keep, remove, split and
-  merge; transform coordinates; interleave positions for a renderer; find sparse points (dust);
+  merge; classify (existing classes kept unless asked); transform coordinates; interleave
+  positions for a renderer; find sparse points (dust);
   a voxel neighbour index with nearest, radius and near-ray queries. See Point operations.
 - LAZ: point formats 0–3 and 6–8, read exactly like LAS — the same calls, the same options,
   decoded chunk by chunk in plain JavaScript (no WebAssembly) — and written with
@@ -40,8 +41,8 @@ library's Worker (LAZ on every core) behind a progress bar, then shown once in a
 colour changes recolour the points already read, without reading the file again. The side panel shows the header, VLRs, coordinate
 system and LAZ compression; reads with class, return, bounds, thinning and dedupe filters;
 colours by RGB, intensity, elevation or class; lists point statistics; selects points by polygon,
-box, class, dust or outliers and keeps, deletes, splits, transforms, smooths or crops them (the
-Edit tab), with a Roughness colour to see the noise; and saves the
+box, class, dust or outliers and keeps, deletes, splits, classifies (with your own named classes),
+transforms, smooths or crops them (the Edit tab), with a Roughness colour to see the noise; and saves the
 points back out as LAS or LAZ. To run it locally: `npm run demo`, then open http://localhost:8080/.
 
 ## Reading
@@ -57,6 +58,7 @@ las.vlrs;     // [{ userId, recordId, description, start, length, bytes }]
 las.evlrs;    // the same; an EVLR over 64 KiB (waveform data) has bytes: null until
               //   await las.readEvlrBytes(i) — opening never reads it
 las.compressed; las.laz;   // true for LAZ; its compressor, chunk size and items (else null)
+las.classNames;            // { 64: "Bench face", ... } from the Classification Lookup VLR ({} when none)
 
 var pts = await las.readPoints({
 	fields: ["x", "y", "z", "classification", "red", "green", "blue"],
@@ -172,6 +174,26 @@ signed type is strictly wider (Int16 with Uint8 is Int16; Int8 with Uint8, or In
 is `INVALID_ARGUMENT`). An input with no points is ignored when the type is chosen, so an empty
 Int8 column does not block a Uint16 one; a column only an empty input has keeps its type.
 Coordinates must already share one frame.
+
+### Classify
+
+```js
+import { classifyPoints, ASPRS_CLASSES } from "las-laz-js";
+
+var r = classifyPoints(pts, wanted, 2);                           // only points still 0 or 1 become ground
+r.columns; r.changed;                                             // the columns (a new classification array), points changed
+var noise = classifyPoints(pts, stray, 7, { overwrite: true });   // every selected point, whatever its class
+var fix = classifyPoints(pts, wanted, 2, { only: [7, 18] });      // only selected noise points
+ASPRS_CLASSES[2];                                                 // "Ground" (codes 0-22, LAS 1.4 R15)
+```
+
+A point that already has a class keeps it by default: only points at 0 (created, never
+classified) or 1 (unclassified) change. `overwrite: true` changes every selected point; `only`
+lists the classes that may change (not with `overwrite`). `changed` counts points whose class
+actually changed. The copy shares every other column with the input; `inPlace: true` overwrites
+the input's `classification` array instead. Codes 23–63 are reserved and 64–255 are yours: name
+them with the writer's `classNames` and other LAS tools show the names. Point formats 0–5 hold
+only classes 0–31 (see Writing).
 
 ### Transform
 
@@ -385,6 +407,12 @@ silently changed. Scale and offset are chosen from the bounds when not given. `c
 writes a GeoKey record; `crs.wkt` a WKT record. Point formats 6–10 must carry WKT (LAS 1.4), so
 an EPSG code alone is refused for them — the library has no projection database to turn a code
 into WKT.
+
+`classNames: { 64: "Bench face", 65: "Crest" }` writes the Classification Lookup VLR (codes
+0–255, names of 1 to 15 printable ASCII characters); `openLas` reads it back as `classNames`.
+Point formats 0–5 store a class in 5 bits, so a class above 31 there is refused, naming the
+point (`point 4 has class 64; point formats 0-5 hold classes 0-31 — write point format 6 or
+higher`); write point format 6, or 7 / 8 to keep RGB, in LAS 1.4.
 
 | Option | Default | Meaning |
 |---|---|---|

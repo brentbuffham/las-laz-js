@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.7.1 (2026-10-23)
+
+Categorise: give selected points a LAS class, with names for your own classes.
+
+- `classifyPoints(cols, selection, code, { overwrite, only, inPlace })` → `{ columns, changed }`.
+  A point that already has a class keeps it by default: only points at 0 (created, never
+  classified) or 1 (unclassified) change. `overwrite: true` changes every selected point; `only`
+  lists the classes that may change. Copies by default (a new `classification` array, every other
+  column shared); `inPlace` overwrites the input's array.
+- `ASPRS_CLASSES`: the standard codes 0–22 (LAS 1.4 R15) and their names.
+- Class names: `writeLas` and `createLasWriter` take `classNames: { code: name }` and write the
+  Classification Lookup VLR (names of 1 to 15 printable ASCII characters); `openLas` reads it as
+  `classNames` (`{}` when there is none or it is malformed); `parseClassLookup` is exported.
+  The Worker's `open` result carries `classNames`.
+- Colours: classes 19–22 have colours, and a code without one gets its own stable colour instead
+  of grey, so user classes are told apart.
+- Changed: a class above 31 in point formats 0–5 is refused (`INVALID_ARGUMENT`, naming the
+  point). Those formats store 5 bits, and the writer used to drop the high bits silently (64
+  became 0). The streaming LAS writer's error messages now number points across batches.
+- Demo: a Categorise section on the Edit tab (Overwrite unticked by default, Add class, Undo
+  classify), a class legend on the viewer, class names in Stats and in the saved file.
+
 ## 0.7.0 (2026-10-22)
 
 Denoise: stray points, normals and smoothing, for fuzzy handheld scans.
