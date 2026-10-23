@@ -40,6 +40,7 @@
 				<button class="tab active" data-tab="header" role="tab">Header</button>
 				<button class="tab" data-tab="read" role="tab">Read</button>
 				<button class="tab" data-tab="edit" role="tab">Edit</button>
+				<button class="tab" data-tab="register" role="tab">Register</button>
 				<button class="tab" data-tab="colour" role="tab">Colour</button>
 				<button class="tab" data-tab="stats" role="tab">Stats</button>
 				<button class="tab" data-tab="write" role="tab">Write</button>
@@ -160,6 +161,38 @@
 				<div class="row"><button class="button" id="cropReadButton" disabled>Read inside polygon</button></div>
 				<h3>Reset</h3>
 				<div class="row"><button class="button" id="resetButton" disabled>Reset to last read</button></div>
+			</div>
+
+			<div class="tab-body hidden" id="tab-register">
+				<p class="muted small">Moves your cloud onto a reference cloud from matching points you pick on both, with <code>alignCloud</code>: a fit from the picks, then optional ICP. Each pair's residual shows how well it fits; "left out" is its residual under the fit made without it, so a bad pick stands out.</p>
+				<h3>Reference cloud</h3>
+				<label class="button">Open reference<input type="file" id="refFile" accept=".las,.laz" hidden></label>
+				<span class="muted small" id="refInfo">none (drawn cyan)</span>
+				<label class="field">Show reference <input type="checkbox" id="regShowRef" checked></label>
+				<h3>Pairs</h3>
+				<div class="row wrap">
+					<button class="button" id="regPick" title="Click a point on your cloud, then the same point on the reference; Escape cancels a half pair">Pick pairs</button>
+					<button class="button" id="regClear">Clear pairs</button>
+				</div>
+				<table class="grid-table" id="pairTable"></table>
+				<p class="muted small" id="pairInfo"></p>
+				<h3>Fit</h3>
+				<div class="form-grid">
+					<label>Model
+						<select id="regModel" title="rigid: rotate + shift (3+ pairs); level: rotate about Z + shift, for IMU-levelled scans (2+ pairs); scale: rigid + one scale (3+ pairs)">
+							<option value="rigid">rigid</option>
+							<option value="level">level</option>
+							<option value="scale">scale</option>
+						</select>
+					</label>
+					<label>Max distance (m) <input type="number" id="regMaxDist" value="0.5" min="0.001" step="0.1" title="ICP pairs a point with its nearest reference point within this distance"></label>
+				</div>
+				<label class="field">Refine with ICP <input type="checkbox" id="regIcp" title="Point-to-plane ICP on 50,000 points after the fit from the picks"></label>
+				<div class="row wrap">
+					<button class="button" id="regFit" disabled>Fit</button>
+					<button class="button" id="regApply" disabled title="Move your cloud by the fit">Apply</button>
+					<button class="button" id="regUndo" disabled title="Back to before the last Apply">Undo register</button>
+				</div>
 			</div>
 
 			<div class="tab-body hidden" id="tab-colour">

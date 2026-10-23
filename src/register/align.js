@@ -4,8 +4,9 @@
 // then optionally refine by point-to-plane ICP. ICP thins the moving
 // cloud to an even sample; each iteration maps the sample by the current
 // transform, takes each point's nearest fixed point within maxDistance
-// (the 0.7.0 k-d tree, built once) and that point's plane normal (fitted
-// on demand and cached: never for the whole fixed cloud), and solves the
+// (the 0.7.0 k-d tree, built once) and that point's plane normal (from
+// its k nearest however far, fitted on demand and cached: never for the
+// whole fixed cloud), and solves the
 // small-angle linear system for an increment, applied as an exact
 // rotation about the matched points' centroid plus a shift. The increment
 // is rigid (about Z only for "level") and applied on the left, so the
@@ -125,7 +126,9 @@ export function alignCloud(moving, fixed, options) {
 	}
 	var maxD2 = maxD * maxD, need = MIN_PAIRS[model], level = model === "level";
 	var normals = new Map(), P = new Uint32Array(k), D = new Float64Array(k), P1 = new Uint32Array(1), D1 = new Float64Array(1), plane = new Float64Array(7);
-	var fitOpts = { k: k, maxD2: maxD2 };
+	// a fixed point's normal from its k nearest, however far: maxDistance is the pairing distance,
+	// not the plane's neighbourhood (a cloud sparser than it would otherwise have no normals)
+	var fitOpts = { k: k, maxD2: Infinity };
 	// matched pairs, in the fixed cloud's local frame: p (the mapped sample), q (its nearest), n (q's normal)
 	var px = new Float64Array(S), py = new Float64Array(S), pz = new Float64Array(S);
 	var qx = new Float64Array(S), qy = new Float64Array(S), qz = new Float64Array(S);

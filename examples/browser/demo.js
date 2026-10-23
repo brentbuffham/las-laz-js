@@ -6,7 +6,8 @@
 // points kept in memory — only the read filters read the file again.
 // The Edit tab selects and edits those points (src/ops), classifies them
 // (existing classes kept unless Overwrite) and can crop the file on read
-// with the polygon drawn on the viewer.
+// with the polygon drawn on the viewer. The Register tab (register.js)
+// moves the cloud onto a reference cloud or the grid.
 // Imports the library from ../../src so it always runs current code.
 //==========================================================
 
@@ -18,6 +19,7 @@ import {
 	makeTransform, transformPoints, classifyPoints, ASPRS_CLASSES
 } from "../../src/index.js";
 import { createViewer } from "./viewer.js";
+import { initRegister } from "./register.js";
 
 // ?drawCap=N lowers the cap, to try a cloud bigger than what is drawn with a small file
 var DRAW_CAP = Math.floor(Number(new URLSearchParams(location.search).get("drawCap"))) || 20000000;
@@ -127,6 +129,7 @@ function colourOpts() {
 
 var cloud = null;      // the points on screen, kept so colour changes and edits never re-read the file
 var lastRead = null;   // the points last read: Reset goes back to them (every edit makes a copy)
+var readOrigin = null; // the origin they were read about (a Register Apply moves origin)
 var edited = false;    // cloud is an edit of lastRead, so Save writes it rather than re-reading
 var transformed = false;   // cloud has been through Transform since the last read or Reset
 var readCrop = null;   // { polygon, boundary, tolerance } of the last read (world), or null
@@ -172,6 +175,7 @@ async function read(crop, note) {
 	});
 	try {
 		cloud = lastRead = await readJob.promise;
+		readOrigin = origin;
 		beforeSmooth = null; beforeClassify = null;
 		readCrop = crop || null;
 		var maxPts = Number($("maxPoints").value) || 0;
@@ -189,6 +193,7 @@ async function read(crop, note) {
 		$("stats").textContent = (crop ? "read " : "decoded ") + fmt(info.header.pointCount) + " points in " + secs.toFixed(1) + " s (" + fmt(Math.round(info.header.pointCount / Math.max(secs, 0.001))) + " pts/s) · kept " + fmt(cloud.count) + (crop ? " inside the polygon" : "");
 		showStats();
 		showSelection();
+		register.onRead();
 		$("writeButton").disabled = false;
 	} catch (err) {
 		setStatus(err.code === "ABORTED" ? "Stopped" : err.message, err.code !== "ABORTED");
@@ -453,6 +458,7 @@ function edit(name, make) {
 	// Undo smooth goes back exactly one Smooth; any other edit ends that
 	beforeSmooth = null; $("undoSmoothButton").disabled = true;
 	beforeClassify = null; $("undoClassifyButton").disabled = true;
+	register.onEdit(name);
 	if (out.transformed) transformed = true;
 	if (!out.keep) { selection = null; splitAt = -1; }
 	if (out.splitAt !== undefined) splitAt = out.splitAt;
@@ -605,12 +611,15 @@ function reset() {
 	if (!lastRead) return;
 	var before = cloud.count, t0 = performance.now();
 	cloud = lastRead;
+	origin = readOrigin;
+	clearPolygon();   // drawn in the frame the cloud was in
 	edited = false; transformed = false; selection = null; splitAt = -1; beforeSmooth = null; beforeClassify = null;
 	$("undoSmoothButton").disabled = true;
 	$("undoClassifyButton").disabled = true;
 	display(false);
 	showStats();
 	showSelection();
+	register.onRead();
 	setStatus("Reset: " + fmt(before) + " → " + fmt(cloud.count) + " points in " + since(t0) + " ms (the last read)");
 }
 
@@ -823,4 +832,13 @@ window.addEventListener("drop", function (e) {
 	$("dropOverlay").classList.add("hidden");
 	if (e.dataTransfer.files[0]) openFile(e.dataTransfer.files[0]);
 });
-window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer };   // for checks from the console
+// The Register tab: the demo's state through getters, so it always sees the current cloud and frame
+var register = initRegister({
+	$: $, viewer: viewer, setStatus: setStatus, fmt: fmt, since: since, DRAW_CAP: DRAW_CAP,
+	colours: colours, display: display, edit: edit, clearPolygon: clearPolygon,
+	maxPoints: function () { return Number($("maxPoints").value) || 0; },
+	isDrawing: function () { return drawing; },
+	setOrigin: function (o) { origin = o; },
+	get cloud() { return cloud; }, get origin() { return origin; }, get drawn() { return drawn; }, get drawnIdx() { return drawnIdx; }
+});
+window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, get cloud() { return cloud; }, get origin() { return origin; } };   // for checks from the console

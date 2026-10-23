@@ -149,6 +149,17 @@ test("origins: local Float32 columns give the same world transform", function ()
 	assert.ok(gap(b.transform, truthW, [s.centre[0] + M[0], s.centre[1] + M[1], s.centre[2] + M[2]]) < 0.005);
 });
 
+// The pairing distance is not the normal's neighbourhood: on a cloud sparser than maxDistance
+// (a drone survey, points metres apart) every fixed point still gets a plane from its k nearest
+test("a sparse cloud: normals from the k nearest, whatever maxDistance is", function () {
+	var sparse = keep(FIXED, function (x, y) { return true; });
+	var thin = { count: 0, x: [], y: [], z: [] };
+	for (var i = 0; i < sparse.count; i += 60) { thin.x.push(sparse.x[i]); thin.y.push(sparse.y[i]); thin.z.push(sparse.z[i]); }
+	thin = { count: thin.x.length, x: Float64Array.from(thin.x), y: Float64Array.from(thin.y), z: Float64Array.from(thin.z) };   // ~2,000 points, ~1 m apart
+	var a = alignCloud(thin, thin, { pairs: { from: [10, 10, 0, 40, 10, 15, 30, 35, 15], to: [10, 10, 0, 40, 10, 15, 30, 35, 15] }, icp: { maxDistance: 0.2 } });
+	assert.ok(a.icp.used > 0.95 * a.icp.sampled, "used " + a.icp.used + " of " + a.icp.sampled);
+});
+
 test("clouds that do not overlap", function () {
 	var s = setup(TRUTH, 9), far = { from: s.pairs.from, to: s.pairs.to.map(function (v, i) { return i % 3 === 0 ? v + 50 : v; }) };
 	var a = alignCloud(s.moving, FIXED, { pairs: far, icp: { maxDistance: 0.5 } });

@@ -283,3 +283,7 @@ progress { width: 160px; height: 8px; accent-color: var(--accent); }
 }
 .pick-label.moving { background: #ff2d95; }
 .pick-label.reference { background: #ff9f1a; color: #111; }
+
+#tab-register h3 { padding-top: 10px; border-top: 1px solid var(--border); }
+#pairTable tr.worst td { color: var(--error); }
+#pairTable .icon-button.small { width: 20px; height: 20px; font-size: 12px; padding: 0; }
