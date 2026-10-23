@@ -109,7 +109,8 @@ function extraPlan(f) {
 		column: f.column, at: f.at, k: k, raw: !e, get: e && e.get, size: e ? e.size : 1, scaled: scaled,
 		mul: per(f.scale, 1), add: per(f.offset, 0),
 		// no-data compared with the raw value, in its own kind (BigInt for 64-bit integers)
-		nd: per(scaled ? f.noData : null, null).map(function (x) { return x === null ? null : e.big ? BigInt(x) : x; })
+		// (f32 as f32 holds it: a file may store the double -9999.9 for an f32 -9999.900390625)
+		nd: per(scaled ? f.noData : null, null).map(function (x) { return x === null ? null : e.big ? BigInt(x) : e.name === "f32" ? Math.fround(x) : x; })
 	};
 }
 

@@ -80,6 +80,68 @@ test("read -> save keeps the records byte for byte", async function () {
 	}
 });
 
+test("a reader's fields always write back: repeated and empty names, Latin-1, NaN or impossible no-data", async function () {
+	var name = descriptorBytes({ code: 1, name: "x" }); name[4] = 0xe9;   // a Latin-1 name byte
+	var bytes = lasWithExtra(Object.assign({ pointFormat: 6, points: points(12), extraSize: 20,
+		descriptors: [descriptorBytes({ code: 5, name: "facet" }), descriptorBytes({ code: 5, name: "facet" }), descriptorBytes({ code: 3, name: "" }),
+			descriptorBytes({ code: 10, name: "r", noData: NaN }), descriptorBytes({ code: 1, name: "a", noData: 300 }), name],
+		fill: function (i, v, rec, b) { v.setUint32(rec + b, i, true); v.setUint32(rec + b + 4, 2 * i, true); v.setUint16(rec + b + 8, 3 * i, true); v.setFloat64(rec + b + 10, i === 3 ? NaN : i / 4, true); v.setUint8(rec + b + 18, i); v.setUint8(rec + b + 19, 100 + i); } }, UTM));
+	var las = await openLas(bytes), p = await las.readPoints({ fields: EVERY_FIELD.concat(["extra"]) });
+	assert.deepEqual(las.extraBytes.map(function (e) { return e.column; }), ["facet", "facet_2", "extraBytes", "r", "a", "é"]);
+	for (var compress of [false, true]) {
+		var out = await writeLas(p, { version: "1.4", pointFormat: 6, scale: UTM.scale, offset: UTM.offset, extraBytes: las.extraBytes, compress: compress });
+		var back = await openLas(out);
+		assert.deepEqual(await recordsOf(out), await recordsOf(bytes), compress ? "LAZ" : "LAS");
+		assert.deepEqual(back.extraBytes.map(function (e) { return [e.name, e.column, e.type]; }), las.extraBytes.map(function (e) { return [e.name, e.column, e.type]; }));
+	}
+});
+
+test("f32 no-data that f32 cannot hold exactly still round-trips as no-data", async function () {
+	var c = { count: 3, x: new Float64Array([1, 2, 3]), y: new Float64Array(3), z: new Float64Array(3), w: Float64Array.from([1, NaN, 3]), u: Float32Array.from([-9999.9, 2, 7]) };
+	var out = await writeLas(c, { extraBytes: [{ name: "w", type: "f32", scale: 0.1, noData: -9999.9 }, { name: "u", type: "f32", noData: -9999.9 }] });
+	var las = await openLas(out), p = await las.readPoints({ fields: ["w", "u"] });
+	assert.ok(Math.abs(p.w[0] - 1) < 1e-6 && Math.abs(p.w[2] - 3) < 1e-6);
+	assert.ok(Number.isNaN(p.w[1]), "w[1] " + p.w[1]);
+	assert.deepEqual([las.extraBytes[1].min, las.extraBytes[1].max], [2, 7]);   // the no-data value is left out
+	// another tool's file: f32 raw fround(-9999.9), the descriptor's no-data the double -9999.9
+	var bytes = lasWithExtra(Object.assign({ pointFormat: 6, points: points(3), extraSize: 4, descriptors: [descriptorBytes({ code: 9, name: "g", scale: 1, noData: -9999.9 })],
+		fill: function (i, v, rec, b) { v.setFloat32(rec + b, i === 1 ? -9999.9 : i, true); } }, UTM));
+	var g = (await (await openLas(bytes)).readPoints({ fields: ["g"] })).g;
+	assert.ok(Number.isNaN(g[1]), "g[1] " + g[1]);
+	// f32 min / max are what was stored
+	var m = await openLas(await writeLas({ count: 2, x: new Float64Array(2), y: new Float64Array(2), v: Float64Array.from([0.1, 0.7]) }, { extraBytes: [{ name: "v", type: "f32" }] }));
+	assert.deepEqual([m.extraBytes[0].min, m.extraBytes[0].max], [Math.fround(0.1), Math.fround(0.7)]);
+});
+
+test("BigInt no-data and BigInt columns on types up to 32 bits", async function () {
+	function c(col) { var n = col.length; return { count: n, x: new Float64Array(n), y: new Float64Array(n), v: col }; }
+	var a = await openLas(await writeLas(c(Uint16Array.from([4, 65535, 10])), { extraBytes: [{ name: "v", type: "u16", noData: 65535n }] }));
+	assert.deepEqual([a.extraBytes[0].min, a.extraBytes[0].max], [4, 10]);
+	var b = await openLas(await writeLas(c(Float64Array.from([1, NaN])), { extraBytes: [{ name: "v", type: "u16", scale: 0.5, noData: 65535n }] }));
+	var bv = (await b.readPoints({ fields: ["v"] })).v;
+	assert.equal(bv[0], 1); assert.ok(Number.isNaN(bv[1]));
+	var d = await openLas(await writeLas(c(BigInt64Array.from([5n, 4000000000n])), { extraBytes: [{ name: "v", type: "u32" }] }));
+	assert.deepEqual(Array.from((await d.readPoints({ fields: ["v"] })).v), [5, 4000000000]);
+	await assert.rejects(writeLas(c(BigInt64Array.from([-1n])), { extraBytes: [{ name: "v", type: "u32" }] }), { code: "INVALID_ARGUMENT", message: /"v".*point 0.*range/ });
+});
+
+test("a streaming LAZ writer refuses a bad batch and carries on; LAZ checks column lengths as LAS does", async function () {
+	var opts = { version: "1.4", pointFormat: 6, scale: UTM.scale, offset: UTM.offset, extraBytes: [{ name: "v", type: "u8" }], compress: true, chunkSize: 2, threads: 1 };
+	function batch(v, x0) { var n = v.length; return { count: n, x: Float64Array.from(v, function (_, i) { return 477000 + x0 + i; }), y: new Float64Array(n).fill(6770000), z: new Float64Array(n).fill(300), v: Uint16Array.from(v) }; }
+	var sink = memorySink(), w = await createLasWriter(sink, opts);
+	await w.writePoints(batch([10, 20, 30], 0));
+	await assert.rejects(w.writePoints(batch([1, 2, 3, 300], 10)), { code: "INVALID_ARGUMENT", message: /"v".*point 3/ });
+	await w.writePoints(batch([40, 5], 20));
+	assert.equal((await w.close()).count, 5);
+	var las = await openLas(sink.bytes(), { threads: 1 }), p = await las.readPoints({ fields: ["x", "v"] });
+	assert.deepEqual(Array.from(p.v), [10, 20, 30, 40, 5]);
+	assert.deepEqual([las.extraBytes[0].min, las.extraBytes[0].max], [5, 40]);
+	var n = 20, bad = { count: n, x: new Float64Array(n), y: new Float64Array(n), v: new Uint8Array(25) };
+	await assert.rejects(writeLas(bad, { compress: true, chunkSize: 7, extraBytes: [{ name: "v", type: "u8" }] }), { code: "INVALID_ARGUMENT", message: /"v".*length 25/ });
+	var big = { count: 100, x: new Float64Array(100), y: new Float64Array(100), v: new Uint8Array(101) };
+	await assert.rejects(writeLas(big, { compress: true, chunkSize: 7, extraBytes: [{ name: "v", type: "u8" }] }), { code: "INVALID_ARGUMENT", message: /"v".*length 101/ });
+});
+
 test("createLasWriter in batches equals writeLas, LAS and LAZ", async function () {
 	var las = await openLas(sourceA(50)), p = await las.readPoints({ fields: EVERY_FIELD.concat(["extra"]) });
 	for (var compress of [false, true]) {

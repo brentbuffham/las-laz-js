@@ -120,8 +120,8 @@ export function parseExtraBytes(vlrs, header) {
 		};
 		fields.push({
 			name: name, column: "", type: e.name, code: code, k: k, size: e.size * k, at: at,
-			scale: read(112, 8, "f"), offset: read(136, 16, "f"),
-			noData: read(40, 1, e.kind), min: read(64, 2, e.kind), max: read(88, 4, e.kind),
+			scale: noZero(read(112, 8, "f")), offset: read(136, 16, "f"),
+			noData: possible(e, read(40, 1, e.kind)), min: read(64, 2, e.kind), max: read(88, 4, e.kind),
 			description: text(b, d + 160, 32)
 		});
 		at += e.size * k;
@@ -132,8 +132,22 @@ export function parseExtraBytes(vlrs, header) {
 	return { fields: columns(fields), problem: null };
 }
 
+// a scale of 0 would make every value the offset: a writer's slip, read as no scale
+function noZero(v) {
+	if (Array.isArray(v)) return v.map(function (x) { return x === 0 ? null : x; });
+	return v === 0 ? null : v;
+}
+
+// a no-data value no raw value of the type can equal (u8 300) means nothing: none
+function possible(e, v) {
+	if (v === null || !e.int) return v;
+	if (Array.isArray(v)) return v.map(function (x) { return fitsInt(e, x) ? x : null; });
+	return fitsInt(e, v) ? v : null;
+}
+
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
-function ascii(s) { return !/[^\x01-\x7f]/.test(s); }
+// names and descriptions are char[32]: one byte a character (a file's own may use Latin-1 bytes)
+function bytewise(s) { return !/[^\x01-\xff]/.test(s); }
 function set(v) { return v !== undefined && v !== null; }
 
 // a value fits an integer type: a whole Number (exact) or a BigInt, within range
@@ -154,19 +168,19 @@ function fitsInt(e, x) {
  */
 export function layoutExtraBytes(descriptors, formatSize) {
 	if (!Array.isArray(descriptors)) throw bad("extraBytes must be an array of field descriptors ({ name, type, … })");
-	var fields = [], at = formatSize, names = {}, cols = {};
+	var fields = [], at = formatSize, cols = {};
 	descriptors.forEach(function (d) {
 		if (!d || typeof d !== "object") throw bad("extraBytes: each field is an object { name, type, … }");
 		var name = d.name, label = "extra bytes field \"" + name + "\"";
 		var raw = d.type === "raw" || d.type === 0;
 		var e = raw ? null : typeof d.type === "number" ? BY_CODE[d.type] : EXTRA_TYPES[d.type];
 		if (!raw && (!e || (typeof d.type === "number" && !Number.isInteger(d.type)))) throw bad(label + ": type " + JSON.stringify(d.type) + " is not one of u8 i8 u16 i16 u32 i32 u64 i64 f32 f64 (1-10) or raw (0)");
-		if (typeof name !== "string" || (name === "" && !raw)) throw bad("extra bytes field: a name is needed (1–32 ASCII characters; only a raw field may have none)");
+		if (typeof name !== "string") throw bad("extra bytes field: a name is needed (a string of up to 32 characters)");
 		if (name.length > 32) throw bad(label + ": the name is over 32 characters");
-		if (!ascii(name)) throw bad(label + ": the name must be ASCII");
+		if (!bytewise(name)) throw bad(label + ": the name must be one byte a character (ASCII, or Latin-1)");
 		if (!raw && set(d.k) && d.k !== 1) throw bad(label + ": " + d.type + " × " + d.k + " is a " + d.k + "-value array type: read, not written; write " + d.k + " scalar fields");
 		var desc = set(d.description) ? d.description : "";
-		if (typeof desc !== "string" || desc.length > 32 || !ascii(desc)) throw bad(label + ": the description must be ASCII, up to 32 characters");
+		if (typeof desc !== "string" || desc.length > 32 || !bytewise(desc)) throw bad(label + ": the description must be up to 32 characters, one byte each");
 		var size;
 		if (raw) {
 			size = d.size;
@@ -177,18 +191,20 @@ export function layoutExtraBytes(descriptors, formatSize) {
 		}
 		var column = set(d.column) ? d.column : name === "" ? "extraBytes" : name;
 		if (typeof column !== "string" || column === "") throw bad(label + ": column must be a non-empty string");
-		if (name !== "" && names[name]) throw bad(label + ": the name is used twice");
+		// a file may repeat a name (the reader then reads it into name_2): the columns must differ
 		if (cols[column]) throw bad(label + ": column \"" + column + "\" is used twice");
 		if (reserved(column, true)) throw bad(label + ": column \"" + column + "\" is a standard field; name another, e.g. column: \"" + column + "_extra\"");
-		names[name] = true; cols[column] = true;
+		cols[column] = true;
 		var scale = null, offset = null, noData = null;
 		if (!raw) {
 			if (set(d.scale)) { if (typeof d.scale !== "number" || !isFinite(d.scale) || d.scale === 0) throw bad(label + ": scale must be a finite number other than 0, not " + d.scale); scale = d.scale; }
 			if (set(d.offset)) { if (typeof d.offset !== "number" || !isFinite(d.offset)) throw bad(label + ": offset must be a finite number, not " + d.offset); offset = d.offset; }
 			if (set(d.noData)) {
-				var ok = e.int ? fitsInt(e, d.noData) : typeof d.noData === "number" && isFinite(d.noData) && Math.abs(d.noData) <= e.max;
-				if (!ok) throw bad(label + ": noData " + d.noData + " is not a raw " + e.name + " value");
-				noData = d.noData;
+				var nd = d.noData;
+				var ok = e.int ? fitsInt(e, nd) : typeof nd === "number" && (nd !== nd || (isFinite(nd) && Math.abs(nd) <= e.max));
+				if (!ok) throw bad(label + ": noData " + nd + " is not a raw " + e.name + " value");
+				// as the record holds it: a Number below 64 bits, f32 rounded as f32 stores it
+				noData = e.int && !e.big ? Number(nd) : e.name === "f32" ? Math.fround(nd) : nd;
 			}
 		}
 		fields.push({ name: name, column: column, code: raw ? 0 : e.code, size: size, at: at, elem: e, scaled: set(scale) || set(offset), scale: scale, offset: offset, noData: noData, description: desc });

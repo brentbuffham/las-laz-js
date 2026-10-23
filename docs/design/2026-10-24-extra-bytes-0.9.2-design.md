@@ -48,7 +48,7 @@ var all = await las.readPoints({ fields: ["x", "y", "z", "extra"] });   // "extr
 ```
 
 - **`las.extraBytes`**, one entry per field, in record order:
-  - `name`: as in the file (ASCII, up to 32 characters, trailing zeros dropped).
+  - `name`: as in the file (up to 32 characters, one byte each, trailing zeros dropped).
   - `column`: the column it is read into, `name` unless that clashes (below).
   - `type`: `"u8" "i8" "u16" "i16" "u32" "i32" "u64" "i64" "f32" "f64"`, or `"raw"`.
   - `k`: values a point, 1; 2 or 3 for the deprecated array types; for `"raw"`, its byte count.
@@ -70,6 +70,9 @@ var all = await las.readPoints({ fields: ["x", "y", "z", "extra"] });   // "extr
 - **Columns never clash.** A name equal to a standard field (`FIELD_TYPES`) or a reserved column
   (`count`, `positions`, `bounds`, `stats`, `colours`, `normal`, `extra`, `extraBytes`) is read
   as `<name>_extra`; a name already used in the file gets `_2`, `_3`, ….
+- A no-data value the integer type cannot hold (u8 300) is read as none (null): no raw value
+  can equal it; a scale of 0 (every value the offset) is read as no scale. (Final review: so
+  every field the reader returns can be written back.)
 - **A bad VLR never stops a read** (as `classNames`): an extra bytes mismatch, a reserved type
   (31–255), a length that is not a whole number of descriptors, or two Extra Bytes VLRs give one
   `"extraBytes"` raw field over all the extra bytes, and `las.extraBytesProblem` says why (null
@@ -95,9 +98,11 @@ await writeLas(p, { extraBytes: las.extraBytes });   // read -> save keeps every
 - `extraBytes` on `writeLas` and `createLasWriter`, LAS and LAZ, any LAS version (the VLR is
   defined in 1.4; LAStools and CloudCompare read it in 1.0–1.3 too; PDAL writes extra bytes in
   1.4 only). Each descriptor:
-  - `name` (ASCII, 1–32 characters; empty only for `"raw"`, written as undocumented bytes), `type` (`"u8"` … `"f64"` or the codes 1–10, or
+  - `name` (up to 32 characters, one byte each: ASCII, or a file's own Latin-1; may be empty or
+    repeat another field's, as files do — the columns must differ), `type` (`"u8"` … `"f64"` or the codes 1–10, or
     `"raw"` / 0), `column` (default `name`), `size` (bytes, `"raw"` only), `scale`, `offset`,
-    `noData` (raw), `description` (ASCII, up to 32). Other properties (`at`, `min`, `max`, read
+    `noData` (raw; NaN allowed for f32 / f64; f32 is held as f32 holds it), `description` (up to 32,
+    one byte each). Other properties (`at`, `min`, `max`, read
     from a file) are ignored, so the reader's list can be passed back as it is; `k` above 1 on a
     typed field (a deprecated array read from a file) is refused: read, not written.
   - A `"raw"` descriptor is written as type 0 with its size in `options` (the reader's
@@ -175,8 +180,8 @@ await writeLas(p, { extraBytes: las.extraBytes });   // read -> save keeps every
 
 `INVALID_ARGUMENT`, naming the field (and the point, for a value):
 - an unknown `type`; `size` missing or not 1–65535 on `"raw"`, or given on another type
-- a name empty, over 32 characters or not ASCII; a description over 32 or not ASCII
-- two descriptors with the same `name`, or the same `column`; a `column` equal to a standard field
+- a name not a string, over 32 characters or not one byte a character; a description likewise
+- two descriptors with the same `column`; a `column` equal to a standard field
   or reserved column (the message suggests `<name>_extra`)
 - `scale` 0 or not finite; `offset` or `noData` not finite; `noData` outside the type's range
 - the column missing, not a typed array or array, or of the wrong length

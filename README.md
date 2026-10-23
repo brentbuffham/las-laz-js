@@ -668,8 +668,8 @@ with `"extra"`; the default fields are unchanged. The same names work in `chunks
   length that is not whole descriptors, two of them) does not stop a read: all the extra bytes come
   back as `extraBytes`, and `las.extraBytesProblem` says why (null when the VLR is good).
 
-**Writing.** `extraBytes` on `writeLas` and `createLasWriter`: per field a `name` (ASCII, up to 32
-characters), a `type` (`"u8" "i8" "u16" "i16" "u32" "i32" "u64" "i64" "f32" "f64"`, the codes
+**Writing.** `extraBytes` on `writeLas` and `createLasWriter`: per field a `name` (up to 32
+characters, one byte each; it may be empty, or repeat another field's when the columns differ), a `type` (`"u8" "i8" "u16" "i16" "u32" "i32" "u64" "i64" "f32" "f64"`, the codes
 1–10, or `"raw"` with a `size`), and optionally `column` (default the name), `scale`, `offset`,
 `noData` (raw) and `description`. A reader's `extraBytes` can be passed back as they are.
 - Values come from `points[column]`, which must be there (a standard field that is missing is
@@ -679,7 +679,7 @@ characters), a `type` (`"u8" "i8" "u16" "i16" "u32" "i32" "u64" "i64" "f32" "f64
 - The writer works out each field's raw min and max (no-data and NaN left out) and stores them.
 - A refused value names the field and the point (`extra bytes field "v": point 2: 256 is outside
   u8's range (0 to 255)`); every value of a batch is checked before any byte is written, so a
-  refused `writePoints` leaves the writer as it was.
+  refused `writePoints` leaves the writer as it was (LAS and LAZ).
 - The deprecated array types are read, not written: write 2 or 3 scalar fields instead.
 - The VLR is written in any LAS version. It is defined in 1.4; LAStools and CloudCompare read it
   in 1.0–1.3 too, but PDAL writes extra bytes in 1.4 only, so write 1.4 for files that go to PDAL.

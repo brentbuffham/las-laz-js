@@ -29,7 +29,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { POINT_FORMATS } from "../format/PointFormats.js";
 import { chooseScaleOffset } from "./scaleOffset.js";
-import { encodeRecords } from "./encodeRecords.js";
+import { encodeRecords, checkExtra } from "./encodeRecords.js";
 import { lazVlrFor, LASZIP_USER_ID, LASZIP_RECORD_ID } from "../laz/LazVlr.js";
 import { buildClassLookup, CLASS_LOOKUP_USER_ID, CLASS_LOOKUP_RECORD_ID } from "../format/ClassLookup.js";
 import { layoutExtraBytes, buildExtraBytes, EXTRA_BYTES_USER_ID, EXTRA_BYTES_RECORD_ID } from "../format/ExtraBytes.js";
@@ -351,6 +351,8 @@ function lazChunks(s, so, len, totals, place, poolAt, makePool) {
 		// points, the first of which is point `first` of the caller's (for error messages)
 		write: async function (points, first) {
 			refuse();
+			// a bad extra value refuses this batch before any of it is encoded, so the writer carries on
+			if (s.extra) checkExtra(points, s.extra.fields, first);
 			try {
 				for (var a = 0; a < points.count;) {
 					var n = Math.min(size - filled % size, points.count - a);
@@ -390,6 +392,7 @@ function lazChunks(s, so, len, totals, place, poolAt, makePool) {
 // the tasks in flight hold encoded records.
 async function lazParts(points, s, so, len, totals) {
 	var size = s.laz.chunkSize, count = Math.ceil(points.count / size), t = threadsOf(s.opts);
+	if (s.extra) checkExtra(points, s.extra.fields, 0);   // whole columns, before they are cut into tasks
 	var parts = [null, null];
 	var poolAt = t === 1 || (!t && count < AUTO_MIN_CHUNKS) ? Infinity : 1;
 	var loop = lazChunks(s, so, len, totals, function (bytes) { parts.push(bytes); }, poolAt, function () { return startPool(s.opts, count); });

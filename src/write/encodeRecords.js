@@ -33,7 +33,7 @@ function rawOf(f, col, i, first) {
 			if (!Number.isSafeInteger(r)) throw bad(label + ": " + v + " is " + r + " raw, outside " + e.name + "'s range (" + e.min + " to " + e.max + ")");
 		}
 	} else if (e.int) {
-		if (typeof v === "bigint") r = v;
+		if (typeof v === "bigint") r = e.big ? v : Number(v);
 		else if (typeof v !== "number" || !Number.isInteger(v)) throw bad(label + ": " + v + " is not a whole number (" + e.name + ")");
 		else if (!Number.isSafeInteger(v)) throw bad(label + ": " + v + " is past 2^53, where Numbers are not exact; give 64-bit values as a BigInt64Array / BigUint64Array");
 		else r = v;
@@ -44,11 +44,19 @@ function rawOf(f, col, i, first) {
 	} else if (r === r && isFinite(r) && (r < e.min || r > e.max)) {
 		throw bad(label + ": " + v + (f.scaled ? " is " + r + " raw," : " is") + " outside " + e.name + "'s range (" + e.min + " to " + e.max + ")");
 	}
-	return r;
+	// f32: the value stored, so min / max and no-data match it (after the range check: fround of 1e39 is Infinity)
+	return !e.int && e.size === 4 ? Math.fround(r) : r;
 }
 
-// Check every extra value of the batch; per field its raw { min, max } (no-data and NaN left out), or null
-function checkExtra(cols, extra, first) {
+/**
+ * Check every extra value of a batch, as encodeRecords does first.
+ * @param {object} cols - PointColumns
+ * @param {object[]} extra - extra-bytes fields (layoutExtraBytes(...).fields)
+ * @param {number} first - the index of cols' first point in the caller's points
+ * @returns {Array<{min: *, max: *}|null>} per field its raw { min, max } (no-data and NaN left out), or null
+ * @throws {LasError} INVALID_ARGUMENT naming the field and the point
+ */
+export function checkExtra(cols, extra, first) {
 	return extra.map(function (f) {
 		var col = cols[f.column], label = "extra bytes field \"" + f.name + "\"", w = f.code === 0 ? f.size : 1;
 		if (col === undefined || col === null) throw bad(label + ": column \"" + f.column + "\" is missing from the points");

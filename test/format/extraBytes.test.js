@@ -127,11 +127,11 @@ test("layoutExtraBytes refuses, naming the field", function () {
 	no([{ name: "r", type: "raw", size: 0 }], /"r".*size/);
 	no([{ name: "r", type: "raw", size: 70000 }], /"r".*size/);
 	no([{ name: "a", type: "u8", size: 2 }], /"a".*size/);
-	no([{ name: "", type: "u8" }], /name/);
+	no([{ name: 5, type: "u8" }], /name/);
 	no([{ name: "x".repeat(33), type: "u8" }], /32/);
-	no([{ name: "é", type: "u8" }], /ASCII/);
+	no([{ name: "€", type: "u8" }], /one byte a character/);
 	no([{ name: "a", type: "u8", description: "d".repeat(33) }], /"a".*description/);
-	no([{ name: "a", type: "u8" }, { name: "a", type: "u16", column: "b" }], /"a".*twice/);
+	no([{ name: "a", type: "u8" }, { name: "a", type: "u16" }], /column "a".*twice/);
 	no([{ name: "a", type: "u8", column: "c" }, { name: "b", type: "u16", column: "c" }], /column "c".*twice/);
 	no([{ name: "intensity", type: "u8" }], /intensity.*intensity_extra/);
 	no([{ name: "a", type: "u8", column: "positions" }], /positions/);
@@ -142,6 +142,31 @@ test("layoutExtraBytes refuses, naming the field", function () {
 	no([{ name: "a", type: "u8", noData: 1.5 }], /"a".*noData/);
 	no([{ name: "a", type: "u16", k: 3 }], /"a".*array type.*read, not written/);
 	no([{ name: "big", type: "raw", size: 65535 }], /65,535/, 30);
+});
+
+test("layoutExtraBytes takes what a reader can hand back: repeated and empty names, Latin-1, NaN no-data", function () {
+	var l = layoutExtraBytes([{ name: "facet", type: "u32" }, { name: "facet", column: "facet_2", type: "u32" }, { name: "", type: "u16" }, { name: "café", type: "u8" }, { name: "r", type: "f64", noData: NaN }], 30);
+	assert.deepEqual(l.fields.map(function (x) { return x.column; }), ["facet", "facet_2", "extraBytes", "café", "r"]);
+	assert.ok(Number.isNaN(l.fields[4].noData));
+	// f32 no-data is held as f32 holds it; a BigInt no-data on a type up to 32 bits is a Number
+	l = layoutExtraBytes([{ name: "w", type: "f32", noData: -9999.9 }, { name: "u", type: "u16", noData: 65535n }], 30);
+	assert.equal(l.fields[0].noData, Math.fround(-9999.9));
+	assert.equal(l.fields[1].noData, 65535);
+	var b = buildExtraBytes(layoutExtraBytes([{ name: "café", type: "u8" }], 30), [null]);
+	assert.equal(b[4 + 3], 0xe9);
+});
+
+test("a no-data value the type cannot hold is read as none", function () {
+	var r = parse([{ code: 1, name: "a", noData: 300 }, { code: 2, name: "b", noData: -5 }]);
+	assert.equal(r.fields[0].noData, null);
+	assert.equal(r.fields[1].noData, -5);
+});
+
+test("a scale of 0 (every value the offset) is read as no scale", function () {
+	var r = parse([{ code: 3, name: "a", scale: 0, offset: 2 }, { code: 13, name: "b", scale: [0, 0.5] }]);
+	assert.equal(r.fields[0].scale, null);
+	assert.equal(r.fields[0].offset, 2);
+	assert.deepEqual(r.fields[1].scale, [null, 0.5]);
 });
 
 test("layoutExtraBytes needs an array", function () {
