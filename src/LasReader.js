@@ -17,6 +17,7 @@ import { NodeFileSource } from "./io/NodeFileSource.js";
 import { parseHeader } from "./format/LasHeader.js";
 import { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 import { parseCrs } from "./format/LasCrs.js";
+import { parseClassLookup } from "./format/ClassLookup.js";
 import { decodeRecords, resolveFields, columnType } from "./read/decodeRecords.js";
 import { windows, lazWindows } from "./read/windows.js";
 import { findLazVlr } from "./laz/LazVlr.js";
@@ -120,6 +121,9 @@ export function LasReader(src, header, vlrs, evlrs, windowSize) {
 	this.evlrs = evlrs;
 	/** Declared coordinate system (never reprojected). */
 	this.crs = parseCrs(vlrs.concat(evlrs));
+	/** Class names from the Classification Lookup VLR, { code: name } ({} when there is none, or it is malformed). */
+	this.classNames = {};
+	try { this.classNames = parseClassLookup(vlrs.concat(evlrs)); } catch (e) { this.classNames = {}; }   // names only: never stops a read
 	/** True for LAZ (compressed points). */
 	this.compressed = header.compressed;
 	/** The parsed LASzip VLR of a LAZ file (compressor, chunk size, items), else null. */

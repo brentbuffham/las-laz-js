@@ -26,6 +26,7 @@ import { POINT_FORMATS } from "../format/PointFormats.js";
 import { chooseScaleOffset } from "./scaleOffset.js";
 import { encodeRecords } from "./encodeRecords.js";
 import { lazVlrFor, LASZIP_USER_ID, LASZIP_RECORD_ID } from "../laz/LazVlr.js";
+import { buildClassLookup, CLASS_LOOKUP_USER_ID, CLASS_LOOKUP_RECORD_ID } from "../format/ClassLookup.js";
 import { createChunkCompressor } from "../laz/compressChunk.js";
 import { encodeChunkTable } from "../laz/chunkTable.js";
 import { createLazPool, defaultThreads } from "../laz/pool.js";
@@ -92,7 +93,8 @@ function settle(points, opts) {
 	var minor = Number(version.split(".")[1]);
 	if (fmt >= 6 && minor < 4) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point format " + fmt + " needs LAS 1.4 (asked for " + version + ")");
 	if ((fmt === 4 || fmt === 5) && minor < 3) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "point format " + fmt + " needs LAS 1.3 or later (asked for " + version + ")");
-	return { version: version, minor: minor, fmt: fmt, opts: opts, laz: lazSetup(fmt, opts) };
+	var classLookup = opts.classNames === undefined ? null : buildClassLookup(opts.classNames);
+	return { version: version, minor: minor, fmt: fmt, opts: opts, classLookup: classLookup, laz: lazSetup(fmt, opts) };
 }
 
 // compress: the LASzip VLR and the chunk compressor. chunkSize is ignored without compress.
@@ -116,6 +118,7 @@ function headerBytes(s, so, totals) {
 	var o = s.opts;
 	var headerSize = HEADER_SIZE[s.version];
 	var vlrs = crsRecords(o.crs, s.fmt);
+	if (s.classLookup) vlrs.push({ userId: CLASS_LOOKUP_USER_ID, recordId: CLASS_LOOKUP_RECORD_ID, description: "Classification", bytes: s.classLookup });
 	if (s.laz) vlrs.push({ userId: LASZIP_USER_ID, recordId: LASZIP_RECORD_ID, description: "http://laszip.org", bytes: s.laz.vlrBytes });
 	var vlrSize = vlrs.reduce(function (n, r) { return n + 54 + r.bytes.length; }, 0);
 	var out = new Uint8Array(headerSize + vlrSize);
@@ -183,7 +186,8 @@ function boundsOfPoints(points, origin) {
 /**
  * Write a whole LAS file, or LAZ with compress: true (point formats 0-3 and 6-8).
  * @param {object} points - PointColumns (world coordinates, or relative to opts.localOrigin)
- * @param {object} [opts] - version, pointFormat, scale, offset, crs {epsg|wkt}, software, systemId, date, localOrigin, as ("bytes" | "blob"),
+ * @param {object} [opts] - version, pointFormat, scale, offset, crs {epsg|wkt}, classNames ({ code: name }, written as
+ *   the Classification Lookup VLR), software, systemId, date, localOrigin, as ("bytes" | "blob"),
  *   compress (write LAZ), chunkSize (points per LAZ chunk, default 50000; only with compress),
  *   threads (LAZ compression workers: default automatic, from 4 chunks and at most 4 workers; 1 = this thread; n = n workers)
  * @returns {Promise<Uint8Array|Blob>}

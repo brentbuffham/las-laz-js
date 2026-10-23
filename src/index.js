@@ -13,6 +13,7 @@ export { openLas, LasReader } from "./LasReader.js";
 export { parseHeader } from "./format/LasHeader.js";
 export { parseVlrs, parseEvlrs } from "./format/LasVlr.js";
 export { parseCrs } from "./format/LasCrs.js";
+export { parseClassLookup } from "./format/ClassLookup.js";
 export { POINT_FORMATS, formatHasRgb } from "./format/PointFormats.js";
 export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords.js";
 export { makeKeep, countKept } from "./filter/filters.js";
