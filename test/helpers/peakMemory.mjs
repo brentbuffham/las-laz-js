@@ -26,6 +26,19 @@ if (mode === "read" || mode === "read-polygon") {
 	var pts = await las.readPoints(opts);
 	out = pts.x.byteLength + pts.y.byteLength + pts.z.byteLength;
 	await las.close();
+} else if (mode === "facets") {
+	// one flat plane of n points (one huge facet), normals made before the baseline so only
+	// findFacets' own memory is measured; outBytes is n (the peak is read per point)
+	var { findFacets } = await import("../../src/facets/findFacets.js");
+	var { pointNormals } = await import("../../src/ops/normals.js");
+	var m = Number(process.argv[3]), side = Math.ceil(Math.sqrt(m));
+	var pc = { count: m, x: new Float32Array(m), y: new Float32Array(m), z: new Float32Array(m) };
+	for (var j = 0; j < m; j++) { pc.x[j] = (j % side) * 0.05; pc.y[j] = Math.floor(j / side) * 0.05; pc.z[j] = 0.002 * Math.sin(j * 12.9898); }
+	var nm = pointNormals(pc, { k: 16, maxDistance: 0.2 });
+	before = peakBytes();
+	var ff = findFacets(pc, { maxDistance: 0.2, normals: nm, planeDistance: 0.02 });
+	if (ff.facets.length !== 1) throw new Error("expected one facet, found " + ff.facets.length);
+	out = m;
 } else {
 	var n = Number(process.argv[3]);
 	var cols = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n) };

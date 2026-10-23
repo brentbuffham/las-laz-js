@@ -75,3 +75,15 @@ test("exports", function () {
 	assert.equal(lib.orientationOf, orientationOf);
 	assert.equal(lib.poleFromOrientation, poleFromOrientation);
 });
+
+// identical poles: rounding can put R a hair above N; K must never be negative (it is Infinity),
+// the cone 0
+test("identical poles give K Infinity and a zero cone, never negative", function () {
+	for (var t = 0; t < 2000; t++) {
+		var dip = (t * 37.1) % 90, dd = (t * 91.7) % 360, p = poleFromOrientation(dip, dd), poles = [];
+		for (var i = 0; i < 5; i++) poles.push(p[0], p[1], p[2]);
+		var f = fisherStats(Float64Array.from(poles), null);
+		assert.ok(!(f.fisherK < 0), "K " + f.fisherK + " at " + dip + "/" + dd);
+		assert.ok(f.cone95 >= 0 && f.cone95 < 1e-4, "cone " + f.cone95);   // acos near 1: ~1e-6 degrees of rounding
+	}
+});

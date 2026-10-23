@@ -69,3 +69,13 @@ test("a cropped read peaks below a full read", { timeout: 180000 }, function () 
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+// findFacets' own peak on one huge facet (a bench floor), normals made beforehand: measured 100 bytes a
+// point before the per-point JS array of seeds, the members copy and the outline's per-point
+// projections went; 39-40 after (the k-d tree build alone peaks at ~10, the facet column, flags,
+// queue and seeds add ~15, V8 the rest) — 45 leaves room for machine variation
+test("findFacets on one huge facet peaks under 45 bytes a point (normals made beforehand)", { timeout: 300000 }, function () {
+	var r = probe(["facets", "2000000"]);
+	var perPoint = r.peakDelta / r.outBytes;
+	assert.ok(perPoint < 45, "findFacets peaked at " + perPoint.toFixed(1) + " bytes a point");
+});

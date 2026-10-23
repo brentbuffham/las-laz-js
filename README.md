@@ -481,7 +481,10 @@ small and few. On a handheld pit-wall scan (tens of millions of points) these wo
 `maxDistance` 0.6 (normals fitted over joint-face-sized patches), `maxAngle` 20–30,
 `planeDistance` 2–3 (large: the normal test does the work), `minArea` 0.5, giving 7,000–18,000
 facets and 6–13 joint sets; `jointSets` with `maxAngle` 15 separated the steep sets. A large
-`maxDistance` is slower (normals take longer). Joint **traces** (where a joint cuts the face, a line
+`maxDistance` is slower (normals take longer). On a scan whose lines are farther apart than its
+points along a line (a tripod scan at a grazing angle), the default `outlineCell` (2 x the spacing
+along a line) leaves empty rows between the lines, so `area` and `outline` shrink to strips: set
+`outlineCell` above the line spacing. Joint **traces** (where a joint cuts the face, a line
 not a face) are not facets; tracing them is later work.
 
 On synthetic walls (9 planes in 3 sets, 5 mm noise) every plane comes back as one facet with its

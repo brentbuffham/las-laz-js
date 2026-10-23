@@ -37,55 +37,64 @@ export function facetOutline(X, Y, Z, stride, points, centroid, normal, cell) {
 	var ul = Math.hypot(u[0], u[1], u[2]);
 	u = [u[0] / ul, u[1] / ul, u[2] / ul];
 	var v = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
-	var m = points.length, pa = new Float64Array(m), pb = new Float64Array(m), ci = new Int32Array(m), cj = new Int32Array(m), k;
+	var m = points.length, k, o, dx, dy, dz;
 	if (!m) return { area: 0, outline: new Float64Array(0) };
+	// the in-plane coordinates are recomputed in each pass rather than stored (no per-point arrays)
+	function along(p, w) { o = points[p] * stride; dx = X[o] - centroid[0]; dy = Y[o] - centroid[1]; dz = Z[o] - centroid[2]; return dx * w[0] + dy * w[1] + dz * w[2]; }
 	var amin = Infinity, bmin = Infinity;
-	for (k = 0; k < m; k++) {
-		var o = points[k] * stride, dx = X[o] - centroid[0], dy = Y[o] - centroid[1], dz = Z[o] - centroid[2];
-		pa[k] = dx * u[0] + dy * u[1] + dz * u[2]; pb[k] = dx * v[0] + dy * v[1] + dz * v[2];
-		if (pa[k] < amin) amin = pa[k]; if (pb[k] < bmin) bmin = pb[k];
-	}
+	for (k = 0; k < m; k++) { var a0 = along(k, u), b0 = along(k, v); if (a0 < amin) amin = a0; if (b0 < bmin) bmin = b0; }
 	// 0.382 of a cell (the golden ratio's fraction) before the lowest point: a boundary then never
 	// falls on points of a regular grid (spacing cell / n), where rounding would decide their cell
 	amin -= 0.381966 * cell; bmin -= 0.381966 * cell;
+	function ci(p) { return Math.floor((along(p, u) - amin) / cell); }
+	function cj(p) { return Math.floor((along(p, v) - bmin) / cell); }
 	var imin = 0, imax = 0, jmin = 0, jmax = 0;
-	for (k = 0; k < m; k++) {
-		var i = Math.floor((pa[k] - amin) / cell), j = Math.floor((pb[k] - bmin) / cell);
-		ci[k] = i; cj[k] = j;
-		if (i > imax) imax = i; if (j > jmax) jmax = j;
-	}
+	for (k = 0; k < m; k++) { var ik = ci(k), jk = cj(k); if (ik > imax) imax = ik; if (jk > jmax) jmax = jk; }
 	// cells keyed (i - imin + 1) * H + (j - jmin + 1), with a one-cell empty margin
 	var H = jmax - jmin + 3, W = imax - imin + 3, total = W * H;
-	var dense = total <= DENSE ? new Uint8Array(total) : null, set = dense ? null : new Set();
 	function key(i, j) { return (i - imin + 1) * H + (j - jmin + 1); }
-	function has(kk) { return dense ? dense[kk] === 1 : set.has(kk); }
-	var filled = [];
-	for (k = 0; k < m; k++) {
-		var kk = key(ci[k], cj[k]);
-		if (has(kk)) continue;
-		if (dense) dense[kk] = 1; else set.add(kk);
-		filled.push(kk);
+	// The filled cells. Dense: a byte per cell of the grid, a cell's slot is its key. Sparse (a grid
+	// past DENSE cells: a facet spread thin over a huge extent): the filled keys sorted, a cell's slot
+	// its position, found by binary search - memory follows the points, not the extent
+	var dense = null, keys = null, count = 0;
+	if (total <= DENSE) {
+		dense = new Uint8Array(total);
+		for (k = 0; k < m; k++) { var kd = key(ci(k), cj(k)); if (!dense[kd]) { dense[kd] = 1; count++; } }
+	} else {
+		keys = new Float64Array(m);
+		for (k = 0; k < m; k++) keys[k] = key(ci(k), cj(k));
+		keys.sort();
+		for (k = 0; k < m; k++) if (!count || keys[k] !== keys[count - 1]) keys[count++] = keys[k];
+		keys = keys.slice(0, count);
 	}
-	var area = filled.length * cell * cell;
+	function slot(kk) {
+		if (dense) return kk >= 0 && kk < total && dense[kk] ? kk : -1;
+		var lo = 0, hi = count - 1;
+		while (lo <= hi) { var mid = (lo + hi) >> 1; if (keys[mid] < kk) lo = mid + 1; else if (keys[mid] > kk) hi = mid - 1; else return mid; }
+		return -1;
+	}
+	function eachFilled(fn) {
+		if (dense) { for (var c = 0; c < total; c++) if (dense[c]) fn(c); }
+		else for (var q = 0; q < count; q++) fn(keys[q]);
+	}
+	var area = count * cell * cell;
 
 	// the largest 4-connected component
-	var seen = dense ? new Uint8Array(total) : new Set(), best = null;
-	function isSeen(kk) { return dense ? seen[kk] === 1 : seen.has(kk); }
-	function see(kk) { if (dense) seen[kk] = 1; else seen.add(kk); }
-	filled.forEach(function (start) {
-		if (isSeen(start)) return;
+	var seen = new Uint8Array(dense ? total : count), best = null;
+	eachFilled(function (start) {
+		if (seen[slot(start)]) return;
 		var comp = [], stack = [start];
-		see(start);
+		seen[slot(start)] = 1;
 		while (stack.length) {
 			var c = stack.pop();
 			comp.push(c);
-			[c + H, c - H, c + 1, c - 1].forEach(function (nb) { if (has(nb) && !isSeen(nb)) { see(nb); stack.push(nb); } });
+			[c + H, c - H, c + 1, c - 1].forEach(function (nb) { var sn = slot(nb); if (sn >= 0 && !seen[sn]) { seen[sn] = 1; stack.push(nb); } });
 		}
 		if (!best || comp.length > best.length) best = comp;
 	});
-	var inComp = dense ? new Uint8Array(total) : new Set();
-	best.forEach(function (c) { if (dense) inComp[c] = 1; else inComp.add(c); });
-	function inside(c) { return dense ? inComp[c] === 1 : inComp.has(c); }
+	var inComp = new Uint8Array(dense ? total : count);
+	best.forEach(function (c) { inComp[slot(c)] = 1; });
+	function inside(c) { var sc = slot(c); return sc >= 0 && inComp[sc] === 1; }
 
 	// directed boundary edges, anticlockwise round each cell; vertices are grid corners
 	// (vertex (a, b) = the corner at cell indices (a, b), keyed a * (H + 1) + b, local to the margin)
@@ -115,7 +124,9 @@ export function facetOutline(X, Y, Z, stride, points, centroid, normal, cell) {
 			var ax = Math.floor(to[cur] / VH) - Math.floor(from[cur] / VH), ay = (to[cur] % VH) - (from[cur] % VH);
 			for (var q = 0; q < nexts.length; q++) {
 				var ed = nexts[q];
-				if (used[ed]) continue;
+				// the ring's first edge is a candidate too: back at a pinch vertex the right turn may be
+				// to close the ring there, not to walk on into the other loop (a hole)
+				if (used[ed] && ed !== s) continue;
 				var bx = Math.floor(to[ed] / VH) - Math.floor(from[ed] / VH), by = (to[ed] % VH) - (from[ed] % VH);
 				var turn = ax * by - ay * bx;   // < 0 right, 0 straight, > 0 left
 				if (turn < bestTurn) { bestTurn = turn; pick = ed; }

@@ -43,7 +43,7 @@ export function setCss(id) { var c = setRgb(id); return "rgb(" + c[0] + "," + c[
 export function initFacets(ctx) {
 	var $ = ctx.$, fmt = ctx.fmt;
 	var res = null;   // { f (findFacets on the run's points), idx (run point -> cloud point, or null), facet (per cloud point), sets, pointSet }
-	var picked = null;   // after Select: { sel (the set's points), before (the selection it replaced, or null) }
+	var picked = null;   // after Select: { id, sel (the set's points), before (the selection it replaced, or null) }
 
 	function status(t, err) { ctx.setStatus("Facets: " + t, err); }
 	// Fisher K: huge for near-perfect planes, so capped in the table
@@ -107,9 +107,10 @@ export function initFacets(ctx) {
 			sw.className = "swatch"; sw.style.background = setCss(fam.id);
 			tr.insertCell().appendChild(sw);
 			[fam.id, fam.dip.toFixed(1), fam.dipDirection.toFixed(1), kText(fam.fisherK), fam.cone95 === fam.cone95 ? fam.cone95.toFixed(1) : "—", fam.facets, fam.area.toFixed(1)].forEach(function (v) { tr.insertCell().textContent = v; });
-			var b = document.createElement("button");
-			b.className = "button small"; b.textContent = "Select"; b.title = "Make set " + fam.id + "'s points the selection";
-			b.addEventListener("click", function () { selectSet(fam.id); });
+			var b = document.createElement("button"), on = isPicked(fam.id);
+			b.className = "button small"; b.textContent = on ? "Unselect" : "Select";
+			b.title = on ? "Put back the selection from before" : "Make set " + fam.id + "'s points the selection";
+			b.addEventListener("click", function () { if (isPicked(fam.id)) unselect(); else selectSet(fam.id); });
 			tr.insertCell().appendChild(b);
 		});
 		var none = 0;
@@ -123,10 +124,22 @@ export function initFacets(ctx) {
 		for (var i = 0; i < ps.length; i++) if (ps[i] === id) out.push(i);
 		var before = picked && ctx.selection === picked.sel ? picked.before : ctx.selection;
 		var sel = Uint32Array.from(out);
-		picked = { sel: sel, before: before };
+		picked = { id: id, sel: sel, before: before };
 		ctx.setSelection(sel, "Set " + id + ": " + fmt(sel.length) + " points selected");
 		showScope();
+		showSets();
 		ctx.setStatus($("status").textContent + " · Find facets now runs on this selection (Clear selection for the whole cloud)");
+	}
+	// Is set id the current selection (made by its Select, not changed since)?
+	function isPicked(id) { return !!(picked && picked.id === id && ctx.selection === picked.sel); }
+	// Unselect: back to the selection Select replaced
+	function unselect() {
+		if (!picked) return;
+		var before = picked.before;
+		picked = null;
+		ctx.setSelection(before, before && before.length ? "Selection restored: " + fmt(before.length) + " points" : "Selection cleared");
+		showScope();
+		showSets();
 	}
 	// What Find facets will run on: the selection, or the whole cloud
 	function showScope() {
@@ -254,11 +267,12 @@ export function initFacets(ctx) {
 		},
 		/** A new read or Reset: the facets belonged to the last points. */
 		onRead: function () { clear(); picked = null; showScope(); },
-		/** The selection changed (another tab): keep the scope line true. */
-		onSelection: showScope,
-		/** An edit: one that changes the points (count, or coordinates: Register, Transform, Smooth) clears the facets. */
+		/** The selection changed (another tab): keep the scope line and the Select / Unselect buttons true. */
+		onSelection: function () { showScope(); if (res && res.sets) showSets(); },
+		/** Any edit but Classify clears the facets: the others move, reorder (Split) or drop points. */
 		onEdit: function (name, countChanged) {
-			if (countChanged || /^(Register|Undo register|Transform|Smooth|Undo smooth)$/.test(name)) clear(res ? "cleared: the points changed (" + name + "); find facets again" : "");
+			void countChanged;
+			if (!/^(Classify|Undo classify)$/.test(name)) { picked = null; clear(res ? "cleared: the points changed (" + name + "); find facets again" : ""); }
 		},
 		result: function () { return res; }
 	};

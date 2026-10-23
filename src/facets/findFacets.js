@@ -83,10 +83,18 @@ export function findFacets(cols, opts) {
 	var tree = buildKdTree(cols, "findFacets"), co = tree.coords, X = co.x, Y = co.y, Z = co.z, st = co.stride;
 	var cosA = Math.cos(o.maxAngle * D), maxD2 = o.maxDistance * o.maxDistance;
 
-	// seeds: points with a normal, flattest first
-	var seeds = [];
-	for (var i = 0; i < n; i++) if (RES[i] === RES[i] && (N[3 * i] || N[3 * i + 1] || N[3 * i + 2])) seeds.push(i);
-	seeds.sort(function (a, b) { return RES[a] - RES[b] || a - b; });
+	// seeds: the points with a normal, flattest first, by a counting sort on 65,536 log-spaced
+	// residual bins (index order within a bin; the bin is computed twice, never stored): deterministic,
+	// and the only per-point memory is the ordered seeds themselves (4 bytes a point)
+	function hasNormal(p) { return RES[p] === RES[p] && (N[3 * p] || N[3 * p + 1] || N[3 * p + 2]); }
+	var lmin = Infinity, lmax = -Infinity, i, ns0 = 0;
+	for (i = 0; i < n; i++) if (hasNormal(i)) { ns0++; var lr = Math.log(RES[i] + 1e-12); if (lr < lmin) lmin = lr; if (lr > lmax) lmax = lr; }
+	var span = lmax > lmin ? 65535 / (lmax - lmin) : 0, counts = new Uint32Array(65537);
+	function binOf(p) { return Math.floor((Math.log(RES[p] + 1e-12) - lmin) * span); }
+	for (i = 0; i < n; i++) if (hasNormal(i)) counts[binOf(i) + 1]++;
+	for (i = 1; i <= 65536; i++) counts[i] += counts[i - 1];
+	var seeds = new Uint32Array(ns0);
+	for (i = 0; i < n; i++) if (hasNormal(i)) seeds[counts[binOf(i)]++] = i;
 
 	var facet = new Uint32Array(n), noSeed = new Uint8Array(n), out = new Uint8Array(n), released = new Uint8Array(n), queue = new Uint32Array(n);
 	var P = new Uint32Array(o.k), Dd = new Float64Array(o.k), eig = new Float64Array(5), cov = new Float64Array(6);
@@ -130,7 +138,7 @@ export function findFacets(cols, opts) {
 				if (c >= 1.25 * lastFit) fit();
 			}
 		}
-		var members = queue.slice(0, len);
+		var members = queue.subarray(0, len);   // a view: the queue is not reused until the next seed
 		function release() {
 			for (var r = 0; r < len; r++) { var q = members[r]; facet[q] = 0; noSeed[q] = 1; if (++released[q] >= 2) out[q] = 1; }
 			id--;

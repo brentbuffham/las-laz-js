@@ -88,7 +88,8 @@ export function fisherStats(poles, weights) {
 		rx = sx; ry = sy; rz = sz;
 	}
 	var R = Math.hypot(sx, sy, sz);
-	var K = N < 2 ? NaN : (N - 1) / (N - R);
-	var cone = N < 2 ? NaN : Math.acos(Math.max(-1, Math.min(1, 1 - (N - R) / R * (Math.pow(20, 1 / (N - 1)) - 1)))) / D;
+	var spread = Math.max(0, N - R);   // rounding can put R a hair above N for identical poles
+	var K = N < 2 ? NaN : (N - 1) / spread;   // Infinity for identical poles
+	var cone = N < 2 ? NaN : Math.acos(Math.max(-1, Math.min(1, 1 - spread / R * (Math.pow(20, 1 / (N - 1)) - 1)))) / D;
 	return { normal: poleOf([sx, sy, sz]), fisherK: K, cone95: cone, N: N, R: R };
 }

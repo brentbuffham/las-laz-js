@@ -103,13 +103,16 @@ test("a huge extent uses a set of cells, not a dense grid", function () {
 // A patch touching itself at a corner (a pinch): the walk turns right there and the ring stays whole
 test("a patch that touches itself at a corner", function () {
 	// one point at each cell's centre (points on cell edges would drift between cells)
+	// 7 cells round a one-cell hole that closes diagonally at (0,0)-(1,1): the outer ring is the
+	// 3 x 3 square less (0,1)'s corner notch... traced as one ring of shoelace area 8 (7 cells + the
+	// hole it encloses), whatever the points' order; the hole is never walked into it
 	var cells = [[0, 0], [0, -1], [1, -1], [2, -1], [2, 0], [2, 1], [1, 1]];
-	var X = [], Y = [], Z = [];
-	cells.forEach(function (c) { var a = c[0] + 0.5, b = c[1] + 0.5; X.push(C[0] + a * U[0] + b * V[0]); Y.push(C[1] + a * U[1] + b * V[1]); Z.push(C[2] + a * U[2] + b * V[2]); });
-	var sh = { X: Float64Array.from(X), Y: Float64Array.from(Y), Z: Float64Array.from(Z), n: X.length };
-	var r = run(sh, 1);
-	within(r.area, 7, 1e-9, "seven cells");
-	assert.ok(r.outline.length >= 12);
-	var a = shoelace(r.outline);
-	assert.ok(a > 0 && a <= 8 + 1e-9, "outer ring, anticlockwise: " + a);
+	[cells, cells.slice(3).concat(cells.slice(0, 3)), cells.slice().reverse()].forEach(function (order, o) {
+		var X = [], Y = [], Z = [];
+		order.forEach(function (c) { var a = c[0] + 0.5, b = c[1] + 0.5; X.push(C[0] + a * U[0] + b * V[0]); Y.push(C[1] + a * U[1] + b * V[1]); Z.push(C[2] + a * U[2] + b * V[2]); });
+		var r = run({ X: Float64Array.from(X), Y: Float64Array.from(Y), Z: Float64Array.from(Z), n: X.length }, 1);
+		within(r.area, 7, 1e-9, "seven cells (order " + o + ")");
+		within(shoelace(r.outline), 8, 1e-6, "the outer ring only (order " + o + ")");
+		assert.equal(r.outline.length / 3, 6, "six corners, no figure-8 (order " + o + ")");
+	});
 });
