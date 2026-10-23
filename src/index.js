@@ -30,6 +30,7 @@ export { selectOutliers } from "./ops/outliers.js";
 export { pointNormals, estimateNoise } from "./ops/normals.js";
 export { denoisePoints } from "./ops/denoise.js";
 export { classifyPoints, ASPRS_CLASSES } from "./ops/classify.js";
+export { fitTransform } from "./register/fit.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
