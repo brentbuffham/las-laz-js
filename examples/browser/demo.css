@@ -98,7 +98,7 @@ code, pre { font-family: var(--mono); font-size: 12px; }
 
 .layout {
 	display: grid;
-	grid-template-columns: 1fr 340px;
+	grid-template-columns: 1fr clamp(400px, 30vw, 520px);   /* the side panel grows with the window */
 	min-height: 0;
 }
 .layout.panel-hidden { grid-template-columns: 1fr 0; }
@@ -165,20 +165,22 @@ code, pre { font-family: var(--mono); font-size: 12px; }
 }
 .tabs {
 	display: flex;
+	flex-wrap: wrap;   /* more tabs than fit: a second row, never clipped */
 	position: sticky;
 	top: 0;
 	background: var(--surface);
 	border-bottom: 1px solid var(--border);
 }
 .tab {
-	flex: 1;
-	padding: 9px 2px;
+	flex: 1 0 auto;
+	padding: 9px 8px;
 	border: 0;
 	border-bottom: 2px solid transparent;
 	background: none;
 	color: var(--muted);
 	font: inherit;
-	font-size: 13px;   /* after the font shorthand, which would reset it: seven tabs fit the panel */
+	font-size: 13px;   /* after the font shorthand, which would reset it */
+	white-space: nowrap;
 	cursor: pointer;
 }
 .tab.active { color: var(--text); border-bottom-color: var(--accent); }

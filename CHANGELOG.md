@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Demo: the side panel grows with the window (400-520 px, was 340 px) and the tabs wrap onto a second row
+  rather than clip; the Register tab had pushed the tab names past the panel.
+
 ## 0.8.0 (2026-10-23)
 
 Register: put a scan onto the mine grid or onto another cloud.
