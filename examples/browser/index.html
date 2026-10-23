@@ -164,16 +164,42 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-register">
-				<p class="muted small">Moves your cloud onto a reference cloud from matching points you pick on both, with <code>alignCloud</code>: a fit from the picks, then optional ICP. Each pair's residual shows how well it fits; "left out" is its residual under the fit made without it, so a bad pick stands out.</p>
-				<h3>Reference cloud</h3>
-				<label class="button">Open reference<input type="file" id="refFile" accept=".las,.laz" hidden></label>
-				<span class="muted small" id="refInfo">none (drawn cyan)</span>
-				<label class="field">Show reference <input type="checkbox" id="regShowRef" checked></label>
-				<h3>Pairs</h3>
-				<div class="row wrap">
-					<button class="button" id="regPick" title="Click a point on your cloud, then the same point on the reference; Escape cancels a half pair">Pick pairs</button>
-					<button class="button" id="regClear">Clear pairs</button>
+				<p class="muted small">Moves your cloud onto a reference cloud (points you pick on both, with <code>alignCloud</code>: a fit from the picks, then optional ICP) or onto the mine grid (control points matched by name, with <code>fitTransform</code>). Each pair's residual shows how well it fits; "left out" is its residual under the fit made without it, so a bad pick stands out.</p>
+				<label class="field">Mode
+					<select id="regMode">
+						<option value="align">Align to a cloud</option>
+						<option value="gcp">GCP: control points</option>
+					</select>
+				</label>
+				<div id="regAlign">
+					<h3>Reference cloud</h3>
+					<label class="button">Open reference<input type="file" id="refFile" accept=".las,.laz" hidden></label>
+					<span class="muted small" id="refInfo">none (drawn cyan)</span>
+					<label class="field">Show reference <input type="checkbox" id="regShowRef" checked></label>
+					<h3>Pairs</h3>
+					<div class="row wrap">
+						<button class="button" id="regPick" title="Click a point on your cloud, then the same point on the reference; Escape cancels a half pair">Pick pairs</button>
+						<button class="button" id="regClear">Clear pairs</button>
+					</div>
 				</div>
+				<div id="regGcp" class="hidden">
+					<h3>Control points</h3>
+					<p class="muted small">Text files of name, x, y, z rows (comma, semicolon, tab or space; a header such as Name,E,N,RL picks the columns). Names are matched exactly.</p>
+					<div class="row wrap">
+						<label class="button">Grid control file<input type="file" id="gcpGrid" accept=".csv,.txt,.xyz" hidden></label>
+						<span class="muted small" id="gcpGridInfo">none</span>
+					</div>
+					<div class="row wrap">
+						<label class="button">Scan target file<input type="file" id="gcpScan" accept=".csv,.txt,.xyz" hidden></label>
+						<span class="muted small" id="gcpScanInfo">none</span>
+					</div>
+					<div class="row wrap">
+						<button class="button" id="gcpPick" title="Click each target on your cloud; it is named after the next unmatched grid point (edit the name below)">Pick targets</button>
+						<button class="button" id="gcpClear">Clear picked</button>
+					</div>
+					<table class="grid-table" id="gcpPickTable"></table>
+				</div>
+				<h3>Residuals</h3>
 				<table class="grid-table" id="pairTable"></table>
 				<p class="muted small" id="pairInfo"></p>
 				<h3>Fit</h3>
@@ -192,6 +218,7 @@
 					<button class="button" id="regFit" disabled>Fit</button>
 					<button class="button" id="regApply" disabled title="Move your cloud by the fit">Apply</button>
 					<button class="button" id="regUndo" disabled title="Back to before the last Apply">Undo register</button>
+					<button class="button" id="regCopy" disabled title="The fitted { m, t } as JSON, world to world (for Kirra, or a later read's transform)">Copy transform</button>
 				</div>
 			</div>
 
