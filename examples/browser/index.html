@@ -233,7 +233,12 @@
 					<label>Min area (m²) <input type="number" id="facMinArea" value="1" min="0" step="0.5"></label>
 				</div>
 				<div class="row wrap">
+					<span class="muted small" id="facScope">Runs on the whole cloud</span>
+					<button class="button small hidden" id="facClearSel" title="Run on the whole cloud again">Clear selection</button>
+				</div>
+				<div class="row wrap">
 					<button class="button" id="facRun">Find facets</button>
+					<button class="button" id="facClear" title="Remove the facets, their colours, outlines, sets and stereonet">Clear facets</button>
 					<label class="small">Show outlines <input type="checkbox" id="facOutlines" checked></label>
 				</div>
 				<h3>Joint sets</h3>

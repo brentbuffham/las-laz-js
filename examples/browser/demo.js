@@ -408,6 +408,7 @@ var selection = null;   // ascending Uint32Array of indices into cloud, or null
 var splitAt = -1;       // after Split: the points from here on are the outside part (dimmed)
 
 function showSelection() {
+	if (typeof facets !== "undefined" && facets) facets.onSelection();
 	if (!selection) { $("selInfo").textContent = "nothing selected"; return; }
 	$("selInfo").textContent = fmt(selection.length) + " selected" + (drawnIdx ? " · " + fmt(onScreen(selection).length) + " of them on screen; edits apply to all" : "");
 }
@@ -851,7 +852,7 @@ var register = initRegister({
 });
 // The Facets tab, the same way
 var facets = initFacets({
-	$: $, viewer: viewer, setStatus: setStatus, fmt: fmt, since: since, select: select, recolour: recolour, keepPoints: keepPoints,
+	$: $, viewer: viewer, setStatus: setStatus, fmt: fmt, since: since, select: select, clearSelection: clearSelection, recolour: recolour, keepPoints: keepPoints,
 	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; }
 });
 window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets };   // for checks from the console

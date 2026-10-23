@@ -37,7 +37,7 @@ export function setRgb(id) {
 export function setCss(id) { var c = setRgb(id); return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
 
 /**
- * @param {object} ctx - $, viewer, setStatus, fmt, since, select(name, make), recolour(), keepPoints,
+ * @param {object} ctx - $, viewer, setStatus, fmt, since, select(name, make), clearSelection(), recolour(), keepPoints,
  *   and getters cloud, origin, selection.
  */
 export function initFacets(ctx) {
@@ -121,6 +121,14 @@ export function initFacets(ctx) {
 			for (var i = 0; i < ps.length; i++) if (ps[i] === id) out.push(i);
 			return Uint32Array.from(out);
 		});
+		showScope();
+		ctx.setStatus($("status").textContent + " · Find facets now runs on this selection (Clear selection for the whole cloud)");
+	}
+	// What Find facets will run on: the selection, or the whole cloud
+	function showScope() {
+		var sel = ctx.selection;
+		$("facScope").textContent = sel && sel.length ? "Runs on the selection: " + fmt(sel.length) + " points" : "Runs on the whole cloud";
+		$("facClearSel").classList.toggle("hidden", !(sel && sel.length));
 	}
 
 	// --- outlines and colours -----------------------------------------------------
@@ -206,7 +214,16 @@ export function initFacets(ctx) {
 		if (why) status(why);
 	}
 	drawStereonet($("stereonet"), null, null, null, setCss);
-	$("facRun").addEventListener("click", run);
+	$("facRun").addEventListener("click", function () { showScope(); run(); });
+	$("facClear").addEventListener("click", function () {
+		if (!res) return;
+		clear("cleared");
+		if ($("colourBy").value === "facet" || $("colourBy").value === "set") $("colourBy").value = "elevation";
+		ctx.recolour();
+		status("cleared");
+	});
+	$("facClearSel").addEventListener("click", function () { ctx.clearSelection(); showScope(); });
+	document.querySelector('.tab[data-tab="facets"]').addEventListener("click", showScope);
 	$("facSets").addEventListener("click", function () { if (res) { sets(); ctx.recolour(); } });
 	$("facSetMode").addEventListener("change", function () {
 		var m = $("facSetMode").value;
@@ -228,7 +245,9 @@ export function initFacets(ctx) {
 			return { id: f.id, dip: f.dip, dipDirection: f.dipDirection, set: res.pointSet ? res.pointSet[i] : 0 };
 		},
 		/** A new read or Reset: the facets belonged to the last points. */
-		onRead: function () { clear(); },
+		onRead: function () { clear(); showScope(); },
+		/** The selection changed (another tab): keep the scope line true. */
+		onSelection: showScope,
 		/** An edit: one that changes the points (count, or coordinates: Register, Transform, Smooth) clears the facets. */
 		onEdit: function (name, countChanged) {
 			if (countChanged || /^(Register|Undo register|Transform|Smooth|Undo smooth)$/.test(name)) clear(res ? "cleared: the points changed (" + name + "); find facets again" : "");
