@@ -5,15 +5,19 @@
 // typed windows). Colours by facet or joint set (the Colour tab's list),
 // outlines on the cloud, the sets table with Select set (the set's
 // points become the selection, to Classify, delete or crop), a hover
-// line, a stereonet (stereonet.js) and CSV downloads. Results are in the cloud's local frame; CSV
+// line, a stereonet (stereonet.js), CSV downloads and a DXF of the facet
+// outlines as closed 3D polylines, a layer per set (the facets as surfaces
+// for CAD or Kirra, which triangulate them). Results are in the cloud's local frame; CSV
 // centroids are world coordinates.
 //==========================================================
 
 import { findFacets, jointSets } from "../../src/index.js";
 import { drawStereonet } from "./stereonet.js";
 
-// 8 distinct set colours, then grey for points in no set
-var SET_RGB = [[230, 25, 75], [60, 180, 75], [67, 99, 216], [245, 130, 49], [145, 30, 180], [66, 212, 244], [240, 50, 230], [191, 239, 69]];
+// Set colours, then grey for points in no set
+// (18 colours chosen to be told apart; later sets take a golden-angle hue)
+var SET_RGB = [[230, 25, 75], [60, 180, 75], [67, 99, 216], [245, 130, 49], [145, 30, 180], [66, 212, 244], [240, 50, 230], [191, 239, 69],
+	[255, 225, 25], [250, 190, 190], [0, 128, 128], [230, 190, 255], [154, 99, 36], [255, 250, 200], [128, 0, 0], [170, 255, 195], [128, 128, 0], [255, 216, 177]];
 var NONE_RGB = [90, 90, 90];
 
 // A facet's colour: hues spread by the golden angle (as the library's class colours)
@@ -22,7 +26,14 @@ function facetRgb(id) {
 	function f(k) { var t = (k + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(t - 3, 9 - t, 1)))); }
 	return [f(0), f(8), f(4)];
 }
-export function setRgb(id) { return id ? SET_RGB[(id - 1) % SET_RGB.length] : NONE_RGB; }
+// Sets 1-18 the palette, later ones their own hue (golden angle, offset from the facet colours)
+export function setRgb(id) {
+	if (!id) return NONE_RGB;
+	if (id <= SET_RGB.length) return SET_RGB[id - 1];
+	var h = (id * 137.508 + 60) % 360, s = 0.8, l = 0.5, a = s * Math.min(l, 1 - l);
+	function f(k) { var t = (k + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(t - 3, 9 - t, 1)))); }
+	return [f(0), f(8), f(4)];
+}
 export function setCss(id) { var c = setRgb(id); return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
 
 /**
@@ -131,7 +142,7 @@ export function initFacets(ctx) {
 	// --- CSV ----------------------------------------------------------------------
 	function download(name, text) {
 		var a = document.createElement("a");
-		a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+		a.href = URL.createObjectURL(new Blob([text], { type: /\.dxf$/.test(name) ? "application/dxf" : "text/csv" }));
 		a.download = name;
 		a.click();
 		setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
@@ -146,6 +157,42 @@ export function initFacets(ctx) {
 		return "id,dip,dipDirection,fisherK,cone95,facets,area\n" + res.sets.families.map(function (s) {
 			return [s.id, s.dip.toFixed(2), s.dipDirection.toFixed(2), s.fisherK === s.fisherK ? s.fisherK.toFixed(1) : "", s.cone95 === s.cone95 ? s.cone95.toFixed(2) : "", s.facets, s.area.toFixed(3)].join(",");
 		}).join("\n") + "\n";
+	}
+
+	// The facet outlines as an R12 DXF: a closed 3D POLYLINE each (the spec's dummy point, VERTEX
+	// flag 32), a layer per joint set (SET_1 …, NO_SET), world coordinates, $EXTMIN / $EXTMAX set
+	function facetsDxf() {
+		var o = ctx.origin, fam = res.sets ? res.sets.family : null, out = [], lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+		function g(code, value) { out.push(String(code), String(value)); }
+		var layers = {}, ents = [];
+		res.f.facets.forEach(function (f, i) {
+			var set = fam ? fam[i] : 0, layer = set ? "SET_" + set : "NO_SET", colour = set ? ((set - 1) % 6) + 1 : 8;
+			layers[layer] = colour;
+			var v = [];
+			for (var k = 0; k < f.outline.length; k += 3) {
+				var p = [f.outline[k] + o.x, f.outline[k + 1] + o.y, f.outline[k + 2] + o.z];
+				for (var d = 0; d < 3; d++) { if (p[d] < lo[d]) lo[d] = p[d]; if (p[d] > hi[d]) hi[d] = p[d]; }
+				v.push(p);
+			}
+			if (v.length >= 3) ents.push({ layer: layer, colour: colour, v: v });
+		});
+		if (!ents.length) { lo = [0, 0, 0]; hi = [0, 0, 0]; }
+		g(0, "SECTION"); g(2, "HEADER");
+		g(9, "$ACADVER"); g(1, "AC1009");
+		g(9, "$EXTMIN"); g(10, lo[0].toFixed(3)); g(20, lo[1].toFixed(3)); g(30, lo[2].toFixed(3));
+		g(9, "$EXTMAX"); g(10, hi[0].toFixed(3)); g(20, hi[1].toFixed(3)); g(30, hi[2].toFixed(3));
+		g(0, "ENDSEC");
+		g(0, "SECTION"); g(2, "TABLES"); g(0, "TABLE"); g(2, "LAYER"); g(70, Object.keys(layers).length);
+		Object.keys(layers).forEach(function (name) { g(0, "LAYER"); g(2, name); g(70, 0); g(62, layers[name]); g(6, "CONTINUOUS"); });
+		g(0, "ENDTAB"); g(0, "ENDSEC");
+		g(0, "SECTION"); g(2, "ENTITIES");
+		ents.forEach(function (e) {
+			g(0, "POLYLINE"); g(8, e.layer); g(62, e.colour); g(66, 1); g(10, 0); g(20, 0); g(30, 0); g(70, 9);   // 8 = 3D, 1 = closed
+			e.v.forEach(function (p) { g(0, "VERTEX"); g(8, e.layer); g(10, p[0].toFixed(3)); g(20, p[1].toFixed(3)); g(30, p[2].toFixed(3)); g(70, 32); });
+			g(0, "SEQEND"); g(8, e.layer);
+		});
+		g(0, "ENDSEC"); g(0, "EOF");
+		return out.join("\r\n") + "\r\n";
 	}
 
 	// --- wiring -------------------------------------------------------------------
@@ -170,6 +217,7 @@ export function initFacets(ctx) {
 	$("facOutlines").addEventListener("change", showOutlines);
 	$("facCsvFacets").addEventListener("click", function () { if (res) download("facets.csv", facetsCsv()); });
 	$("facCsvSets").addEventListener("click", function () { if (res && res.sets) download("joint-sets.csv", setsCsv()); });
+	$("facDxf").addEventListener("click", function () { if (res) download("facets.dxf", facetsDxf()); });
 
 	return {
 		colours: colours,
