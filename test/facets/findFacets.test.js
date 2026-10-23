@@ -14,6 +14,7 @@ import { angleBetweenAxes } from "../../src/facets/orientation.js";
 import { pointNormals } from "../../src/ops/normals.js";
 import * as lib from "../../src/index.js";
 import { planesCloud } from "../helpers/planes.js";
+import { rng } from "../helpers/clouds.js";
 
 var SETS = [[70, 135], [40, 300], [85, 30]];
 function ninePlanes(extra) {
@@ -131,6 +132,26 @@ test("growth stays linear", { skip: !!process.env.NODE_V8_COVERAGE }, function (
 	}
 	var small = time(25), big = time(50);   // 250,000 and 1,000,000 points
 	assert.ok(big / small < 6, "4x the points took " + (big / small).toFixed(1) + "x the time");
+});
+
+// Rough ground (bumps bigger than the plane distance) makes many tiny attempts; their points must not
+// be regrown over and over (a real 2.4 M-point scan took 6.2 visits a point before the fix)
+test("rough ground is not regrown over and over", { skip: !!process.env.NODE_V8_COVERAGE }, function () {
+	function surface(rough) {
+		var r = rng(11), x = [], y = [], z = [];
+		for (var a = 0; a < 20; a += 0.04) for (var b = 0; b < 20; b += 0.04) {
+			// rough: blocky relief, 3 cm steps on a 0.3 m pattern, plus noise (a blasted face, roughly)
+			x.push(a); y.push(b); z.push(rough ? 0.03 * Math.round(3 * Math.sin(a * 7.3 + 2 * Math.sin(b * 5.1))) + 0.006 * (r() - 0.5) : 0);
+		}
+		return { count: x.length, x: Float64Array.from(x), y: Float64Array.from(y), z: Float64Array.from(z) };
+	}
+	function time(c) {
+		var n = pointNormals(c, { k: 16, maxDistance: 0.2 }), t0 = performance.now();
+		findFacets(c, { maxDistance: 0.2, planeDistance: 0.01, normals: n });
+		return performance.now() - t0;
+	}
+	var smooth = time(surface(false)), rough = time(surface(true));
+	assert.ok(rough < 3 * smooth, "rough ground took " + (rough / smooth).toFixed(1) + "x the time of smooth");
 });
 
 test("bad options are refused, naming them", function () {

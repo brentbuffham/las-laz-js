@@ -9,9 +9,13 @@
 // two checks of trimesh-build-js's bridging guard, which keep a facet on
 // one surface. The plane comes from running Float64 sums on offsets
 // from the seed and is refitted when the count passes 1.25 x the count
-// at the last fit, so the work stays linear. A facet under minPoints, or
-// whose area (outline.js) is under minArea, is released: its points go
-// back to 0 and may join a later facet (they are not seeds again).
+// at the last fit, so the work stays linear. A facet whose area
+// (outline.js) is under minArea is released: its points go back to 0
+// and may join a later facet (they are not seeds again), once - a point
+// released twice stays 0. A speck under minPoints is released for good:
+// its points stay 0 and join nothing later. So rough ground (many small
+// tries) is not regrown over and over: each point is visited at most
+// about three times.
 // Facet ids are 1 ... n by area, largest first; 0 is none.
 //==========================================================
 
@@ -84,12 +88,12 @@ export function findFacets(cols, opts) {
 	for (var i = 0; i < n; i++) if (RES[i] === RES[i] && (N[3 * i] || N[3 * i + 1] || N[3 * i + 2])) seeds.push(i);
 	seeds.sort(function (a, b) { return RES[a] - RES[b] || a - b; });
 
-	var facet = new Uint32Array(n), noSeed = new Uint8Array(n), queue = new Uint32Array(n);
+	var facet = new Uint32Array(n), noSeed = new Uint8Array(n), out = new Uint8Array(n), released = new Uint8Array(n), queue = new Uint32Array(n);
 	var P = new Uint32Array(o.k), Dd = new Float64Array(o.k), eig = new Float64Array(5), cov = new Float64Array(6);
 	var found = [], id = 0, processed = 0, spacing = new Float64Array(SPACING_SAMPLE);
 
 	seeds.forEach(function (seed) {
-		if (facet[seed] || noSeed[seed]) return;
+		if (facet[seed] || noSeed[seed] || out[seed]) return;
 		id++;
 		var sx = X[seed * st], sy = Y[seed * st], sz = Z[seed * st];
 		// running sums on offsets from the seed
@@ -117,7 +121,7 @@ export function findFacets(cols, opts) {
 			if (m && ns < SPACING_SAMPLE) spacing[ns++] = Math.sqrt(Dd[0]);
 			for (var j = 0; j < m; j++) {
 				var q = P[j];
-				if (facet[q]) continue;
+				if (facet[q] || out[q]) continue;
 				var nx = N[3 * q], ny = N[3 * q + 1], nz = N[3 * q + 2];
 				if (Math.abs(nx * mx + ny * my + nz * mz) < cosA) continue;
 				var dist = (X[q * st] - sx - cx) * mx + (Y[q * st] - sy - cy) * my + (Z[q * st] - sz - cz) * mz;
@@ -127,8 +131,11 @@ export function findFacets(cols, opts) {
 			}
 		}
 		var members = queue.slice(0, len);
-		function release() { for (var r = 0; r < len; r++) { facet[members[r]] = 0; noSeed[members[r]] = 1; } id--; }
-		if (len < o.minPoints) { release(); return; }
+		function release() {
+			for (var r = 0; r < len; r++) { var q = members[r]; facet[q] = 0; noSeed[q] = 1; if (++released[q] >= 2) out[q] = 1; }
+			id--;
+		}
+		if (len < o.minPoints) { release(); for (var r2 = 0; r2 < len; r2++) out[members[r2]] = 1; return; }
 		fit();
 		if (!(eig[3] === eig[3])) { release(); return; }
 		var normal = poleOf([mx, my, mz]), centroid = [sx + cx, sy + cy, sz + cz];
