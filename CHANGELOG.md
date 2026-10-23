@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Demo: Save writes every point. It streamed nothing over 5,000,000 points before: the Write tab thinned to a
+  5 M page limit, and an unedited save re-read the file with the Read tab's Max points (5 M by default), so a
+  55 M-point scan saved as under 5 M. Now an unedited save streams the whole file (every record that passes
+  the class, return, bounds and crop filters; Max points only limits what is read for viewing) window by
+  window through `createLasWriter`, and an edited save writes every edited point in batches. In Chrome and
+  Edge the file goes straight to disk through the Save dialog, at any size; other browsers build it in memory
+  and download it.
+
 ## 0.7.1 (2026-10-23)
 
 Categorise: give selected points a LAS class, with names for your own classes.

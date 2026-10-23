@@ -11,7 +11,7 @@
 //==========================================================
 
 import {
-	VERSION, writeLas, openLas, colourize, POINT_FORMATS,
+	VERSION, createLasWriter, chooseScaleOffset, openLas, colourize, POINT_FORMATS,
 	selectPolygon, selectBox, selectClasses, selectSparse, selectOutliers, unionSelections,
 	estimateNoise, denoisePoints, pointNormals,
 	keepPoints, removePoints, splitPoints, mergePoints, interleavePositions, thinSelection,
@@ -130,6 +130,7 @@ var lastRead = null;   // the points last read: Reset goes back to them (every e
 var edited = false;    // cloud is an edit of lastRead, so Save writes it rather than re-reading
 var transformed = false;   // cloud has been through Transform since the last read or Reset
 var readCrop = null;   // { polygon, boundary, tolerance } of the last read (world), or null
+var readThinned = false;   // the last read kept fewer points than passed its filters (Max points)
 var ext = null;        // the cloud's local extent { minX … maxZ, midZ }
 // Over the draw cap the viewer draws an even spread of the cloud: drawnIdx holds the cloud
 // indices drawn (null: every point), drawn the columns colourize needs for just those points.
@@ -173,6 +174,8 @@ async function read(crop, note) {
 		cloud = lastRead = await readJob.promise;
 		beforeSmooth = null; beforeClassify = null;
 		readCrop = crop || null;
+		var maxPts = Number($("maxPoints").value) || 0;
+		readThinned = maxPts > 0 && cloud.count >= maxPts && maxPts < info.header.pointCount;
 		edited = false; transformed = false; selection = null; splitAt = -1;
 		var secs = (performance.now() - t0) / 1000;
 		$("progress").value = 1;
@@ -619,7 +622,10 @@ function editEnabled(on) {
 }
 
 // --- write -------------------------------------------------------------------
-var WRITE_CAP = 5000000;   // every field of 5 M points is ~0.5 GB in a page; stream more with createLasWriter
+// Every point is written: the file streams through createLasWriter in batches, onto disk through
+// the browser's Save dialog (File System Access, Chrome / Edge), so page memory stays flat at any
+// size. Without that API the file is assembled in memory and downloaded.
+var WRITE_BATCH = 1000000;   // points per writePoints call for the edited cloud
 var NO_LAZ = [4, 5, 9, 10];   // point formats the LAZ writer does not support
 
 // LAZ for the formats that allow it; the button says what Save will write
@@ -630,57 +636,104 @@ function writeChoice() {
 	$("writeButton").textContent = $("writeCompress").checked ? "Save as LAZ" : "Save as LAS";
 }
 
-// The edited cloud's own columns: the fields read, still relative to the origin, thinned
-// evenly (the reader's maxPoints rule) to the page's write limit
-function editedColumns() {
-	var c = cloud, cols = { count: c.count, x: c.x, y: c.y, z: c.z, classification: c.classification, intensity: c.intensity, returnNumber: c.returnNumber, numberOfReturns: c.numberOfReturns };
-	if (c.red) { cols.red = c.red; cols.green = c.green; cols.blue = c.blue; }
-	return c.count > WRITE_CAP ? keepPoints(cols, thinSelection(c.count, WRITE_CAP)) : cols;
+// The edited cloud's own columns (the fields read, relative to the origin), points a to b
+function editedBatch(a, b) {
+	var c = cloud, out = { count: b - a };
+	["x", "y", "z", "classification", "intensity", "returnNumber", "numberOfReturns", "red", "green", "blue"].forEach(function (k) {
+		if (c[k]) out[k] = c[k].subarray(a, b);
+	});
+	return out;
+}
+
+// Where the file goes: { sink: { write(bytes, position) }, finish() -> Promise<File|Blob>, abort(), onDisk }.
+// The Save dialog writes straight to disk; without it the bytes are kept in order and downloaded.
+async function openTarget(name) {
+	if (window.showSaveFilePicker) {
+		var handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "LAS / LAZ point cloud", accept: { "application/octet-stream": [name.slice(name.lastIndexOf("."))] } }] });
+		var writable = await handle.createWritable();
+		return {
+			onDisk: true, name: handle.name,
+			sink: { write: function (bytes, position) { return writable.write({ type: "write", position: position, data: bytes }); } },
+			finish: async function () { await writable.close(); return handle.getFile(); },
+			abort: function () { return writable.abort(); }
+		};
+	}
+	var writes = [], size = 0;
+	return {
+		onDisk: false, name: name,
+		sink: { write: function (bytes, position) { writes.push({ at: position, bytes: bytes.slice() }); size = Math.max(size, position + bytes.length); } },
+		finish: async function () {
+			var all = new Uint8Array(size);
+			writes.forEach(function (w) { all.set(w.bytes, w.at); });   // in order: a later header write wins
+			var blob = new Blob([all], { type: "application/octet-stream" });
+			var a = document.createElement("a");
+			a.href = URL.createObjectURL(blob);
+			a.download = name;
+			a.click();
+			setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+			return blob;
+		},
+		abort: function () {}
+	};
 }
 
 async function save() {
 	var h = info.header, F = POINT_FORMATS[h.pointFormat].fields;
 	var wf = Number($("writeFormat").value), compress = $("writeCompress").checked;
-	var limit = Math.min(Number($("maxPoints").value) || h.pointCount, WRITE_CAP);
-	var fromEdit = edited;
-	$("writeResult").textContent = fromEdit ? "Writing the edited cloud…" : "Reading every field…";
+	var fromEdit = edited, target = null;
+	var name = file.name.replace(/\.[^.]*$/, "") + "-las-laz-js" + (compress ? ".laz" : ".las");
 	$("writeResult").className = "muted small";
 	try {
-		var cols, where;
-		if (fromEdit) {
-			cols = editedColumns();
-			// at the header's scale; with no offset, writeLas chooses one from the bounds
-			where = { scale: h.scale, localOrigin: origin };
-		} else {
-			cols = await call("readPoints", Object.assign({
-				fields: ["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scanAngle", "userData", "pointSourceId"]
-					.concat(F.gpsTime ? ["gpsTime"] : []).concat(F.red ? ["red", "green", "blue"] : []).concat(F.nir ? ["nir"] : []),
-				classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(), maxPoints: limit
-			}, readCrop || {})).promise;
-			where = { scale: h.scale, offset: h.offset };
+		try { target = await openTarget(name); } catch (err) {
+			if (err.name === "AbortError") { $("writeResult").textContent = "Save cancelled."; return; }
+			throw err;
 		}
 		// Formats 6-10 carry the CRS as WKT only (LAS 1.4); an EPSG code alone cannot go there
 		var crs, note = "";
 		if (info.crs.wkt || (info.crs.epsg && wf < 6)) crs = { wkt: info.crs.wkt, epsg: info.crs.epsg };
 		else if (info.crs.epsg) note = " The source has only an EPSG code, which point formats 6–10 cannot carry (they need WKT), so no coordinate system was written.";
-		var t0 = performance.now();
 		var names = Object.keys(classNames).length ? classNames : undefined;   // the lookup VLR: the file's names and the classes added
-		var blob = await writeLas(cols, Object.assign({ version: $("writeVersion").value, pointFormat: wf, crs: crs, classNames: names, compress: compress, software: "las-laz-js demo", as: "blob" }, where));
+		var opts = { version: $("writeVersion").value, pointFormat: wf, crs: crs, classNames: names, compress: compress, software: "las-laz-js demo" };
+		var t0 = performance.now(), total, done = 0, w;
+		var tick = function (n) { done += n; $("progress").value = total ? done / total : 0; $("writeResult").textContent = "Writing " + fmt(done) + " of " + fmt(total) + " points…"; };
+		if (fromEdit) {
+			// at the header's scale; the offset from the edited cloud's world bounds (the stream needs both up front)
+			total = cloud.count;
+			var b = extent(cloud), wb = { minX: b.minX + origin.x, maxX: b.maxX + origin.x, minY: b.minY + origin.y, maxY: b.maxY + origin.y, minZ: b.minZ + origin.z, maxZ: b.maxZ + origin.z };
+			w = await createLasWriter(target.sink, Object.assign(opts, { scale: h.scale, offset: chooseScaleOffset(wb).offset, localOrigin: origin }));
+			for (var a = 0; a < total; a += WRITE_BATCH) {
+				var batch = editedBatch(a, Math.min(total, a + WRITE_BATCH));
+				await w.writePoints(batch);
+				tick(batch.count);
+			}
+		} else {
+			// the whole file: every record that passes the Read tab's filters (Max points is a viewing
+			// limit, so no thinning), every field, window by window straight into the writer; each window
+			// waits for the one before to be written, so memory holds a window, never the file (LAZ
+			// decodes on the library's worker pool)
+			total = h.pointCount;
+			w = await createLasWriter(target.sink, Object.assign(opts, { scale: h.scale, offset: h.offset }));
+			var src = await openLas(file, { windowSize: Number($("windowMb").value) * 1048576 });
+			for await (var chunk of src.chunks(Object.assign({
+				fields: ["x", "y", "z", "intensity", "returnNumber", "numberOfReturns", "scanDirection", "edgeOfFlightLine", "classification", "classificationFlags", "scanAngle", "userData", "pointSourceId"]
+					.concat(F.gpsTime ? ["gpsTime"] : []).concat(F.red ? ["red", "green", "blue"] : []).concat(F.nir ? ["nir"] : []),
+				classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter()
+			}, readCrop || {}))) {
+				await w.writePoints(chunk);
+				tick(chunk.count);
+			}
+		}
+		var closed = await w.close();
+		var out = await target.finish();
 		var ms = since(t0);
-		var check = await (await openLas(blob)).readPoints({ fields: ["x"] });
-		var ok = check.count === cols.count;
-		var name = file.name.replace(/\.[^.]*$/, "") + "-las-laz-js" + (compress ? ".laz" : ".las");
-		var a = document.createElement("a");
-		a.href = URL.createObjectURL(blob);
-		a.download = name;
-		a.click();
-		setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
-		var capped = " (thinned to the page's " + fmt(WRITE_CAP) + "-point limit)";
-		var what = fromEdit ? ", the edited cloud: x y z, class, intensity, returns" + (cols.red ? ", colour" : "") + (cols.count < cloud.count ? capped : "")
-			: (cols.count < h.pointCount && limit === WRITE_CAP ? capped : "");
-		$("writeResult").textContent = "Saved " + name + " (" + fmt(blob.size) + " bytes, " + fmt(cols.count) + " points" + what + ", written in " + ms + " ms). Round trip: " + (ok ? "OK, same count read back." : "MISMATCH (" + fmt(check.count) + " read back)") + note;
+		var back = (await openLas(out)).header.pointCount;
+		var ok = back === closed.count;
+		var what = fromEdit ? ", the edited cloud: x y z, class, intensity, returns" + (cloud.red ? ", colour" : "") +
+			(readThinned ? "; the read was thinned to Max points, so set Max points to 0 and read again to edit and save every point" : "") : "";
+		$("writeResult").textContent = "Saved " + target.name + (target.onDisk ? "" : " (downloaded)") + " (" + fmt(out.size) + " bytes, " + fmt(closed.count) + " points" + what + ", written in " + ms + " ms). Round trip: " + (ok ? "OK, the header holds the same count." : "MISMATCH (" + fmt(back) + " in the header)") + note;
 		$("writeResult").className = ok ? "muted small" : "error small";
 	} catch (err) {
+		if (target) try { await target.abort(); } catch (e) { /* already closed */ }
 		var hint = /point formats 0-5 hold classes 0-31/.test(err.message) ? " Choose LAS 1.4 and point format 6 (or 7 / 8 to keep RGB)." : "";
 		$("writeResult").textContent = err.message + hint;
 		$("writeResult").className = "error small";
@@ -763,7 +816,6 @@ $("pointSize").addEventListener("input", function () { viewer.setPointSize(Numbe
 $("version").textContent = "v" + VERSION;
 refreshClassSelect();
 $("drawCapText").textContent = fmt(DRAW_CAP);
-$("writeCapText").textContent = fmt(WRITE_CAP);
 window.addEventListener("dragover", function (e) { e.preventDefault(); $("dropOverlay").classList.remove("hidden"); });
 window.addEventListener("dragleave", function (e) { if (!e.relatedTarget) $("dropOverlay").classList.add("hidden"); });
 window.addEventListener("drop", function (e) {

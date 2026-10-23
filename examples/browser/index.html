@@ -198,7 +198,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-write">
-				<p class="muted">Writes the points read (with every field the format holds) as a new LAS or LAZ file with <code>writeLas</code>, then reads it back to check the round trip. After an edit it writes the edited cloud instead: the fields read (x y z, class, intensity, return and number of returns, colour); a Split cloud is saved whole, both parts. A browser page holds at most <span id="writeCapText">5,000,000</span> points for this, thinned evenly; to write more, stream with <code>createLasWriter</code>.</p>
+				<p class="muted">Writes the whole file — every record that passes the Read tab's class, return, bounds and crop filters, with every field the format holds; Max points only limits what is read for viewing — as a new LAS or LAZ file, streamed in batches through <code>createLasWriter</code>, then checks the count in the written header. After an edit it writes the edited cloud instead (the points read, so set Max points to 0 to edit every point): the fields read (x y z, class, intensity, return and number of returns, colour); a Split cloud is saved whole, both parts. In Chrome and Edge the file goes straight to disk through the Save dialog, at any size; other browsers build it in memory and download it.</p>
 				<label class="field">LAS version
 					<select id="writeVersion"><option>1.2</option><option>1.4</option></select>
 				</label>
