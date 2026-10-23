@@ -9,8 +9,9 @@ Register: put a scan onto the mine grid or onto another cloud.
   returns `{ transform: { m, t }, residuals, dH, dZ, looResiduals, rms, worst, scale, rotateZ }`;
   `looResiduals` is each pair's residual under the fit made without it, so a bad control point
   that drags the fit still shows.
-- `parseControlPoints(text, { columns })` reads name, x, y, z rows (comma, semicolon, spaces or tabs;
-  E / N / RL style headers; BOM, CRLF, quotes, a trailing empty column); `matchControlPoints(scan,
+- `parseControlPoints(text, { columns })` reads name, x, y, z rows (tab, comma, semicolon or spaces;
+  a tab file keeps spaces in names; E / N / RL style headers; BOM, CRLF, quotes, an optional blank
+  last column; thousands separators refused, with or without a header); `matchControlPoints(scan,
   grid)` pairs them by name and lists the names on one side only.
 - `alignCloud(moving, fixed, { pairs, model, movingOrigin, fixedOrigin, icp })`: the fit from
   picked pairs, then optional point-to-plane ICP on an even sample (normals fitted only where the

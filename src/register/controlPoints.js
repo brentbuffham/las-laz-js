@@ -2,13 +2,16 @@
 //==========================================================
 // Control points from text: the surveyor's control list (grid) and the
 // scan's target list, each "name, x, y, z" rows, matched by name into
-// the from / to pairs fitTransform takes. Delimiter per file: semicolon,
-// comma, or runs of spaces / tabs (double quotes keep a delimiter in a
-// name; "" escapes a quote). An optional header names the columns
-// (E / N / RL and the like); every row must have as many fields as the
-// first (trailing empty fields ignored), so "478,000.1" is refused, not
-// read as two numbers. Names match exactly after trimming, case-sensitive
-// (a surveyor's CP1 and cp1 may differ).
+// the from / to pairs fitTransform takes. Delimiter per file: tab (a
+// tab file splits on tabs only, so names may hold spaces, as Excel writes
+// them), semicolon, comma, or runs of spaces (double quotes keep a
+// delimiter in a name; "" escapes a quote). An optional header names the
+// columns (E / N / RL and the like). No row may have more fields than the
+// first, nor miss name / x / y / z (trailing empty fields are ignored, so
+// an optional last column may be blank); without a header a 1-3 digit
+// field followed by a 3-digit one is taken for thousands separators and
+// refused. So "478,000.1" is refused, never read as two numbers. Names
+// match exactly after trimming, case-sensitive (CP1 and cp1 may differ).
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -46,6 +49,8 @@ function fieldsOf(line, delim) {
 // The delimiter of a data line: semicolon or comma outside quotes, else white space (null)
 function delimiterOf(line) {
 	var quoted = false, comma = false;
+	// a tab file (Excel's "Text (Tab delimited)" does not quote names with spaces) splits on tabs only
+	if (line.indexOf("\t") >= 0) return "\t";
 	for (var i = 0; i < line.length; i++) {
 		if (line[i] === "\"") quoted = !quoted;
 		else if (!quoted && line[i] === ";") return ";";
@@ -78,7 +83,7 @@ export function parseControlPoints(text, options) {
 	var o = options === undefined ? {} : options;
 	if (o === null || typeof o !== "object") throw bad("options must be an object");
 	var cols = o.columns !== undefined ? checkColumns(o.columns) : null;
-	var lines = text.replace(/^﻿/, "").split(/\r?\n/), delim, width = -1, names = [], xyz = [], seen = Object.create(null);
+	var lines = text.replace(/^﻿/, "").split(/\r?\n/), delim, width = -1, headerless = false, names = [], xyz = [], seen = Object.create(null);
 	for (var ln = 0; ln < lines.length; ln++) {
 		var raw = lines[ln], at = "line " + (ln + 1);
 		if (!raw.trim() || raw.trim()[0] === "#") continue;
@@ -101,8 +106,19 @@ export function parseControlPoints(text, options) {
 				continue;
 			}
 			cols = c;
+			headerless = true;
 		}
-		if (f.length !== width) throw bad(at + " has " + f.length + " fields, the first row " + width + " (a thousands separator, or a missing value?)");
+		// more fields than the first row: a thousands separator (or a stray delimiter); fewer: only
+		// trailing optional columns may be missing, never name / x / y / z
+		var need = Math.max(cols.name, cols.x, cols.y, cols.z) + 1;
+		if (f.length > width || f.length < need) throw bad(at + " has " + f.length + " fields, the first row " + width + " (a thousands separator, or a missing value?)");
+		// no header: thousands separators give every row the same longer shape, so look for one
+		// (a 1-3 digit whole number followed by a field of exactly three digits before any point)
+		if (headerless && width > 4) {
+			for (var k = 0; k + 1 < f.length; k++) {
+				if (/^-?\d{1,3}$/.test(f[k]) && /^\d{3}(\.\d*)?$/.test(f[k + 1])) throw bad(at + ": \"" + f[k] + (delim || " ") + f[k + 1] + "\" looks like a number with thousands separators; remove them, or add a header row");
+			}
+		}
 		var x = f[cols.x], y = f[cols.y], z = f[cols.z], name = f[cols.name];
 		if (!isNum(x) || !isNum(y) || !isNum(z)) throw bad(at + ": x, y and z must be numbers (got " + [x, y, z].join(", ") + ")");
 		if (!name) throw bad(at + ": the point has no name");

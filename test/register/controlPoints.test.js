@@ -27,7 +27,7 @@ test("each delimiter, with and without a header", function () {
 		expectRows(parseControlPoints(text(d, true)), ROWS);
 		expectRows(parseControlPoints(text(d, false)), ROWS);
 	});
-	expectRows(parseControlPoints("CP1  478000.125\t 6772000.5  301.25"), [ROWS[0]]);
+	expectRows(parseControlPoints("CP1  478000.125   6772000.5  301.25"), [ROWS[0]]);
 });
 
 test("headers choose the columns", function () {
@@ -90,4 +90,26 @@ test("a header without a coordinate column is refused, naming it", function () {
 test("options and columns must be objects", function () {
 	assert.throws(function () { parseControlPoints("CP1,1,2,3", null); }, /options/);
 	assert.throws(function () { parseControlPoints("CP1,1,2,3", { columns: null }); }, /columns/);
+});
+
+// Excel "Text (Tab delimited)" does not quote names with spaces: a tab file splits on tabs only
+test("tab-separated names may hold spaces", function () {
+	var got = parseControlPoints("Name\tE\tN\tRL\nBM North\t478000.5\t6772000.25\t300.5\nPeg 2 east\t478010\t6772010\t301");
+	assert.deepEqual(got.names, ["BM North", "Peg 2 east"]);
+	assert.deepEqual(Array.from(got.xyz), [478000.5, 6772000.25, 300.5, 478010, 6772010, 301]);
+	assert.deepEqual(parseControlPoints("BM North\t1\t2\t3").names, ["BM North"]);
+});
+
+// An optional last column (a description) left empty on some rows is not a short row
+test("an optional trailing column may be empty on some rows", function () {
+	var got = parseControlPoints("Name,E,N,RL,Desc\nCP1,1,2,3,peg\nCP2,4,5,6,\nCP3,7,8,9");
+	assert.deepEqual(got.names, ["CP1", "CP2", "CP3"]);
+	assert.throws(function () { parseControlPoints("Name,E,N,RL,Desc\nCP1,1,2,3,peg\nCP2,4,5"); }, /line 3/);
+});
+
+// Without a header, thousands separators give every row the same longer shape: refused, not misread
+test("thousands separators are refused without a header too", function () {
+	assert.throws(function () { parseControlPoints("CP1,478,000.1,6,772,000.2,300.3\nCP2,478,010.1,6,772,010.2,301.3"); }, /thousands/);
+	assert.throws(function () { parseControlPoints("CP1 478 000.1 6 772 000.2 300.3"); }, /thousands/);
+	expectRows(parseControlPoints("CP1,12,345.5,300"), [["CP1", 12, 345.5, 300]]);   // four fields: real numbers
 });

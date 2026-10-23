@@ -367,11 +367,13 @@ centroid, so a scan near 0,0 and a grid at UTM magnitude lose nothing. `weights`
 itself, so its own residual can look fine: `looResiduals` shows it, and `worst` names it.
 `looResiduals` is NaN at the model's minimum number of pairs.
 
-`parseControlPoints` reads comma, semicolon, or space / tab separated rows of name, x, y, z;
+`parseControlPoints` reads tab, comma, semicolon or space separated rows of name, x, y, z (a tab
+file splits on tabs only, so names may hold spaces, as Excel's tab-delimited export writes them);
 a header picks the columns (name / id / point / station, x / e / east / easting, y / n / north /
 northing, z / rl / elev / h / height), or `columns: { name, x, y, z }` names them. A BOM, CRLF,
-blank lines, `#` comments, a trailing empty column and double-quoted names are accepted. Every row
-must have as many fields as the first, so a thousands separator (`478,000.1`) is refused, naming
+blank lines, `#` comments, double-quoted names and an optional last column left blank on some rows
+are accepted. A row with more fields than the first is refused, as is (without a header) a 1–3
+digit field followed by a 3-digit one, so a thousands separator (`478,000.1`) is refused, naming
 the line, never read as two numbers. Names match exactly after trimming, case-sensitive.
 
 ### Align to a cloud
