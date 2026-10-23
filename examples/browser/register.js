@@ -186,13 +186,13 @@ export function initRegister(ctx) {
 	}
 	function pickAt(clientX, clientY) {
 		if (mode === "gcp" || !half) {
-			var hit = viewer.pick(clientX, clientY, 8, "moving");
+			var hit = viewer.pick(clientX, clientY, 8, "moving", true);
 			if (!hit) { status("no point of your cloud under the cursor", true); return; }
 			var w = worldOf(ctx.drawnIdx ? ctx.drawnIdx[hit.index] : hit.index);
 			if (mode === "gcp") scanPicks.push({ name: nextName(), xyz: w });
 			else half = w;
 		} else {
-			var h2 = viewer.pick(clientX, clientY, 8, "reference");
+			var h2 = viewer.pick(clientX, clientY, 8, "reference", true);
 			if (!h2) { status("no reference point under the cursor (orange marker: pick its twin on the cyan cloud)", true); return; }
 			var r = ref.cols, j = h2.index;
 			pairs.push({ from: half, to: [r.x[j] + ref.origin.x, r.y[j] + ref.origin.y, r.z[j] + ref.origin.z] });

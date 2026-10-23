@@ -20,6 +20,7 @@ import {
 } from "../../src/index.js";
 import { createViewer } from "./viewer.js";
 import { initRegister } from "./register.js";
+import { createPartsSink } from "./fileParts.js";
 
 // ?drawCap=N lowers the cap, to try a cloud bigger than what is drawn with a small file
 var DRAW_CAP = Math.floor(Number(new URLSearchParams(location.search).get("drawCap"))) || 20000000;
@@ -657,7 +658,8 @@ function editedBatch(a, b) {
 }
 
 // Where the file goes: { sink: { write(bytes, position) }, finish() -> Promise<File|Blob>, abort(), onDisk }.
-// The Save dialog writes straight to disk; without it the bytes are kept in order and downloaded.
+// The Save dialog writes straight to disk; without it the bytes are kept as ordered parts (held
+// once: fileParts.js) and downloaded.
 async function openTarget(name) {
 	if (window.showSaveFilePicker) {
 		var handle = await window.showSaveFilePicker({ suggestedName: name, types: [{ description: "LAS / LAZ point cloud", accept: { "application/octet-stream": [name.slice(name.lastIndexOf("."))] } }] });
@@ -669,14 +671,12 @@ async function openTarget(name) {
 			abort: function () { return writable.abort(); }
 		};
 	}
-	var writes = [], size = 0;
+	var mem = createPartsSink();
 	return {
 		onDisk: false, name: name,
-		sink: { write: function (bytes, position) { writes.push({ at: position, bytes: bytes.slice() }); size = Math.max(size, position + bytes.length); } },
+		sink: mem.sink,
 		finish: async function () {
-			var all = new Uint8Array(size);
-			writes.forEach(function (w) { all.set(w.bytes, w.at); });   // in order: a later header write wins
-			var blob = new Blob([all], { type: "application/octet-stream" });
+			var blob = new Blob(mem.parts(), { type: "application/octet-stream" });
 			var a = document.createElement("a");
 			a.href = URL.createObjectURL(blob);
 			a.download = name;

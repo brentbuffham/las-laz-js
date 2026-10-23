@@ -224,25 +224,38 @@ export function createViewer(container) {
 		/**
 		 * Nearest drawn point to a screen position, within maxPx. layer "moving" (default): the main
 		 * cloud, { chunk, index } or null; "reference": the reference cloud, { index } or null.
+		 * exact (a click that picks a point for registration): every point is tried, not a sample,
+		 * and the screen-nearest point gives way to one within 2 px of it that lies on a surface in
+		 * front (nearer the camera by more than 10 pixel footprints), so a click takes the surface
+		 * the user sees, not one behind it, and stays on the point under the cursor otherwise.
+		 * Without exact (hover), at most ~200k points are tried, so it stays smooth on big clouds.
 		 */
-		pick: function (clientX, clientY, maxPx, layer) {
+		pick: function (clientX, clientY, maxPx, layer, exact) {
 			var rect = renderer.domElement.getBoundingClientRect();
 			var mx = clientX - rect.left, my = clientY - rect.top;
-			var v = new THREE.Vector3(), best = null, bestD = maxPx * maxPx;
+			var v = new THREE.Vector3(), w = new THREE.Vector3(), lim = maxPx * maxPx, hits = [];   // [layer, index, screen d, distance from the camera]
 			var layers = layer === "reference" ? (ref ? [ref] : []) : chunks;
 			for (var c = 0; c < layers.length; c++) {
 				var pos = layers[c].positions;
-				// sample at most ~200k points per pick so hover stays smooth on big clouds
-				var step = Math.max(1, Math.floor(layers[c].count / 200000));
+				var step = exact ? 1 : Math.max(1, Math.floor(layers[c].count / 200000));
 				for (var i = 0; i < layers[c].count; i += step) {
 					v.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).project(camera);
 					if (v.z > 1) continue;
 					var sx = (v.x * 0.5 + 0.5) * rect.width - mx, sy = (-v.y * 0.5 + 0.5) * rect.height - my;
 					var d = sx * sx + sy * sy;
-					if (d < bestD) { bestD = d; best = layer === "reference" ? { index: i } : { chunk: c, index: i }; }
+					if (d < lim) hits.push([c, i, Math.sqrt(d), w.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).distanceTo(camera.position)]);
 				}
 			}
-			return best;
+			if (!hits.length) return null;
+			var nearest = hits[0];
+			hits.forEach(function (h) { if (h[2] < nearest[2]) nearest = h; });
+			var best = nearest;
+			if (exact) {
+				// one pixel's footprint at the nearest point's distance; a surface in front is 10 of them nearer
+				var gap = 10 * nearest[3] * 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / rect.height;
+				hits.forEach(function (h) { if (h[2] <= nearest[2] + 2 && h[3] < nearest[3] - gap && h[3] < best[3]) best = h; });
+			}
+			return layer === "reference" ? { index: best[1] } : { chunk: best[0], index: best[1] };
 		}
 	};
 }
