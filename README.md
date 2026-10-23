@@ -387,13 +387,16 @@ var a = alignCloud(scan, reference, {
 });
 a.transform;   // world to world
 a.fit;         // fitTransform's result for the picks
-a.icp;         // { iterations, converged, rmsBefore, rmsAfter, used, sampled }
+a.icp;         // { iterations, converged, rmsBefore, rmsAfter, used, sampled, constrained }
 ```
 
 Without `icp` it is `fitTransform` on the picks. With it, point-to-plane ICP refines the fit on an
 even sample of the scan: each sample point pairs with its nearest reference point within
 `maxDistance`, whose plane is fitted from its `k` nearest; the increment is rigid (about Z only
-for `"level"`, and `"scale"` keeps the picks' scale). Pick three or more points well apart; ICP
+for `"level"`, and `"scale"` keeps the picks' scale). A direction the geometry barely pins is not
+moved: a flat floor pins only height and tilt, a straight bench everything but the shift along
+strike, so those stay where the picks put them instead of drifting on noise; `constrained` says
+how many of the 6 (4 for level) were pinned. Pick three or more points well apart; ICP
 then needs the picks within about `maxDistance` of right, and `maxDistance` must be larger than
 the reference's point spacing (a sparse cloud with a small `maxDistance` finds few pairs: `used`
 says how many). `converged: false` means it stopped at `iterations` still moving by more than

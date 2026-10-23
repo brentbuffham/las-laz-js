@@ -14,7 +14,9 @@ Register: put a scan onto the mine grid or onto another cloud.
   grid)` pairs them by name and lists the names on one side only.
 - `alignCloud(moving, fixed, { pairs, model, movingOrigin, fixedOrigin, icp })`: the fit from
   picked pairs, then optional point-to-plane ICP on an even sample (normals fitted only where the
-  sample lands, from each point's k nearest); `converged`, RMS before and after, and the overlap.
+  sample lands, from each point's k nearest); `converged`, RMS before and after, the overlap, and
+  `constrained`: directions the geometry barely pins (a floor's in-plane shift, a straight bench's
+  shift along strike) stay at the picks instead of drifting.
 - On real scans with a known answer and 2 cm picking noise: 75.8 mm → 4.6 mm (1 M points, 1.8 s)
   and 32.6 mm → 1.6 mm (34 M points, 9.9 s) largest error over the scan.
 - Demo: a Register tab — align to a reference cloud by picked pairs (with ICP), or GCP from a control

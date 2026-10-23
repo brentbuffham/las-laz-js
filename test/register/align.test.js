@@ -193,11 +193,39 @@ test("bad options are refused", function () {
 
 // A plain floor cannot pin the in-plane shift or the rotation about its normal: ICP must still
 // return a finite transform (the ridge keeps the system solvable), and keep the floor in place
-test("a flat floor: ICP stays finite and keeps the floor", function () {
+// A plain floor pins only height and tilt (3 of 6): ICP must move only those and leave the
+// in-plane shift and the rotation about the normal where the picks put them (no drift)
+test("a flat floor: ICP moves only what the floor pins", function () {
 	var floor = keep(FIXED, function (x, y) { return benchZ(x, y) === 0; });
-	var a = alignCloud(floor, floor, { pairs: { from: [5, 5, 0, 20, 5, 0, 10, 30, 0], to: [5, 5, 0.01, 20, 5, 0.01, 10, 30, 0.01] }, icp: { maxDistance: 0.5 } });
+	var floor2 = keep(SURFACE2, function (x, y) { return benchZ(x, y) === 0; });
+	var picks = { from: [5, 5, 0, 20, 5, 0, 10, 30, 0], to: [5, 5, 0.01, 20, 5, 0.01, 10, 30, 0.01] };
+	var a = alignCloud(floor2, floor, { pairs: picks, icp: { maxDistance: 0.5 } });
 	a.transform.m.concat(a.transform.t).forEach(function (v) { assert.ok(isFinite(v)); });
-	assert.ok(Math.abs(apply(a.transform, 10, 10, 0)[2]) < 0.002, "the floor stays at z 0 (the picks said 1 cm up)");
+	assert.equal(a.icp.constrained, 3);
+	[[10, 10, 0], [5, 35, 0], [24, 2, 0]].forEach(function (p) {
+		var got = apply(a.transform, p[0], p[1], p[2]), picked = apply(a.fit.transform, p[0], p[1], p[2]);
+		assert.ok(Math.abs(got[2]) < 0.002, "the floor comes back to z 0 (the picks said 1 cm up): " + got[2]);
+		assert.ok(Math.hypot(got[0] - picked[0], got[1] - picked[1]) < 0.001, "no slide in plan: " + Math.hypot(got[0] - picked[0], got[1] - picked[1]));
+	});
+});
+
+// A straight bench (no wave along strike) pins 5 of 6: the shift along strike stays at the picks
+test("a straight bench: no slide along strike", function () {
+	function straight(seed, n) {
+		var r = rng(seed), x = [], y = [], z = [];
+		for (var i = 0; i < n; i++) {
+			var px = r() * 60, py = r() * 40, dx = px - 25, pz = dx <= 0 ? 0 : Math.min(15, dx * TAN70);
+			if (i % 4 === 0) { pz = r() * 15; px = 25 + pz / TAN70; }
+			x.push(px + SIGMA * gauss(r)); y.push(py + SIGMA * gauss(r)); z.push(pz + SIGMA * gauss(r));
+		}
+		return { count: n, x: Float64Array.from(x), y: Float64Array.from(y), z: Float64Array.from(z) };
+	}
+	var f = straight(21, 80000), m = straight(22, 80000);
+	var picks = { from: [10, 10, 0, 25 + 7.5 / TAN70, 20, 7.5, 45, 30, 15], to: [10, 10, 0, 25 + 7.5 / TAN70, 20, 7.5, 45, 30, 15] };
+	var a = alignCloud(m, f, { pairs: picks, icp: { maxDistance: 0.5 } });
+	assert.equal(a.icp.constrained, 5);
+	var got = apply(a.transform, 30, 20, 7.5);
+	assert.ok(Math.abs(got[1] - 20) < 0.001, "no slide along strike: " + (got[1] - 20));
 });
 
 // A scanned blasthole: a line of points has no plane, so those reference points give no normal and

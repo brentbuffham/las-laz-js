@@ -22,6 +22,10 @@ import { coordsOf } from "../index/grid.js";
 import { checkK, checkMaxDistance } from "../index/knn.js";
 import { fitAt } from "../ops/normals.js";
 import { thinSelection } from "../ops/select.js";
+import { symmetricEigen } from "./eigen4.js";
+
+// An ICP direction whose eigenvalue is below WEAK x the largest is not moved (see increment)
+var WEAK = 1e-3;
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -35,37 +39,6 @@ function origin(v, name) {
 function whole(v, name, min) {
 	if (!Number.isInteger(v) || v < min) throw bad(name + " must be a whole number >= " + min + ", not " + String(v));
 	return v;
-}
-
-// Solve the symmetric positive (semi)definite n x n system A x = b in place by Cholesky, with a
-// ridge of 1e-12 x trace on the diagonal; false when it is not positive definite even so
-function cholesky(A, b, n, x) {
-	var tr = 0, i, j, k;
-	for (i = 0; i < n; i++) tr += A[i * n + i];
-	for (i = 0; i < n; i++) A[i * n + i] += 1e-12 * tr;   // a zero trace fails the pivot test below
-	for (j = 0; j < n; j++) {
-		var d = A[j * n + j];
-		for (k = 0; k < j; k++) d -= A[j * n + k] * A[j * n + k];
-		if (!(d > 0)) return false;
-		d = Math.sqrt(d);
-		A[j * n + j] = d;
-		for (i = j + 1; i < n; i++) {
-			var s = A[i * n + j];
-			for (k = 0; k < j; k++) s -= A[i * n + k] * A[j * n + k];
-			A[i * n + j] = s / d;
-		}
-	}
-	for (i = 0; i < n; i++) {   // L y = b
-		var y = b[i];
-		for (k = 0; k < i; k++) y -= A[i * n + k] * x[k];
-		x[i] = y / A[i * n + i];
-	}
-	for (i = n - 1; i >= 0; i--) {   // L^T x = y
-		var z = x[i];
-		for (k = i + 1; k < n; k++) z -= A[k * n + i] * x[k];
-		x[i] = z / A[i * n + i];
-	}
-	return true;
 }
 
 // The rotation by the vector w (axis w / |w|, angle |w|), row-major
@@ -91,7 +64,9 @@ function rodrigues(wx, wy, wz) {
  *   cloud, to on the fixed); model "rigid" (default), "level" or "scale"; origins default [0, 0, 0];
  *   icp: maxDistance required, iterations 30, sample 50,000, k 16 (neighbours per fixed normal).
  * @returns {{transform: {m: number[], t: number[]}, fit: object, icp?: {iterations: number, converged: boolean,
- *   rmsBefore: number, rmsAfter: number, used: number, sampled: number}}} world to world
+ *   rmsBefore: number, rmsAfter: number, used: number, sampled: number, constrained: number}}} world to world;
+ *   constrained: how many of the increment's directions (6, or 4 for level) the geometry pinned
+ *   (a floor pins 3: the others stay where the picks put them)
  * @throws {LasError} INVALID_ARGUMENT naming the bad option (fitTransform's errors for the pairs).
  */
 export function alignCloud(moving, fixed, options) {
@@ -161,14 +136,20 @@ export function alignCloud(moving, fixed, options) {
 		}
 		return { used: used, rms: used ? Math.sqrt(ss / used) : NaN };
 	}
-	// The increment from the matched pairs: { R, c, d } (x -> R (x - c) + c + d, fixed-local frame), or null
+	// The increment from the matched pairs: { R, c, d, constrained } (x -> R (x - c) + c + d,
+	// fixed-local frame). The normal equations are solved on their eigenvectors, rotations scaled
+	// by the matched points' RMS radius so all unknowns are lengths; a direction the geometry
+	// barely pins (eigenvalue below WEAK x the largest: a floor's in-plane shift, a straight
+	// bench's shift along strike) is left where the picks put it instead of drifting on noise.
 	function increment(used) {
-		var cx = 0, cy = 0, cz = 0, i;
+		var cx = 0, cy = 0, cz = 0, rr = 0, i;
 		for (i = 0; i < used; i++) { cx += px[i]; cy += py[i]; cz += pz[i]; }
 		cx /= used; cy /= used; cz /= used;
-		var u = level ? 4 : 6, A = new Float64Array(u * u), b = new Float64Array(u), x = new Float64Array(u), a = new Float64Array(6);
+		for (i = 0; i < used; i++) rr += (px[i] - cx) * (px[i] - cx) + (py[i] - cy) * (py[i] - cy) + (pz[i] - cz) * (pz[i] - cz);
+		var rad = Math.sqrt(rr / used) || 1, nr = level ? 1 : 3;
+		var u = level ? 4 : 6, A = new Float64Array(u * u), b = new Float64Array(u), a = new Float64Array(6);
 		for (i = 0; i < used; i++) {
-			var ox = px[i] - cx, oy = py[i] - cy, oz = pz[i] - cz, n0 = nx[i], n1 = ny[i], n2 = nz[i];
+			var ox = (px[i] - cx) / rad, oy = (py[i] - cy) / rad, oz = (pz[i] - cz) / rad, n0 = nx[i], n1 = ny[i], n2 = nz[i];
 			var r = (qx[i] - px[i]) * n0 + (qy[i] - py[i]) * n1 + (qz[i] - pz[i]) * n2;
 			if (level) { a[0] = ox * n1 - oy * n0; a[1] = n0; a[2] = n1; a[3] = n2; }
 			else { a[0] = oy * n2 - oz * n1; a[1] = oz * n0 - ox * n2; a[2] = ox * n1 - oy * n0; a[3] = n0; a[4] = n1; a[5] = n2; }
@@ -178,11 +159,21 @@ export function alignCloud(moving, fixed, options) {
 			}
 		}
 		for (var p2 = 0; p2 < u; p2++) for (var s2 = 0; s2 < p2; s2++) A[s2 * u + p2] = A[p2 * u + s2];
-		if (!cholesky(A, b, u, x)) return null;
+		var e = symmetricEigen(A, u), top = 0, constrained = 0, x = new Float64Array(u), j, k;
+		for (j = 0; j < u; j++) top = Math.max(top, e.values[j]);
+		if (!(top > 0)) return null;
+		for (j = 0; j < u; j++) {
+			if (!(e.values[j] > WEAK * top)) continue;
+			constrained++;
+			var dot = 0;
+			for (k = 0; k < u; k++) dot += e.vectors[j * u + k] * b[k];
+			for (k = 0; k < u; k++) x[k] += (dot / e.values[j]) * e.vectors[j * u + k];
+		}
+		for (k = 0; k < nr; k++) x[k] /= rad;   // back to radians
 		var R = level ? rodrigues(0, 0, x[0]) : rodrigues(x[0], x[1], x[2]);
 		var d = level ? [x[1], x[2], x[3]] : [x[3], x[4], x[5]];
 		var angle = level ? Math.abs(x[0]) : Math.hypot(x[0], x[1], x[2]);
-		return { R: R, c: [cx, cy, cz], d: d, angle: angle, shift: Math.hypot(d[0], d[1], d[2]) };
+		return { R: R, c: [cx, cy, cz], d: d, angle: angle, shift: Math.hypot(d[0], d[1], d[2]), constrained: constrained };
 	}
 	// T <- (the increment, in world) o T: m' = R m, t' = R t + (fo + c + d) - R (fo + c)
 	function compose(inc, T) {
@@ -197,11 +188,12 @@ export function alignCloud(moving, fixed, options) {
 		return { m: m2, t: t2 };
 	}
 
-	var T = fit.transform, cur = match(T), rmsBefore = cur.rms, converged = false, it = 0;
+	var T = fit.transform, cur = match(T), rmsBefore = cur.rms, converged = false, it = 0, constrained = 0;
 	if (cur.used >= need) {
 		while (it < iterations) {
 			var inc = increment(cur.used);
 			if (!inc) break;
+			constrained = inc.constrained;
 			var next = compose(inc, T), m2 = match(next);
 			it++;
 			if (o.onProgress) o.onProgress(it, iterations);
@@ -213,6 +205,6 @@ export function alignCloud(moving, fixed, options) {
 	if (o.onProgress) o.onProgress(it, it);
 	return {
 		transform: T, fit: fit,
-		icp: { iterations: it, converged: converged, rmsBefore: rmsBefore, rmsAfter: cur.rms, used: cur.used, sampled: S }
+		icp: { iterations: it, converged: converged, rmsBefore: rmsBefore, rmsAfter: cur.rms, used: cur.used, sampled: S, constrained: constrained }
 	};
 }

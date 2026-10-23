@@ -10,6 +10,53 @@
 var MAX_SWEEPS = 50;
 
 /**
+ * Every eigenvalue and unit eigenvector of a symmetric n x n matrix, by cyclic Jacobi (ICP's
+ * normal equations, n = 4 or 6). Internal; not exported from the package entry.
+ * @param {Float64Array} N - n * n values, row-major, symmetric (not changed).
+ * @param {number} n
+ * @returns {{values: Float64Array, vectors: Float64Array}} vectors column-major: vector j is
+ *   vectors[j * n .. j * n + n)
+ */
+export function symmetricEigen(N, n) {
+	var A = Float64Array.from(N), V = new Float64Array(n * n), i, j, k;
+	for (i = 0; i < n; i++) V[i * n + i] = 1;
+	var total = 0;
+	for (i = 0; i < n * n; i++) total += A[i] * A[i];
+	for (var sweep = 0; sweep < MAX_SWEEPS; sweep++) {
+		var off = 0;
+		for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) off += A[i * n + j] * A[i * n + j];
+		if (off <= 1e-30 * total) break;
+		for (var p = 0; p < n; p++) {
+			for (var q = p + 1; q < n; q++) {
+				var apq = A[p * n + q];
+				if (apq === 0) continue;
+				var tau = (A[q * n + q] - A[p * n + p]) / (2 * apq);
+				var t = (tau >= 0 ? 1 : -1) / (Math.abs(tau) + Math.sqrt(1 + tau * tau));
+				var c = 1 / Math.sqrt(1 + t * t), s = t * c;
+				for (k = 0; k < n; k++) {
+					var akp = A[k * n + p], akq = A[k * n + q];
+					A[k * n + p] = c * akp - s * akq; A[k * n + q] = s * akp + c * akq;
+				}
+				for (k = 0; k < n; k++) {
+					var apk = A[p * n + k], aqk = A[q * n + k];
+					A[p * n + k] = c * apk - s * aqk; A[q * n + k] = s * apk + c * aqk;
+				}
+				for (k = 0; k < n; k++) {
+					var vkp = V[k * n + p], vkq = V[k * n + q];
+					V[k * n + p] = c * vkp - s * vkq; V[k * n + q] = s * vkp + c * vkq;
+				}
+			}
+		}
+	}
+	var values = new Float64Array(n), vectors = new Float64Array(n * n);
+	for (j = 0; j < n; j++) {
+		values[j] = A[j * n + j];
+		for (k = 0; k < n; k++) vectors[j * n + k] = V[k * n + j];
+	}
+	return { values: values, vectors: vectors };
+}
+
+/**
  * The largest eigenvalue of a symmetric 4 x 4 matrix, with its unit eigenvector in out (sign
  * fixed: the first non-zero component is positive). Internal; not exported from the package entry.
  * @param {Float64Array|number[]} N - 16 values, row-major, symmetric.
