@@ -60,6 +60,7 @@ las.evlrs;    // the same; an EVLR over 64 KiB (waveform data) has bytes: null u
               //   await las.readEvlrBytes(i) — opening never reads it
 las.compressed; las.laz;   // true for LAZ; its compressor, chunk size and items (else null)
 las.classNames;            // { 64: "Bench face", ... } from the Classification Lookup VLR ({} when none)
+las.extraBytes;            // [{ name, column, type, k, size, scale, offset, noData, ... }]: see Extra bytes
 
 var pts = await las.readPoints({
 	fields: ["x", "y", "z", "classification", "red", "green", "blue"],
@@ -621,9 +622,71 @@ the doubles, finds them equal and writes no change. Point formats 0–3 are writ
 - **Errors.** A streaming LAZ writer stops for good at its first error — in a chunk, in a sink
   write or in `close()` — and `writePoints` and `close` keep rejecting with it. Start a new
   writer. After a successful `close()`, both reject (`ABORTED`, "the LAZ writer is closed").
-- **Extra bytes** are not written (the writers have never written them): a file read with
-  extra bytes is written without them. They arrive with 0.9.2.
+- **Extra bytes** are compressed in LASzip's Byte (formats 0–3) or Byte14 (6–8) item: see Extra
+  bytes, below.
 - The streaming writer needs `scale` and `offset` up front, as for LAS.
+
+## Extra bytes
+
+A LAS record can be longer than its point format. The bytes past it are extra bytes, described by
+the Extra Bytes VLR (LAS 1.4: one 192-byte descriptor a field, with a name, a type, an optional
+scale and offset, a no-data value and the field's raw min and max). They are read into columns
+and written from them, LAS and LAZ.
+
+```js
+var las = await openLas(file);
+las.extraBytes;   // [{ name: "echo width", column: "echo width", type: "i16", k: 1, size: 2, at: 34,
+                  //    scale: 0.01, offset: 0, noData: -32768, min: 12, max: 4000, description: "" }, …]
+var p = await las.readPoints({ fields: ["x", "y", "z", "extra"] });   // "extra": every extra column
+p["echo width"];  // Float64Array: raw × scale + offset; the no-data value is NaN
+
+await writeLas(p, { version: "1.4", pointFormat: 6, extraBytes: las.extraBytes });   // keeps them all
+await writeLas(cols, { version: "1.4", pointFormat: 6, extraBytes: [
+	{ name: "facet", type: "u32", description: "las-laz-js findFacets" },
+	{ name: "joint_set", type: "u16" },
+	{ name: "height", type: "i16", scale: 0.01, offset: 300, noData: -32768 }
+] });
+```
+
+**Reading.** Extra columns are read only when asked for, by `column` in `fields` or all of them
+with `"extra"`; the default fields are unchanged. The same names work in `chunks`,
+`readPointsToScratch` and the Worker.
+- A field with neither scale nor offset comes back in its stored type (`Uint8Array` …
+  `Float64Array`; the 64-bit integers as `BigUint64Array` / `BigInt64Array`), its no-data value
+  as stored. A field with a scale or an offset comes back as `Float64Array`, raw × scale + offset,
+  and the no-data value as NaN.
+- The deprecated 2- and 3-value array types (11–30) come back with `k` 2 or 3 values a point,
+  interleaved, as `positions` is.
+- Undocumented bytes (past the descriptors, or every extra byte when there is no VLR) come back as
+  one raw `Uint8Array` column, `extraBytes`, of `size` bytes a point. Nothing is lost.
+- `noData`, `min` and `max` are raw values, as the LAS spec stores them; a 64-bit one past 2^53 is
+  a BigInt.
+- A name that is a standard field (`intensity`) or a reserved one (`count`, `positions`, `bounds`,
+  `stats`, `colours`, `normal`, `extra`, `extraBytes`) is read as `intensity_extra`; a name used
+  twice gets `_2`. `column` says where each went.
+- A VLR that cannot be right (it describes more bytes than the records have, a reserved type, a
+  length that is not whole descriptors, two of them) does not stop a read: all the extra bytes come
+  back as `extraBytes`, and `las.extraBytesProblem` says why (null when the VLR is good).
+
+**Writing.** `extraBytes` on `writeLas` and `createLasWriter`: per field a `name` (ASCII, up to 32
+characters), a `type` (`"u8" "i8" "u16" "i16" "u32" "i32" "u64" "i64" "f32" "f64"`, the codes
+1–10, or `"raw"` with a `size`), and optionally `column` (default the name), `scale`, `offset`,
+`noData` (raw) and `description`. A reader's `extraBytes` can be passed back as they are.
+- Values come from `points[column]`, which must be there (a standard field that is missing is
+  still written as 0). With a scale or offset the writer quantises, raw = round((value − offset) /
+  scale), and writes NaN as `noData`. Unscaled integers must be whole numbers in the type's range
+  (BigInt or Number for 64-bit; a Number past 2^53 is refused, since it is not exact).
+- The writer works out each field's raw min and max (no-data and NaN left out) and stores them.
+- A refused value names the field and the point (`extra bytes field "v": point 2: 256 is outside
+  u8's range (0 to 255)`); every value of a batch is checked before any byte is written, so a
+  refused `writePoints` leaves the writer as it was.
+- The deprecated array types are read, not written: write 2 or 3 scalar fields instead.
+- The VLR is written in any LAS version. It is defined in 1.4; LAStools and CloudCompare read it
+  in 1.0–1.3 too, but PDAL writes extra bytes in 1.4 only, so write 1.4 for files that go to PDAL.
+- Without `extraBytes`, the bytes written are as before.
+
+The point data of a LAZ file with extra bytes is PDAL's, byte for byte (the test fixtures), and
+PDAL reads the fields we write.
 
 ## In a Worker
 

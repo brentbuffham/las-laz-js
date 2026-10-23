@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.2 (2026-10-24)
+
+Extra bytes: the LAS 1.4 Extra Bytes VLR, read and written, LAS and LAZ.
+
+- `las.extraBytes` lists a file's extra fields (name, column, type, k, size, scale, offset, noData,
+  min, max, description); `readPoints`, `chunks`, `readPointsToScratch` and the Worker read them
+  by column, or all with `"extra"`. Types 1–10 come back in their stored type (64-bit as BigInt
+  arrays), scaled fields as Float64 with no-data NaN, the deprecated array types with k values a
+  point, undocumented bytes as one raw `extraBytes` column. A bad VLR never stops a read: the
+  bytes come back raw and `las.extraBytesProblem` says why. Default fields are unchanged.
+- `writeLas` / `createLasWriter` take `extraBytes`: fields of types 1–10 or raw, with scale,
+  offset, no-data and description; the writer stores each field's raw min and max. A reader's
+  `extraBytes` can be passed back, so a read → save keeps the records byte for byte. Values are
+  checked before any byte of a batch is written. Without `extraBytes`, nothing changes.
+- `parseExtraBytes(vlrs, header)` is exported.
+- LAZ: the PDAL fixtures with extra bytes (f3x, f7x) now go through the writer, byte for byte.
+- Demo: the File tab lists the extra bytes; reads keep them through edits, hover shows them, and
+  both saves write them; **Save with facet / set** writes `facet` (u32) and `joint_set` (u16).
+
 ## 0.9.1 (2026-10-24)
 
 Normals by range, for workers (trimesh-build-js 0.3.0).

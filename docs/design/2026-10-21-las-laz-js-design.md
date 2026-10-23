@@ -176,8 +176,9 @@ Roadmap revised 2026-10-23 (Brent): categorise first (small), registration befor
   polygon on its plane (traced from an in-plane grid, no triangulation).
 - **0.9.1 — normals by range:** `pointNormals` takes `start` / `end`, so a caller can split the
   normals across workers (trimesh-build-js 0.3.0).
-- **0.9.2 — extra bytes:** read and write the LAS 1.4 Extra Bytes VLR, LAS and LAZ, so any file's
-  extra bytes survive a save and the facet / set columns can be written back.
+- **0.9.2 — extra bytes** (spec `2026-10-24-extra-bytes-0.9.2-design.md`): read and write the LAS
+  1.4 Extra Bytes VLR, LAS and LAZ, so any file's extra bytes survive a save and the facet / set
+  columns can be written back.
 - **0.10.0 — level of detail:** large clouds split into tiles held in binary scratch (memory or a
   temp disk store, `ScratchBinaryFile`) and loaded by view, for Kirra #129.
 
