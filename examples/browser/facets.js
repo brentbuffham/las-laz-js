@@ -34,6 +34,31 @@ export function setRgb(id) {
 	function f(k) { var t = (k + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(t - 3, 9 - t, 1)))); }
 	return [f(0), f(8), f(4)];
 }
+// The AutoCAD Colour Index palette (R12 DXF has no true colour): 1-9 fixed, 10-249 24 hues x 5
+// levels x full / half saturation, 250-255 greys
+var ACI = (function () {
+	var t = [null, [255, 0, 0], [255, 255, 0], [0, 255, 0], [0, 255, 255], [0, 0, 255], [255, 0, 255], [255, 255, 255], [128, 128, 128], [192, 192, 192]];
+	var levels = [1, 0.65, 0.5, 0.3, 0.15];
+	function hsv(h, sat, val) {
+		var c = val * sat, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = val - c, r = 0, g = 0, b = 0;
+		if (h < 60) { r = c; g = x; } else if (h < 120) { r = x; g = c; } else if (h < 180) { g = c; b = x; } else if (h < 240) { g = x; b = c; } else if (h < 300) { r = x; b = c; } else { r = c; b = x; }
+		return [Math.round(255 * (r + m)), Math.round(255 * (g + m)), Math.round(255 * (b + m))];
+	}
+	for (var i = 10; i <= 249; i++) { var h = Math.floor((i - 10) / 10) * 15, r = (i - 10) % 10; t[i] = hsv(h, r % 2 ? 0.5 : 1, levels[r >> 1]); }
+	[51, 91, 132, 173, 214, 255].forEach(function (g, k) { t[250 + k] = [g, g, g]; });
+	return t;
+})();
+// The ACI nearest an RGB colour, skipping 7 (white / black: it flips with the CAD background) and
+// any index in used (so two sets never share a layer colour)
+export function aciOf(rgb, used) {
+	var best = 1, bd = Infinity;
+	for (var i = 1; i <= 255; i++) {
+		if (i === 7 || (used && used[i])) continue;
+		var c = ACI[i], d = (c[0] - rgb[0]) * (c[0] - rgb[0]) + (c[1] - rgb[1]) * (c[1] - rgb[1]) + (c[2] - rgb[2]) * (c[2] - rgb[2]);
+		if (d < bd) { bd = d; best = i; }
+	}
+	return best;
+}
 export function setCss(id) { var c = setRgb(id); return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
 
 /**
@@ -185,13 +210,16 @@ export function initFacets(ctx) {
 	}
 
 	// The facet outlines as an R12 DXF: a closed 3D POLYLINE each (the spec's dummy point, VERTEX
-	// flag 32), a layer per joint set (SET_1 …, NO_SET), world coordinates, $EXTMIN / $EXTMAX set
+	// flag 32), a layer per joint set (SET_1 …, NO_SET) coloured as the demo colours the set (the
+	// nearest ACI) with the polylines BYLAYER, world coordinates, $EXTMIN / $EXTMAX set
 	function facetsDxf() {
 		var o = ctx.origin, fam = res.sets ? res.sets.family : null, out = [], lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
 		function g(code, value) { out.push(String(code), String(value)); }
-		var layers = {}, ents = [];
+		var layers = {}, ents = [], aciUsed = { 8: true }, aciOfSet = {};
+		// each set its nearest unused ACI, lowest set first (NO_SET keeps 8, grey)
+		(res.sets ? res.sets.families : []).forEach(function (fm) { var a = aciOf(setRgb(fm.id), aciUsed); aciUsed[a] = true; aciOfSet[fm.id] = a; });
 		res.f.facets.forEach(function (f, i) {
-			var set = fam ? fam[i] : 0, layer = set ? "SET_" + set : "NO_SET", colour = set ? ((set - 1) % 6) + 1 : 8;
+			var set = fam ? fam[i] : 0, layer = set ? "SET_" + set : "NO_SET", colour = set ? aciOfSet[set] : 8;   // the demo's set colour, distinct per set
 			layers[layer] = colour;
 			var v = [];
 			for (var k = 0; k < f.outline.length; k += 3) {
@@ -212,7 +240,7 @@ export function initFacets(ctx) {
 		g(0, "ENDTAB"); g(0, "ENDSEC");
 		g(0, "SECTION"); g(2, "ENTITIES");
 		ents.forEach(function (e) {
-			g(0, "POLYLINE"); g(8, e.layer); g(62, e.colour); g(66, 1); g(10, 0); g(20, 0); g(30, 0); g(70, 9);   // 8 = 3D, 1 = closed
+			g(0, "POLYLINE"); g(8, e.layer); g(62, 256); g(66, 1);   // 256 = BYLAYER: the set's layer colour g(10, 0); g(20, 0); g(30, 0); g(70, 9);   // 8 = 3D, 1 = closed
 			e.v.forEach(function (p) { g(0, "VERTEX"); g(8, e.layer); g(10, p[0].toFixed(3)); g(20, p[1].toFixed(3)); g(30, p[2].toFixed(3)); g(70, 32); });
 			g(0, "SEQEND"); g(8, e.layer);
 		});
