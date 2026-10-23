@@ -17,7 +17,31 @@ import { largestEigen4 } from "./eigen4.js";
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
 /** Minimum pairs per model. */
-export var MIN_PAIRS = Object.freeze({ rigid: 3, scale: 3 });
+export var MIN_PAIRS = Object.freeze({ rigid: 3, level: 2, scale: 3 });
+
+// "level": rotation about Z + shift, exact in 2D (an IMU-levelled scan): theta from the centred
+// XY sums, t_z the mean height difference. null when every pair has one XY.
+function solveLevel(from, to, w, skip, ax, ay, az, bx, by, bz) {
+	var num = 0, den = 0, spread = 0, big = 0;
+	for (var i = 0; i < w.length; i++) {
+		if (i === skip || !w[i]) continue;
+		var px = from[3 * i] - ax, py = from[3 * i + 1] - ay, pz = from[3 * i + 2] - az;
+		var qx = to[3 * i] - bx, qy = to[3 * i + 1] - by;
+		num += w[i] * (px * qy - py * qx);
+		den += w[i] * (px * qx + py * qy);
+		spread += w[i] * (px * px + py * py);
+		big = Math.max(big, Math.abs(px), Math.abs(py), Math.abs(pz));
+	}
+	if (!(spread > 1e-24 * big * big)) return null;
+	var theta = Math.atan2(num, den), c = Math.cos(theta), s = Math.sin(theta);
+	var deg = (theta * 180) / Math.PI;
+	if (deg <= -180) deg += 360;
+	return {
+		m: [c, -s + 0, 0, s, c, 0, 0, 0, 1],
+		t: [bx - (c * ax - s * ay) + 0, by - (s * ax + c * ay) + 0, bz - az + 0],
+		scale: 1, rotateZ: deg + 0
+	};
+}
 
 function isNumberList(a) {
 	return Array.isArray(a) || (ArrayBuffer.isView(a) && !(a instanceof DataView) && !(a instanceof BigInt64Array) && !(a instanceof BigUint64Array));
@@ -69,6 +93,7 @@ export function solve(from, to, w, model, skip) {
 	}
 	if (!(W > 0)) return null;
 	ax /= W; ay /= W; az /= W; bx /= W; by /= W; bz /= W;
+	if (model === "level") return solveLevel(from, to, w, skip, ax, ay, az, bx, by, bz);
 	// S = sum w a' b'^T and the from set's covariance, on centred offsets
 	var Sxx = 0, Sxy = 0, Sxz = 0, Syx = 0, Syy = 0, Syz = 0, Szx = 0, Szy = 0, Szz = 0, aa = 0;
 	var C = new Float64Array(6);
@@ -133,25 +158,46 @@ export function fitTransform(from, to, options) {
 	var o = options === undefined ? {} : options;
 	if (o === null || typeof o !== "object") throw bad("options must be an object");
 	var model = o.model === undefined ? "rigid" : o.model;
-	if (!Object.prototype.hasOwnProperty.call(MIN_PAIRS, model)) throw bad("model must be \"rigid\" or \"scale\" (got " + JSON.stringify(model) + ")");
+	if (!Object.prototype.hasOwnProperty.call(MIN_PAIRS, model)) throw bad("model must be \"rigid\", \"level\" or \"scale\" (got " + JSON.stringify(model) + ")");
 	var w = checkPairs(from, to, o.weights), n = w.length;
 	if (n < MIN_PAIRS[model]) throw bad("model " + model + " needs at least " + MIN_PAIRS[model] + " pairs (got " + n + ")");
 	var f = solve(from, to, w, model, -1);
-	if (!f) throw bad("the pairs do not fix a " + model + " transform: their from points lie on one line (or coincide), so the rotation about it is undetermined");
-	var m = f.m, t = f.t;
+	if (!f) {
+		throw bad(model === "level" ? "the pairs do not fix a level transform: their from points share one XY, so the rotation about Z is undetermined"
+			: "the pairs do not fix a " + model + " transform: their from points lie on one line (or coincide), so the rotation about it is undetermined");
+	}
 	var residuals = new Float64Array(n), dH = new Float64Array(n), dZ = new Float64Array(n), sum = 0, worst = 0;
+	var r = new Float64Array(3);
 	for (var i = 0; i < n; i++) {
-		var x = from[3 * i], y = from[3 * i + 1], z = from[3 * i + 2];
-		var rx = m[0] * x + m[1] * y + m[2] * z + t[0] - to[3 * i];
-		var ry = m[3] * x + m[4] * y + m[5] * z + t[1] - to[3 * i + 1];
-		var rz = m[6] * x + m[7] * y + m[8] * z + t[2] - to[3 * i + 2];
-		dH[i] = Math.hypot(rx, ry); dZ[i] = rz; residuals[i] = Math.hypot(dH[i], rz);
+		residualOf(f, from, to, i, r);
+		dH[i] = Math.hypot(r[0], r[1]); dZ[i] = r[2]; residuals[i] = Math.hypot(dH[i], r[2]);
 		sum += residuals[i] * residuals[i];
 		if (residuals[i] > residuals[worst]) worst = i;
 	}
+	// leave-one-out: pair i's residual under the fit made without it (a bad pair drags the fit
+	// toward itself, so its plain residual can hide it); NaN at the model's minimum or when the
+	// rest no longer fix the model
+	var loo = new Float64Array(n).fill(NaN), looWorst = -1;
+	if (n > MIN_PAIRS[model]) {
+		for (i = 0; i < n; i++) {
+			var g = solve(from, to, w, model, i);
+			if (!g) continue;
+			residualOf(g, from, to, i, r);
+			loo[i] = Math.hypot(r[0], r[1], r[2]);
+			if (looWorst < 0 || loo[i] > loo[looWorst]) looWorst = i;
+		}
+	}
 	return {
-		transform: { m: m, t: t }, model: model, scale: f.scale, rotateZ: f.rotateZ,
-		residuals: residuals, dH: dH, dZ: dZ, looResiduals: new Float64Array(n).fill(NaN),
-		rms: Math.sqrt(sum / n), worst: worst
+		transform: { m: f.m, t: f.t }, model: model, scale: f.scale, rotateZ: f.rotateZ,
+		residuals: residuals, dH: dH, dZ: dZ, looResiduals: loo,
+		rms: Math.sqrt(sum / n), worst: looWorst >= 0 ? looWorst : worst
 	};
+}
+
+// T(from_i) - to_i into r
+function residualOf(T, from, to, i, r) {
+	var m = T.m, t = T.t, x = from[3 * i], y = from[3 * i + 1], z = from[3 * i + 2];
+	r[0] = m[0] * x + m[1] * y + m[2] * z + t[0] - to[3 * i];
+	r[1] = m[3] * x + m[4] * y + m[5] * z + t[1] - to[3 * i + 1];
+	r[2] = m[6] * x + m[7] * y + m[8] * z + t[2] - to[3 * i + 2];
 }

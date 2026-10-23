@@ -199,3 +199,75 @@ test("largestEigen4", function () {
 		assert.ok(first > 0, "sign fixed");
 	}
 });
+
+import { makeTransform } from "../../src/ops/transform.js";
+
+function normDeg(d) { var a = ((d % 360) + 360) % 360; return a > 180 ? a - 360 : a; }
+
+test("level recovers rotation about Z and a shift", function () {
+	var r = rng(10);
+	for (var trial = 0; trial < 100; trial++) {
+		var n = [2, 5, 20][trial % 3], from = points(r, n, 100), theta = (r() - 0.5) * 720;
+		var T = makeTransform({ rotateZ: theta, shift: [(r() - 0.5) * 1e4, (r() - 0.5) * 1e4, (r() - 0.5) * 100] });
+		var f = fitTransform(from, applyT(T, from), { model: "level" });
+		close(f.transform.m, T.m, 1e-9, "m");
+		close(f.transform.t, T.t, 1e-8, "t");
+		assert.ok(Math.abs(normDeg(f.rotateZ - normDeg(theta))) < 1e-9, "rotateZ " + f.rotateZ + " vs " + normDeg(theta));
+		assert.ok(f.rotateZ > -180 && f.rotateZ <= 180);
+		var m = f.transform.m;
+		assert.ok(m[2] === 0 && m[5] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1, "no tilt terms");
+		assert.equal(f.scale, 1);
+	}
+});
+
+test("level on tilted data stays level", function () {
+	var r = rng(11), from = points(r, 10, 50);
+	var tilt = quatMatrix(Math.cos(Math.PI / 72), Math.sin(Math.PI / 72), 0, 0);   // 5 degrees about x
+	var f = fitTransform(from, applyT({ m: tilt, t: [0, 0, 0] }, from), { model: "level" });
+	var m = f.transform.m;
+	assert.ok(m[2] === 0 && m[5] === 0 && m[6] === 0 && m[7] === 0 && m[8] === 1);
+	assert.ok(f.dZ.some(function (v) { return Math.abs(v) > 0.1; }), "the misfit shows in dZ");
+});
+
+test("level degenerate", function () {
+	assert.throws(function () { fitTransform([0, 0, 0], [0, 0, 0], { model: "level" }); }, /at least 2/);
+	assert.throws(function () { fitTransform([5, 5, 0, 5, 5, 1, 5, 5, 2], [0, 0, 0, 0, 0, 1, 0, 0, 2], { model: "level" }); }, /XY/);
+});
+
+test("leave-one-out finds the bad pair", function () {
+	var r = rng(12), from = points(r, 6, 50), T = { m: randomRotation(r), t: [3, 4, 5] }, to = applyT(T, from);
+	to[3 * 3] += 0.5;
+	var f = fitTransform(from, to);
+	assert.equal(f.worst, 3);
+	assert.ok(f.looResiduals.every(function (v) { return isFinite(v); }));
+	// pair 3 far from a tight cluster and heavily weighted (a point the surveyor trusts): it drags
+	// the fit onto itself, so its own residual is not the largest
+	var lever = new Float64Array(18);
+	for (var i = 0; i < 6; i++) for (var k = 0; k < 3; k++) lever[i * 3 + k] = (r() - 0.5) * 2;
+	lever[9] = 100; lever[10] = 0; lever[11] = 0;
+	var lt = applyT(T, lever); lt[10] += 0.5;
+	var g = fitTransform(lever, lt, { weights: [1, 1, 1, 20, 1, 1] }), plainWorst = 0;
+	for (i = 1; i < 6; i++) if (g.residuals[i] > g.residuals[plainWorst]) plainWorst = i;
+	assert.notEqual(plainWorst, 3, "the case drags the fit (precondition)");
+	assert.equal(g.worst, 3);
+	assert.ok(Math.abs(g.looResiduals[3] - 0.5) < 1e-6);
+});
+
+test("leave-one-out at the minimum is NaN", function () {
+	var r = rng(13), from = points(r, 3, 20), to = applyT({ m: randomRotation(r), t: [0, 0, 0] }, from);
+	to[0] += 0.2;
+	var f = fitTransform(from, to);
+	assert.ok(f.looResiduals.every(function (v) { return v !== v; }));
+	var plainWorst = 0;
+	for (var i = 1; i < 3; i++) if (f.residuals[i] > f.residuals[plainWorst]) plainWorst = i;
+	assert.equal(f.worst, plainWorst);
+	var lv = fitTransform([0, 0, 0, 10, 0, 0], [0, 0, 0, 0, 10, 0], { model: "level" });
+	assert.ok(lv.looResiduals.every(function (v) { return v !== v; }));
+});
+
+test("a refit that turns degenerate gives NaN for that pair", function () {
+	var from = [0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 5, 0];   // three on the x axis, one off it
+	var f = fitTransform(from, from.slice());
+	assert.ok(f.looResiduals[3] !== f.looResiduals[3], "without pair 3 the rest are one line");
+	for (var i = 0; i < 3; i++) assert.ok(isFinite(f.looResiduals[i]));
+});
