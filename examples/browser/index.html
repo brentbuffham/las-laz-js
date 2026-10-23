@@ -32,6 +32,7 @@
 				<p class="muted">Your file never leaves your browser. It is read locally, in a Worker, a window at a time.</p>
 			</div>
 			<div class="viewer-hud" id="hud"></div>
+			<div class="viewer-legend hidden" id="classLegend"></div>
 		</section>
 
 		<aside class="panel" id="panel">
@@ -119,6 +120,19 @@
 					<button class="button" id="keepButton" disabled>Keep selected</button>
 					<button class="button" id="deleteButton" disabled>Delete selected</button>
 					<button class="button" id="splitButton" disabled title="Both parts stay on screen, the outside part dimmed grey">Split</button>
+				</div>
+				<h3>Categorise</h3>
+				<p class="muted small">Gives the selected points a LAS class. Points that already have a class (anything but 0 or 1) keep it unless Overwrite is ticked. Your own classes (64–255) are saved by name in the file.</p>
+				<label class="field">Class <select id="classSelect"></select></label>
+				<label class="field">Overwrite existing classes <input type="checkbox" id="overwriteClasses" title="Points that already have a class keep it unless this is ticked"></label>
+				<div class="row wrap">
+					<button class="button" id="classifyButton" disabled>Classify selected</button>
+					<button class="button" id="undoClassifyButton" disabled title="The classes from before the last Classify">Undo classify</button>
+				</div>
+				<div class="row wrap">
+					<label>Code <input type="number" id="newClassCode" min="64" max="255" step="1" value="64" title="User classes are 64-255"></label>
+					<label>Name <input type="text" id="newClassName" maxlength="15" placeholder="e.g. Bench face" title="Up to 15 characters (LAS stores 15)"></label>
+					<button class="button" id="addClassButton" disabled>Add class</button>
 				</div>
 				<h3>Transform</h3>
 				<div class="form-grid">

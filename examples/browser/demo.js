@@ -4,8 +4,9 @@
 // (las-laz-js/worker; LAZ chunks decode on every core) with a progress
 // bar, then show it once in a Three.js viewer. Colour changes recolour the
 // points kept in memory — only the read filters read the file again.
-// The Edit tab selects and edits those points (src/ops) and can crop the
-// file on read with the polygon drawn on the viewer.
+// The Edit tab selects and edits those points (src/ops), classifies them
+// (existing classes kept unless Overwrite) and can crop the file on read
+// with the polygon drawn on the viewer.
 // Imports the library from ../../src so it always runs current code.
 //==========================================================
 
@@ -14,7 +15,7 @@ import {
 	selectPolygon, selectBox, selectClasses, selectSparse, selectOutliers, unionSelections,
 	estimateNoise, denoisePoints, pointNormals,
 	keepPoints, removePoints, splitPoints, mergePoints, interleavePositions, thinSelection,
-	makeTransform, transformPoints
+	makeTransform, transformPoints, classifyPoints, ASPRS_CLASSES
 } from "../../src/index.js";
 import { createViewer } from "./viewer.js";
 
@@ -61,6 +62,8 @@ async function openFile(f) {
 	var h = info.header;
 	origin = { x: (h.bounds.minX + h.bounds.maxX) / 2, y: (h.bounds.minY + h.bounds.maxY) / 2, z: (h.bounds.minZ + h.bounds.maxZ) / 2 };
 	showHeader();
+	classNames = Object.assign({}, info.classNames || {});
+	refreshClassSelect();
 	var hasRgb = !!POINT_FORMATS[h.pointFormat].fields.red;
 	$("colourBy").value = hasRgb ? "rgb" : "elevation";
 	$("readButton").disabled = false;
@@ -134,6 +137,9 @@ var ext = null;        // the cloud's local extent { minX … maxZ, midZ }
 var drawnIdx = null, drawn = null;
 var roughness = null;      // the drawn points' residuals for the Roughness colour, made on demand
 var beforeSmooth = null;   // the cloud before the last Smooth, for Undo smooth
+var beforeClassify = null; // the cloud before the last Classify, for Undo classify
+var classNames = {};       // user / file class names, { code: name }: the file's lookup VLR plus Add class
+var classCounts = {};      // points per class in the cloud (showStats), for the legend
 
 // Decode out of sight (the library's worker, its chunks on every core), show progress, then
 // build the cloud once. Only the read filters (classes, returns, bounds, max points, dedupe)
@@ -165,7 +171,7 @@ async function read(crop, note) {
 	});
 	try {
 		cloud = lastRead = await readJob.promise;
-		beforeSmooth = null;
+		beforeSmooth = null; beforeClassify = null;
 		readCrop = crop || null;
 		edited = false; transformed = false; selection = null; splitAt = -1;
 		var secs = (performance.now() - t0) / 1000;
@@ -250,6 +256,7 @@ function recolour() {
 	if (!cloud || !cloud.count) return;
 	var t0 = performance.now();
 	viewer.setColours(colours());
+	showLegend();
 	setStatus("Recoloured " + fmt(Math.min(cloud.count, DRAW_CAP)) + " points in " + since(t0) + " ms");
 }
 
@@ -281,7 +288,9 @@ function showStats() {
 	row(t, edited ? "Points (edited)" : "Points read", fmt(n));
 	row(t, "Z range", n ? (minZ + origin.z).toFixed(3) + " … " + (maxZ + origin.z).toFixed(3) : "—");
 	var keys = function (o) { return Object.keys(o).sort(function (a, b) { return a - b; }); };
-	table("classTable", ["Class", "Points", "Share"], keys(classes).map(function (k) { return [k, fmt(classes[k]), share(classes[k])]; }));
+	table("classTable", ["Class", "Name", "Points", "Share"], keys(classes).map(function (k) { return [k, className(k), fmt(classes[k]), share(classes[k])]; }));
+	classCounts = classes;
+	showLegend();
 	table("returnTable", ["Return", "Points", "Share"], keys(returns).map(function (k) { return [k, fmt(returns[k]), share(returns[k])]; }));
 	// 16 equal bins over the intensities actually present
 	var lo = 0, hi = 65535;
@@ -440,6 +449,7 @@ function edit(name, make) {
 	edited = true;
 	// Undo smooth goes back exactly one Smooth; any other edit ends that
 	beforeSmooth = null; $("undoSmoothButton").disabled = true;
+	beforeClassify = null; $("undoClassifyButton").disabled = true;
 	if (out.transformed) transformed = true;
 	if (!out.keep) { selection = null; splitAt = -1; }
 	if (out.splitAt !== undefined) splitAt = out.splitAt;
@@ -487,6 +497,80 @@ function undoSmooth() {
 	beforeSmooth = null;
 	$("undoSmoothButton").disabled = true;
 }
+
+// --- edit: categorise --------------------------------------------------------
+// A code's name: the file's / the user's, else the ASPRS one, else reserved (23-63) or user (64-255)
+function className(k) { return classNames[k] || ASPRS_CLASSES[k] || (k >= 64 ? "user " + k : "reserved"); }
+// The colour colourize gives a code (the table, or the stable colour of a code without one)
+function classRgb(k) { return colourize({ count: 1, classification: Uint8Array.of(k) }, { by: "classification" }); }
+
+// The class picker: the ASPRS classes, then the file's and the user's names; keeps the choice
+function refreshClassSelect(pick) {
+	var sel = $("classSelect"), keep = pick !== undefined ? String(pick) : sel.value;
+	sel.innerHTML = "";
+	var codes = Object.keys(ASPRS_CLASSES).map(Number);
+	Object.keys(classNames).map(Number).forEach(function (k) { if (codes.indexOf(k) < 0) codes.push(k); });
+	codes.sort(function (a, b) { return a - b; }).forEach(function (k) {
+		var o = document.createElement("option");
+		o.value = String(k);
+		o.textContent = k + " — " + className(k);
+		sel.appendChild(o);
+	});
+	sel.value = keep && sel.querySelector('option[value="' + keep + '"]') ? keep : "2";
+	$("newClassCode").value = String(nextFreeCode());
+}
+function nextFreeCode() {
+	for (var k = 64; k <= 255; k++) if (!classNames[k]) return k;
+	return 255;
+}
+function addClass() {
+	var code = Number($("newClassCode").value), name = $("newClassName").value;
+	if (!Number.isInteger(code) || code < 64 || code > 255) { setStatus("Add class: the code must be a whole number 64-255 (user classes)", true); return; }
+	if (classNames[code]) { setStatus("Add class: " + code + " is already \"" + classNames[code] + "\"", true); return; }
+	if (!/^[\x20-\x7E]{1,15}$/.test(name)) { setStatus("Add class: the name must be 1 to 15 plain characters (LAS stores 15, ASCII)", true); return; }
+	classNames[code] = name;
+	$("newClassName").value = "";
+	refreshClassSelect(code);
+	if (cloud) showStats();
+	setStatus("Added class " + code + " — " + name + "; it is saved by name when you write the file");
+}
+function classify() {
+	var prior = cloud, code = Number($("classSelect").value), overwrite = $("overwriteClasses").checked;
+	var colourWas = $("colourBy").value;
+	$("colourBy").value = "classification";   // edit() redraws in it, so the message below stays on screen
+	edit("Classify", function () {
+		var sel = needSelection(), r = classifyPoints(cloud, sel, code, { overwrite: overwrite });
+		var already = 0;
+		for (var j = 0; j < sel.length; j++) if (cloud.classification[sel[j]] === code) already++;
+		var kept = sel.length - r.changed - already;
+		return { cloud: r.columns, keep: true, note: " · " + fmt(r.changed) + " points → " + code + " " + className(code) + (kept ? ", " + fmt(kept) + " kept their class (tick Overwrite to change them)" : "") + (already ? ", " + fmt(already) + " were already " + code : "") };
+	});
+	if (cloud !== prior) { beforeClassify = prior; $("undoClassifyButton").disabled = false; }
+	else $("colourBy").value = colourWas;   // refused: nothing changed
+}
+function undoClassify() {
+	if (!beforeClassify) return;
+	var prior = beforeClassify;
+	edit("Undo classify", function () { return { cloud: prior, keep: true }; });
+	beforeClassify = null;
+	$("undoClassifyButton").disabled = true;
+}
+// The classes present, with colour, name and count, while colouring by classification
+function showLegend() {
+	var el = $("classLegend");
+	if (!cloud || $("colourBy").value !== "classification") { el.classList.add("hidden"); return; }
+	el.innerHTML = "";
+	Object.keys(classCounts).map(Number).sort(function (a, b) { return a - b; }).forEach(function (k) {
+		var c = classRgb(k), line = document.createElement("div"), sw = document.createElement("span"), label = document.createElement("span"), n = document.createElement("span");
+		sw.className = "swatch"; sw.style.background = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+		label.textContent = k + " " + className(k);
+		n.className = "count"; n.textContent = fmt(classCounts[k]);
+		line.append(sw, label, n);
+		el.appendChild(line);
+	});
+	el.classList.remove("hidden");
+}
+
 function keepSelected() { edit("Keep selected", function () { return { cloud: keepPoints(cloud, needSelection()) }; }); }
 function deleteSelected() { edit("Delete selected", function () { return { cloud: removePoints(cloud, needSelection()) }; }); }
 // Both parts stay on screen, one after the other: the inside part in its colours, the outside dimmed
@@ -518,8 +602,9 @@ function reset() {
 	if (!lastRead) return;
 	var before = cloud.count, t0 = performance.now();
 	cloud = lastRead;
-	edited = false; transformed = false; selection = null; splitAt = -1; beforeSmooth = null;
+	edited = false; transformed = false; selection = null; splitAt = -1; beforeSmooth = null; beforeClassify = null;
 	$("undoSmoothButton").disabled = true;
+	$("undoClassifyButton").disabled = true;
 	display(false);
 	showStats();
 	showSelection();
@@ -529,6 +614,7 @@ function reset() {
 function editEnabled(on) {
 	document.querySelectorAll("#tab-edit button").forEach(function (b) { b.disabled = !on; });
 	$("undoSmoothButton").disabled = !on || !beforeSmooth;
+	$("undoClassifyButton").disabled = !on || !beforeClassify;
 	if (!on && drawing) setDrawing(false);
 }
 
@@ -578,7 +664,8 @@ async function save() {
 		if (info.crs.wkt || (info.crs.epsg && wf < 6)) crs = { wkt: info.crs.wkt, epsg: info.crs.epsg };
 		else if (info.crs.epsg) note = " The source has only an EPSG code, which point formats 6–10 cannot carry (they need WKT), so no coordinate system was written.";
 		var t0 = performance.now();
-		var blob = await writeLas(cols, Object.assign({ version: $("writeVersion").value, pointFormat: wf, crs: crs, compress: compress, software: "las-laz-js demo", as: "blob" }, where));
+		var names = Object.keys(classNames).length ? classNames : undefined;   // the lookup VLR: the file's names and the classes added
+		var blob = await writeLas(cols, Object.assign({ version: $("writeVersion").value, pointFormat: wf, crs: crs, classNames: names, compress: compress, software: "las-laz-js demo", as: "blob" }, where));
 		var ms = since(t0);
 		var check = await (await openLas(blob)).readPoints({ fields: ["x"] });
 		var ok = check.count === cols.count;
@@ -594,7 +681,8 @@ async function save() {
 		$("writeResult").textContent = "Saved " + name + " (" + fmt(blob.size) + " bytes, " + fmt(cols.count) + " points" + what + ", written in " + ms + " ms). Round trip: " + (ok ? "OK, same count read back." : "MISMATCH (" + fmt(check.count) + " read back)") + note;
 		$("writeResult").className = ok ? "muted small" : "error small";
 	} catch (err) {
-		$("writeResult").textContent = err.message;
+		var hint = /point formats 0-5 hold classes 0-31/.test(err.message) ? " Choose LAS 1.4 and point format 6 (or 7 / 8 to keep RGB)." : "";
+		$("writeResult").textContent = err.message + hint;
 		$("writeResult").className = "error small";
 	}
 }
@@ -662,6 +750,9 @@ $("keepButton").addEventListener("click", keepSelected);
 $("deleteButton").addEventListener("click", deleteSelected);
 $("splitButton").addEventListener("click", split);
 $("transformButton").addEventListener("click", transform);
+$("classifyButton").addEventListener("click", classify);
+$("undoClassifyButton").addEventListener("click", undoClassify);
+$("addClassButton").addEventListener("click", addClass);
 $("cropReadButton").addEventListener("click", cropRead);
 $("resetButton").addEventListener("click", reset);
 // The read filters need a new read: say so rather than re-reading on every keystroke
@@ -670,6 +761,7 @@ $("resetButton").addEventListener("click", reset);
 });
 $("pointSize").addEventListener("input", function () { viewer.setPointSize(Number($("pointSize").value) || 2); });
 $("version").textContent = "v" + VERSION;
+refreshClassSelect();
 $("drawCapText").textContent = fmt(DRAW_CAP);
 $("writeCapText").textContent = fmt(WRITE_CAP);
 window.addEventListener("dragover", function (e) { e.preventDefault(); $("dropOverlay").classList.remove("hidden"); });

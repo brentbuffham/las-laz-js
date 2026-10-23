@@ -140,6 +140,21 @@ code, pre { font-family: var(--mono); font-size: 12px; }
 }
 .viewer-hud:empty { display: none; }
 
+.viewer-legend {
+	position: absolute;
+	left: 10px;
+	top: 10px;
+	max-height: calc(100% - 60px);
+	overflow-y: auto;
+	padding: 6px 8px;
+	border-radius: 4px;
+	background: color-mix(in srgb, var(--surface) 85%, transparent);
+	font-size: 12px;
+}
+.viewer-legend div { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+.viewer-legend .swatch { width: 12px; height: 12px; border-radius: 2px; flex: 0 0 12px; border: 1px solid var(--border); }
+.viewer-legend .count { color: var(--muted); margin-left: auto; padding-left: 10px; font-family: var(--mono); }
+
 .panel {
 	display: flex;
 	flex-direction: column;
