@@ -179,6 +179,8 @@ Roadmap revised 2026-10-23 (Brent): categorise first (small), registration befor
 - **0.9.2 — extra bytes** (spec `2026-10-24-extra-bytes-0.9.2-design.md`): read and write the LAS
   1.4 Extra Bytes VLR, LAS and LAZ, so any file's extra bytes survive a save and the facet / set
   columns can be written back.
+- **0.9.3 — fix:** `findFacets` progress reports the total once (Kirra: a rough wall revisits
+  points, and each visit past the point count reported done again).
 - **0.10.0 — level of detail:** large clouds split into tiles held in binary scratch (memory or a
   temp disk store, `ScratchBinaryFile`) and loaded by view, for Kirra #129.
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.9.3 (2026-10-24)
 
 - `findFacets` `onProgress` climbs once to the total: growth revisits points on a rough wall, and
   each visit past the point count reported the total again (millions of calls on a 4 M-point scan;
