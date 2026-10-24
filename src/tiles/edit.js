@@ -24,7 +24,7 @@ import { createChunkCompressor } from "../laz/compressChunk.js";
 import { EXTRA_TYPES } from "../format/ExtraBytes.js";
 import { selectBox as boxOf, selectPolygon as polygonOf, selectClasses as classesOf, unionSelections, intersectSelections, subtractSelections } from "../ops/select.js";
 import { checkTransform } from "../ops/transform.js";
-import { writeManifest } from "./manifest.js";
+import { writeManifest, readManifest } from "./manifest.js";
 import { encodeTile, COLUMN_TYPES } from "./tileFile.js";
 import { tileName } from "./TileStore.js";
 import { tightBox } from "./build.js";
@@ -144,67 +144,95 @@ function packOf(store) {
 	return m.laz ? createChunkCompressor(m.laz, m.recordLength) : null;
 }
 
-// Write the nodes' next generations, then the manifest (change(body) edits it), then remove
-// the old generations. The store's manifest is replaced only once the new one is written.
-async function commit(store, writes, change) {
-	var m = store.manifest, be = store._backend, len = m.recordLength, pack = packOf(store);
-	var body = JSON.parse(JSON.stringify(m)), written = [];
+// Edits on one store run one at a time, in the order asked
+function queued(store, fn) {
+	var run = (store._editing || Promise.resolve()).then(fn);
+	store._editing = run.catch(function () {});
+	return run;
+}
+
+// One edit: under the backend's lock, from the manifest this store last saw (a store changed
+// in another tab or worker since is refused, not overwritten). run(put) reads nodes and hands
+// each node's new records and columns to put, which writes its next generation at once (an
+// orphan until the manifest lands); then the manifest (change(body) edits it); then the old
+// generations go. Cut short: the new files go, unless the manifest naming them landed.
+async function session(store, run, change) {
+	var be = store._backend;
 	await be.lock();
 	try {
+		var disk = await readManifest(be);
+		if (!disk || disk.seq !== store._seq) throw new LasError(ERROR_CODES.BAD_STORE, "the tile store changed in another tab or worker since it was opened here; open it again");
+		var m = store.manifest, len = m.recordLength, pack = packOf(store);
+		var body = JSON.parse(JSON.stringify(m)), written = [], replaced = [];
+		var put = async function (key, records, columns, oldSize) {
+			var old = m.nodes[key], count = records.length / len;
+			var bytes = encodeTile({ count: count, records: pack ? pack(records, 0, count) : records, compressed: !!pack, columns: columns });
+			var name = tileName(key, old.gen + 1);
+			await be.put(name, bytes);
+			written.push(name);
+			replaced.push(tileName(key, old.gen));
+			body.nodes[key] = { count: count, gen: old.gen + 1, box: tightBox(records, len, m.scale, m.offset) };
+			body.bytes += bytes.length - oldSize;
+		};
+		var result, seq;
 		try {
-			for (var i = 0; i < writes.length; i++) {
-				var w = writes[i], old = m.nodes[w.key], count = w.records.length / len;
-				var bytes = encodeTile({ count: count, records: pack ? pack(w.records, 0, count) : w.records, compressed: !!pack, columns: w.columns });
-				var name = tileName(w.key, old.gen + 1);
-				await be.put(name, bytes);
-				written.push(name);
-				body.nodes[w.key] = { count: count, gen: old.gen + 1, box: tightBox(w.records, len, m.scale, m.offset) };
-				body.bytes += bytes.length - w.oldSize;
-			}
+			result = await run(put, m);
 			if (change) change(body);
 			body.edits++;
-			await writeManifest(be, body);
+			seq = await writeManifest(be, body);
 		} catch (err) {
-			for (var j = 0; j < written.length; j++) { try { await be.remove(written[j]); } catch (e) { /* the next opening removes it */ } }
+			var now = null;
+			try { now = await readManifest(be); } catch (e) { now = null; }
+			if (now && now.seq === store._seq + 1 && JSON.stringify(now.body) === JSON.stringify(body)) {
+				// the manifest landed before the write reported its error: it stands
+				store.manifest = now.body;
+				store._seq = now.seq;
+				await removeEach(be, replaced);
+			} else await removeEach(be, written);
 			throw err;
 		}
 		store.manifest = body;
-		for (var k = 0; k < writes.length; k++) { try { await be.remove(tileName(writes[k].key, m.nodes[writes[k].key].gen)); } catch (e) { /* swept on open */ } }
+		store._seq = seq;
+		await removeEach(be, replaced);
+		return result;
 	} finally {
 		be.unlock();
 	}
 }
 
-async function nodeBytes(store, key) {
-	var b = await store._backend.get(tileName(key, store.manifest.nodes[key].gen));
-	return b ? b.length : 0;
+async function removeEach(be, names) {
+	for (var i = 0; i < names.length; i++) { try { await be.remove(names[i]); } catch (e) { /* the next opening sweeps it */ } }
 }
 
 // ---- delete / keep ----
 
-async function removeWhere(store, sel, keepSelected) {
-	checkSelection(store, sel);
-	var m = store.manifest, len = m.recordLength, writes = [], removed = 0;
-	var keys = keepSelected ? Object.keys(m.nodes).sort(keyOrder) : Object.keys(sel.tiles).sort(keyOrder);
-	for (var i = 0; i < keys.length; i++) {
-		var key = keys[i], node = m.nodes[key], picked = sel.tiles[key] || new Uint32Array(0);
-		if (!node.count || (keepSelected && picked.length === node.count) || (!keepSelected && !picked.length)) continue;
-		var n = await readNode(store, key), flag = new Uint8Array(node.count);
-		for (var p = 0; p < picked.length; p++) flag[picked[p]] = 1;
-		var stay = keepSelected ? 1 : 0, kept = 0;
-		for (var q = 0; q < node.count; q++) if (flag[q] === stay) kept++;
-		var records = new Uint8Array(kept * len), columns = n.t.columns.map(function (c) { return new c.constructor(kept); }), o = 0;
-		for (var r = 0; r < node.count; r++) {
-			if (flag[r] !== stay) continue;
-			records.set(n.records.subarray(r * len, (r + 1) * len), o * len);
-			for (var c = 0; c < columns.length; c++) columns[c][o] = n.t.columns[c][r];
-			o++;
-		}
-		removed += node.count - kept;
-		writes.push({ key: key, records: records, columns: columns, oldSize: await nodeBytes(store, key) });
-	}
-	await commit(store, writes, function (body) { body.deletes++; });
-	return { removed: removed };
+function removeWhere(store, sel, keepSelected) {
+	return queued(store, function () {
+		checkSelection(store, sel);
+		var removed = 0;
+		return session(store, async function (put, m) {
+			var len = m.recordLength;
+			var keys = keepSelected ? Object.keys(m.nodes).sort(keyOrder) : Object.keys(sel.tiles).sort(keyOrder);
+			for (var i = 0; i < keys.length; i++) {
+				var key = keys[i], node = m.nodes[key], picked = sel.tiles[key] || new Uint32Array(0);
+				if (!node.count || (keepSelected && picked.length === node.count) || (!keepSelected && !picked.length)) continue;
+				var n = await readNode(store, key), flag = new Uint8Array(node.count);
+				for (var p = 0; p < picked.length; p++) flag[picked[p]] = 1;
+				var stay = keepSelected ? 1 : 0, kept = 0;
+				for (var q = 0; q < node.count; q++) if (flag[q] === stay) kept++;
+				var records = new Uint8Array(kept * len), columns = n.t.columns.map(function (c) { return new c.constructor(kept); }), o = 0;
+				for (var r = 0; r < node.count; r++) {
+					if (flag[r] !== stay) continue;
+					records.set(n.records.subarray(r * len, (r + 1) * len), o * len);
+					for (var c = 0; c < columns.length; c++) columns[c][o] = n.t.columns[c][r];
+					o++;
+				}
+				removed += node.count - kept;
+				await put(key, records, columns, n.t.size);
+			}
+			return { removed: removed };
+		}, function (body) { body.deletes++; });
+	});
 }
 
 /** Delete the selected points. */
@@ -236,35 +264,38 @@ function checkTyped(type, v, name, where) {
 /**
  * Set a field for the selected points: one value, or { key: typed array } in the selection's order.
  */
-export async function setColumn(store, sel, name, value) {
-	checkSelection(store, sel);
-	var m = store.manifest, added = m.columns.map(function (c) { return c.name; }), ai = added.indexOf(name);
-	if (ai < 0 && !SETTABLE[name]) throw bad(name + " cannot be set on a tile store: classification, classificationFlags, intensity, userData, pointSourceId, red, green, blue or an added column");
-	if (ai < 0 && (name === "red" || name === "green" || name === "blue") && recordFields(m.pointFormat).indexOf(name) < 0) throw bad(name + " cannot be set: point format " + m.pointFormat + " has no colour");
-	var perTile = value !== null && typeof value === "object";
-	var keys = Object.keys(sel.tiles).sort(keyOrder), writes = [], len = m.recordLength;
-	keys.forEach(function (k) {
-		var want = perTile ? value[k] : null, idx = sel.tiles[k];
-		if (perTile && (!want || want.length !== idx.length)) throw bad("value[" + k + "] must hold one value for each of the tile's " + idx.length + " selected points");
-		for (var i = 0; i < idx.length; i++) {
-			var v = perTile ? want[i] : value;
-			if (ai < 0) checkValue(name, v, SETTABLE[name], "point " + idx[i] + " of tile " + k);
-			else checkTyped(m.columns[ai].type, v, name, "point " + idx[i] + " of tile " + k);
-			if (!perTile) break;
-		}
+export function setColumn(store, sel, name, value) {
+	return queued(store, function () {
+		checkSelection(store, sel);
+		var m = store.manifest, added = m.columns.map(function (c) { return c.name; }), ai = added.indexOf(name);
+		if (ai < 0 && !SETTABLE[name]) throw bad(name + " cannot be set on a tile store: classification, classificationFlags, intensity, userData, pointSourceId, red, green, blue or an added column");
+		if (ai < 0 && (name === "red" || name === "green" || name === "blue") && recordFields(m.pointFormat).indexOf(name) < 0) throw bad(name + " cannot be set: point format " + m.pointFormat + " has no colour");
+		var perTile = value !== null && typeof value === "object";
+		var keys = Object.keys(sel.tiles).sort(keyOrder);
+		keys.forEach(function (k) {
+			var want = perTile ? value[k] : null, idx = sel.tiles[k];
+			if (perTile && (!want || want.length !== idx.length)) throw bad("value[" + k + "] must hold one value for each of the tile's " + idx.length + " selected points");
+			for (var i = 0; i < idx.length; i++) {
+				var v = perTile ? want[i] : value;
+				if (ai < 0) checkValue(name, v, SETTABLE[name], "point " + idx[i] + " of tile " + k);
+				else checkTyped(m.columns[ai].type, v, name, "point " + idx[i] + " of tile " + k);
+				if (!perTile) break;
+			}
+		});
+		return session(store, async function (put) {
+			for (var t = 0; t < keys.length; t++) {
+				var key = keys[t], idx = sel.tiles[key], n = await readNode(store, key), want = perTile ? value[key] : null;
+				var records = n.records, columns = n.t.columns;
+				if (ai >= 0) {
+					var col = columns[ai].slice(), big = EXTRA_TYPES[m.columns[ai].type].big;
+					for (var i = 0; i < idx.length; i++) { var v = perTile ? want[i] : value; col[idx[i]] = big ? BigInt(v) : v; }
+					columns = columns.slice();
+					columns[ai] = col;
+				} else records = patchField(store, records, name, idx, perTile ? want : null, value);
+				await put(key, records, columns, n.t.size);
+			}
+		}, null);
 	});
-	for (var t = 0; t < keys.length; t++) {
-		var key = keys[t], idx = sel.tiles[key], n = await readNode(store, key), want = perTile ? value[key] : null;
-		var records = n.records, columns = n.t.columns;
-		if (ai >= 0) {
-			var col = columns[ai].slice(), big = EXTRA_TYPES[m.columns[ai].type].big;
-			for (var i = 0; i < idx.length; i++) { var v = perTile ? want[i] : value; col[idx[i]] = big ? BigInt(v) : v; }
-			columns = columns.slice();
-			columns[ai] = col;
-		} else records = patchField(store, records, name, idx, perTile ? want : null, value);
-		writes.push({ key: key, records: records, columns: columns, oldSize: await nodeBytes(store, key) });
-	}
-	await commit(store, writes, null);
 }
 
 // Re-encode the node twice and copy only the bytes the new values change
@@ -287,33 +318,39 @@ function patchField(store, records, name, idx, values, value) {
 /**
  * Add a column every point holds, set to fill.
  */
-export async function addColumn(store, name, type, fill) {
-	var m = store.manifest;
-	if (typeof name !== "string" || !name || name.length > 32 || /[^\x01-\xff]/.test(name)) throw bad("a column name is 1 to 32 characters, one byte each");
-	var taken = Object.keys(FIELD_TYPES).concat(MORE_RESERVED, store.extraBytes.map(function (f) { return f.column; }), m.columns.map(function (c) { return c.name; }));
-	if (taken.indexOf(name) >= 0) throw bad("the column name " + name + " is taken (a standard field, a reserved name, a file extra column or an added column)");
-	if (!COLUMN_TYPES[type]) throw bad("type " + type + " is not one of u8, i8, u16, i16, u32, i32, u64, i64, f32, f64");
-	if (fill === undefined) fill = 0;
-	var f = checkTyped(type, fill, name, "fill");
-	var keys = Object.keys(m.nodes).sort(keyOrder), writes = [];
-	for (var i = 0; i < keys.length; i++) {
-		var n = await readNode(store, keys[i]), col = new COLUMN_TYPES[type](n.t.count);
-		col.fill(f);
-		writes.push({ key: keys[i], records: n.records, columns: n.t.columns.concat([col]), oldSize: await nodeBytes(store, keys[i]) });
-	}
-	await commit(store, writes, function (body) { body.columns.push({ name: name, type: type, fill: typeof f === "bigint" ? String(f) : f }); });
+export function addColumn(store, name, type, fill) {
+	return queued(store, function () {
+		var m = store.manifest;
+		if (typeof name !== "string" || !name || name.length > 32 || /[^\x01-\xff]/.test(name)) throw bad("a column name is 1 to 32 characters, one byte each");
+		var taken = Object.keys(FIELD_TYPES).concat(MORE_RESERVED, store.extraBytes.map(function (f) { return f.column; }), m.columns.map(function (c) { return c.name; }));
+		if (taken.indexOf(name) >= 0) throw bad("the column name " + name + " is taken (a standard field, a reserved name, a file extra column or an added column)");
+		if (!COLUMN_TYPES[type]) throw bad("type " + type + " is not one of u8, i8, u16, i16, u32, i32, u64, i64, f32, f64");
+		if (fill === undefined) fill = 0;
+		var f = checkTyped(type, fill, name, "fill");
+		return session(store, async function (put) {
+			var keys = Object.keys(m.nodes).sort(keyOrder);
+			for (var i = 0; i < keys.length; i++) {
+				var n = await readNode(store, keys[i]), col = new COLUMN_TYPES[type](n.t.count);
+				col.fill(f);
+				await put(keys[i], n.records, n.t.columns.concat([col]), n.t.size);
+			}
+		}, function (body) { body.columns.push({ name: name, type: type, fill: typeof f === "bigint" ? String(f) : f }); });
+	});
 }
 
 /** Remove an added column from every node. */
-export async function removeColumn(store, name) {
-	var m = store.manifest, ai = m.columns.map(function (c) { return c.name; }).indexOf(name);
-	if (ai < 0) throw bad("no added column " + name + " in the store");
-	var keys = Object.keys(m.nodes).sort(keyOrder), writes = [];
-	for (var i = 0; i < keys.length; i++) {
-		var n = await readNode(store, keys[i]);
-		writes.push({ key: keys[i], records: n.records, columns: n.t.columns.filter(function (c, j) { return j !== ai; }), oldSize: await nodeBytes(store, keys[i]) });
-	}
-	await commit(store, writes, function (body) { body.columns.splice(ai, 1); });
+export function removeColumn(store, name) {
+	return queued(store, function () {
+		var m = store.manifest, ai = m.columns.map(function (c) { return c.name; }).indexOf(name);
+		if (ai < 0) throw bad("no added column " + name + " in the store");
+		return session(store, async function (put) {
+			var keys = Object.keys(m.nodes).sort(keyOrder);
+			for (var i = 0; i < keys.length; i++) {
+				var n = await readNode(store, keys[i]);
+				await put(keys[i], n.records, n.t.columns.filter(function (c, j) { return j !== ai; }), n.t.size);
+			}
+		}, function (body) { body.columns.splice(ai, 1); });
+	});
 }
 
 // ---- transform ----
@@ -321,15 +358,16 @@ export async function removeColumn(store, name) {
 /**
  * Compose a transform onto the store's: T after the one it has. No node is rewritten.
  */
-export async function transform(store, T) {
-	checkTransform(T, "transform");
-	var old = store.manifest.transform, m = Array.from(T.m), t = Array.from(T.t);
-	if (old) {
-		var a = m, b = old.m, mm = [];
-		for (var r = 0; r < 3; r++) for (var c = 0; c < 3; c++) mm.push(a[3 * r] * b[c] + a[3 * r + 1] * b[3 + c] + a[3 * r + 2] * b[6 + c]);
-		t = [0, 1, 2].map(function (r) { return a[3 * r] * old.t[0] + a[3 * r + 1] * old.t[1] + a[3 * r + 2] * old.t[2] + t[r]; });
-		m = mm;
-	}
-	await commit(store, [], function (body) { body.transform = { m: m, t: t }; });
+export function transform(store, T) {
+	return queued(store, function () {
+		checkTransform(T, "transform");
+		var old = store.manifest.transform, m = Array.from(T.m), t = Array.from(T.t);
+		if (old) {
+			var a = m, b = old.m, mm = [];
+			for (var r = 0; r < 3; r++) for (var c = 0; c < 3; c++) mm.push(a[3 * r] * b[c] + a[3 * r + 1] * b[3 + c] + a[3 * r + 2] * b[6 + c]);
+			t = [0, 1, 2].map(function (r) { return a[3 * r] * old.t[0] + a[3 * r + 1] * old.t[1] + a[3 * r + 2] * old.t[2] + t[r]; });
+			m = mm;
+		}
+		return session(store, async function () {}, function (body) { body.transform = { m: m, t: t }; });
+	});
 }
-

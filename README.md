@@ -583,9 +583,11 @@ for await (var t of store.readTiles(keys, { fields: ["x", "y", "z", "red", "gree
   as scans are, that is about 16,000 points a tile; a sparse cloud's root holds most of it.
 - **A tile is the file's own LAS records** (optionally one LAZ chunk each, `compress: true`), so
   every field and extra byte is kept.
-- **The build** streams the file twice and never holds the cloud: it counts points in a grid,
-  cuts the cloud into chunks of `chunkPoints`, appends each record to its chunk, then builds each
-  chunk's octree on the worker pool. Measured in Node: the peak stays about the same from 2 to
+- **The build** streams the file and never holds the cloud: it counts points in a grid, cuts the
+  cloud into chunks of `chunkPoints`, appends each record to its chunk, then builds each chunk's
+  octree on the worker pool. A grid cell still holding more than `chunkPoints` (one stray point far
+  off stretches the grid; so does a dense spot by a scanner) is counted again on a finer grid below
+  it, one more read each time, so no chunk is over `chunkPoints` unless its points cannot be split. Measured in Node: the peak stays about the same from 2 to
   16 million points (about 95 MB on one thread, about 280 MB with two workers, most of it the
   workers' own heaps); a 10-million-point LAZ builds in about 4 s on the worker pool (5 s
   compressed). In Chrome, a 34-million-point LAS (1.16 GB) builds into 2,634 compressed tiles
@@ -631,8 +633,11 @@ A selection is `{ deletes, count, tiles: { [key]: Uint32Array } }` (`combineTile
 "union" | "intersect" | "subtract")`). A delete or keep moves points, so a selection made before
 one is refused: select again. `setColumn` takes `classification`, `classificationFlags`,
 `intensity`, `userData`, `pointSourceId`, `red`, `green`, `blue` or an added column; only that
-field's bytes change, in every point format. Each edit writes the tiles it changes as new files,
-then the manifest, then removes the old files, so an edit cut short leaves the store as it was.
+field's bytes change, in every point format. Edits on one store run one at a time, in the order
+asked. Each writes the tiles it changes as new files as it goes (one tile in memory at a time),
+then the manifest, then removes the old files, so an edit cut short leaves the store as it was. A
+store changed in another tab or worker since this one was opened refuses the edit (`BAD_STORE`):
+open it again. A read that an edit on the same store overtakes reads the new tile.
 `writeLas` writes the source's version, point format, scale, offset, CRS, class names and extra
 bytes, plus the added columns; an unedited store gives back every source record byte for byte (in
 tile order, not the file's). Undo is the caller's.
@@ -806,7 +811,8 @@ worker files stay next to the module that loads them.
 Every failure is a `LasError` with a stable `code` (`ERROR_CODES`) and, for byte-level problems,
 the file `offset`: `NOT_LAS`, `UNSUPPORTED_VERSION`, `UNSUPPORTED`, `TRUNCATED`, `BAD_HEADER`,
 `BAD_VLR`, `INVALID_ARGUMENT`, `ABORTED`, `TOO_MANY_POINTS`, `BAD_STORE` (a tile store with no
-manifest, a missing or damaged tile file, or a store open for writing in another tab). A file shorter than its header
+manifest, a missing or damaged tile file, a store changed in another tab or worker since it was
+opened, or one being written there). A file shorter than its header
 promises is `TRUNCATED`, never garbage points. (`COMPRESSED_LAZ` is kept for 0.1 callers but is no
 longer thrown: LAZ is read.)
 

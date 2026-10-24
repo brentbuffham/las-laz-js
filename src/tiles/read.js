@@ -16,16 +16,25 @@ import { decodeTile } from "./tileFile.js";
 import { tileName } from "./TileStore.js";
 
 /**
- * A node's tile, decoded from its file (records raw: LAZ nodes are left packed).
- * @returns {Promise<{count, records, compressed, columns}>}
+ * A node's tile, decoded from its file (records raw: LAZ nodes are left packed), with size, the
+ * file's byte length. An edit that commits while the file is read moves the node to its next
+ * generation and removes this one: the read follows it.
+ * @returns {Promise<{count, records, compressed, columns, size}>}
  * @throws {LasError} INVALID_ARGUMENT for a key not in the store; BAD_STORE for a missing or damaged file
  */
 export async function loadTile(store, key) {
-	var node = store.manifest.nodes[key];
-	if (!node) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "no tile " + key + " in the store");
-	var name = tileName(key, node.gen), bytes = await store._backend.get(name);
-	if (!bytes) throw new LasError(ERROR_CODES.BAD_STORE, "tile file " + name + " is missing from the store");
-	return decodeTile(bytes, store.manifest.columns.map(function (c) { return c.type; }), name);
+	for (;;) {
+		var m = store.manifest, node = m.nodes[key];
+		if (!node) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "no tile " + key + " in the store");
+		var name = tileName(key, node.gen), bytes = await store._backend.get(name);
+		if (!bytes) {
+			if (store.manifest !== m) continue;   // an edit on this store moved it on: read the new one
+			throw new LasError(ERROR_CODES.BAD_STORE, "tile file " + name + " is missing from the store (changed in another tab or worker? open it again)");
+		}
+		var t = decodeTile(bytes, m.columns.map(function (c) { return c.type; }), name);
+		t.size = bytes.length;
+		return t;
+	}
 }
 
 /** A tile's raw records, decompressed on this thread when packed. */

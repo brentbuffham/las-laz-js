@@ -3,8 +3,9 @@
 // selectTiles: the nodes a camera needs, within a point budget.
 // Pure and synchronous on the manifest, so it runs every frame on the
 // main thread while tiles load in a Worker.
-//  - a node's box (its tight box, or its cube cell when it has no
-//    points) is moved by the store transform, then minus localOrigin
+//  - a node is judged by its subtree's box: its own points' tight box
+//    and every box below it (children reach past a parent's sample),
+//    moved by the store transform, then minus localOrigin
 //  - culled when wholly outside one of the six clip planes
 //    (Gribb-Hartmann, from the matrix; OpenGL clip z in [-w, w], as
 //    Three.js)
@@ -75,8 +76,8 @@ export function nodeWorldBox(man, key) {
 }
 
 // What selectTiles needs from a manifest, made once per manifest object (an edit posts a new
-// one): the nodes in key order (their index is the tie order), counts, moved world boxes and
-// each node's children by index
+// one): the nodes in key order (their index is the tie order), counts, moved world boxes (own,
+// and the subtree's), and each node's children by index
 var prepared = new WeakMap();
 function prepare(man) {
 	var p = prepared.get(man);
@@ -94,7 +95,19 @@ function prepare(man) {
 			if (parent !== undefined) kids[8 * parent + (e.k[1] % 2) + 2 * (e.k[2] % 2) + 4 * (e.k[3] % 2)] = i;
 		}
 	});
-	p = { keys: keys, count: count, box: box, kids: kids, root: at.get("0-0-0-0") };
+	// subtree boxes, deepest first: own box (a node with no points: none) and its children's
+	var sub = new Float64Array(6 * n);
+	for (var i = n - 1; i >= 0; i--) {
+		var own = man.nodes[keys[i].key].box !== null && man.nodes[keys[i].key].box !== undefined;
+		for (var a = 0; a < 3; a++) { sub[6 * i + a] = own ? box[6 * i + a] : Infinity; sub[6 * i + 3 + a] = own ? box[6 * i + 3 + a] : -Infinity; }
+		for (var c = 0; c < 8; c++) {
+			var ch = kids[8 * i + c];
+			if (ch < 0) continue;
+			for (var b = 0; b < 3; b++) { sub[6 * i + b] = Math.min(sub[6 * i + b], sub[6 * ch + b]); sub[6 * i + 3 + b] = Math.max(sub[6 * i + 3 + b], sub[6 * ch + 3 + b]); }
+		}
+		if (!(sub[6 * i] <= sub[6 * i + 3])) for (var q = 0; q < 6; q++) sub[6 * i + q] = box[6 * i + q];   // nothing below: its cube cell
+	}
+	p = { keys: keys, count: count, box: box, sub: sub, kids: kids, root: at.get("0-0-0-0") };
 	prepared.set(man, p);
 	return p;
 }
@@ -113,11 +126,11 @@ function prepare(man) {
 export function selectTiles(storeOrManifest, view) {
 	var man = storeOrManifest && storeOrManifest.manifest ? storeOrManifest.manifest : storeOrManifest;
 	var v = checkView(view), m = v.m, pl = [].concat.apply([], planesOf(m)), P = prepare(man);
-	var o = v.origin, B = P.box, W = v.width / 2, H = v.height / 2;
+	var o = v.origin, B = P.box, S = P.sub, W = v.width / 2, H = v.height / 2;
 	var cx = new Float64Array(8), cy = new Float64Array(8), cz = new Float64Array(8);
 	// -1 when culled, else the size on screen in pixels (Infinity when a corner is at or behind the eye)
 	function measure(i) {
-		var x0 = B[6 * i] - o[0], y0 = B[6 * i + 1] - o[1], z0 = B[6 * i + 2] - o[2], x1 = B[6 * i + 3] - o[0], y1 = B[6 * i + 4] - o[1], z1 = B[6 * i + 5] - o[2];
+		var x0 = S[6 * i] - o[0], y0 = S[6 * i + 1] - o[1], z0 = S[6 * i + 2] - o[2], x1 = S[6 * i + 3] - o[0], y1 = S[6 * i + 4] - o[1], z1 = S[6 * i + 5] - o[2];
 		for (var q = 0; q < 8; q++) { cx[q] = q % 2 ? x1 : x0; cy[q] = q % 4 >= 2 ? y1 : y0; cz[q] = q >= 4 ? z1 : z0; }
 		for (var p = 0; p < 24; p += 4) {
 			var any = false;

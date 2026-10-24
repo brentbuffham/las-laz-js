@@ -4,7 +4,10 @@
 // passes, memory bounded whatever the cloud's size:
 //  1. count: raw X / Y / Z into a 128³ grid over a cube around the
 //     header bounds (a point outside: the pass again on the true bounds)
-//  2. chunks: grid cells merged up the octree while they fit chunkPoints
+//  2. chunks: grid cells merged up the octree while they fit chunkPoints;
+//     a cell still over it (a far outlier stretches the cube, a dense
+//     spot) is counted again on a finer grid below it, one more read a
+//     round, until every chunk fits or cannot split
 //  3. distribute: each record's bytes appended to its chunk's blob
 //  4. tiles: each chunk's octree (octree.js), then the levels above
 //     the chunk roots sampled up to the root
@@ -52,31 +55,106 @@ export async function fingerprint(las, name) {
 
 
 /**
- * Group the cells of a 128³ count grid into chunks: from the root down, a node whose points
- * fit chunkPoints is one chunk; a single depth-7 cell over it is a chunk of its own.
- * @param {Uint32Array} counts - 128³ cells, index x + 128 (y + 128 z)
+ * Group the cells of a count grid into chunks: from its top down, a node whose points fit
+ * chunkPoints is one chunk; a finest cell over it is a chunk of its own.
+ * @param {Uint32Array} counts - (2^levels)³ cells, index x + n (y + n z)
  * @param {number} chunkPoints
+ * @param {number} [levels=7] - the grid's levels below base
+ * @param {number[]} [base=[0, 0, 0, 0]] - the parsed key of the node the grid covers
  * @returns {Array<{key: string, count: number}>} in key order; empty nodes give none
  */
-export function planChunks(counts, chunkPoints) {
-	var levels = [];
-	levels[GRID_DEPTH] = counts;
-	for (var d = GRID_DEPTH - 1; d >= 0; d--) {
-		var n = Math.pow(2, d), up = levels[d + 1], sums = new Float64Array(n * n * n);
+export function planChunks(counts, chunkPoints, levels, base) {
+	levels = levels || GRID_DEPTH;
+	base = base || [0, 0, 0, 0];
+	var sums = [];
+	sums[levels] = counts;
+	for (var d = levels - 1; d >= 0; d--) {
+		var n = Math.pow(2, d), up = sums[d + 1], s = new Float64Array(n * n * n);
 		for (var z = 0; z < 2 * n; z++) for (var y = 0; y < 2 * n; y++) for (var x = 0; x < 2 * n; x++) {
-			sums[Math.floor(x / 2) + n * (Math.floor(y / 2) + n * Math.floor(z / 2))] += up[x + 2 * n * (y + 2 * n * z)];
+			s[Math.floor(x / 2) + n * (Math.floor(y / 2) + n * Math.floor(z / 2))] += up[x + 2 * n * (y + 2 * n * z)];
 		}
-		levels[d] = sums;
+		sums[d] = s;
 	}
 	var out = [];
 	function visit(d, x, y, z) {
-		var n = Math.pow(2, d), s = levels[d][x + n * (y + n * z)];
+		var n = Math.pow(2, d), s = sums[d][x + n * (y + n * z)];
 		if (!s) return;
-		if (s <= chunkPoints || d === GRID_DEPTH) { out.push({ key: keyOf(d, x, y, z), count: s }); return; }
+		if (s <= chunkPoints || d === levels) { out.push({ key: keyOf(base[0] + d, base[1] * n + x, base[2] * n + y, base[3] * n + z), count: s }); return; }
 		for (var o = 0; o < 8; o++) visit(d + 1, 2 * x + o % 2, 2 * y + Math.floor(o / 2) % 2, 2 * z + Math.floor(o / 4));
 	}
 	visit(0, 0, 0, 0);
 	return out.sort(function (a, b) { return keyOrder(a.key, b.key); });
+}
+
+var SUB = 3;   // a refinement counts an over-full chunk on an 8³ grid, three levels below it
+
+// Which chunk a raw point goes to: a 128³ table over the cube, and below any cell holding deeper
+// chunks an 8³ table of its own; an entry is a chunk index, -1 (no chunk), or -2 - r (table r)
+function makeLocator(cube, chunks) {
+	var refs = [];
+	function table(d, x, y, z, levels) {
+		var n = Math.pow(2, levels);
+		refs.push({ d: d, x: x, y: y, z: z, levels: levels, n: n, t: new Int32Array(n * n * n).fill(-1) });
+		return refs.length - 1;
+	}
+	function place(r, k, ci) {
+		var ref = refs[r], D = ref.d + ref.levels, n = ref.n;
+		if (k[0] <= D) {
+			var span = Math.pow(2, D - k[0]), x0 = k[1] * span - ref.x * n, y0 = k[2] * span - ref.y * n, z0 = k[3] * span - ref.z * n;
+			for (var z = z0; z < z0 + span; z++) for (var y = y0; y < y0 + span; y++) for (var x = x0; x < x0 + span; x++) ref.t[x + n * (y + n * z)] = ci;
+			return;
+		}
+		var f = Math.pow(2, k[0] - D), cx = Math.floor(k[1] / f), cy = Math.floor(k[2] / f), cz = Math.floor(k[3] / f);
+		var at = (cx - ref.x * n) + n * ((cy - ref.y * n) + n * (cz - ref.z * n)), v = ref.t[at], sub;
+		if (v <= -2) sub = -2 - v;
+		else { sub = table(D, cx, cy, cz, SUB); ref.t[at] = -2 - sub; }
+		place(sub, k, ci);
+	}
+	table(0, 0, 0, 0, GRID_DEPTH);
+	chunks.forEach(function (c, ci) { place(0, parseKey(c.key), ci); });
+	function cellOf(v, m, e, N) { var k = Math.floor((v - m) / e); return k < 0 ? 0 : k >= N ? N - 1 : k; }
+	return function locate(X, Y, Z) {
+		var ref = refs[0];
+		for (;;) {
+			var D = ref.d + ref.levels, N = Math.pow(2, D), e = cube.edge / N, n = ref.n;
+			var v = ref.t[(cellOf(X, cube.min[0], e, N) - ref.x * n) + n * ((cellOf(Y, cube.min[1], e, N) - ref.y * n) + n * (cellOf(Z, cube.min[2], e, N) - ref.z * n))];
+			if (v > -2) return v;
+			ref = refs[-2 - v];
+		}
+	};
+}
+
+// Split the chunks over chunkPoints that the octree could still split: one more read counts
+// their points on an 8³ grid three levels below each (fewer near the depth limit)
+async function refineChunks(las, cube, len, chunks, chunkPoints, signal) {
+	for (;;) {
+		var over = [], slot = new Int32Array(chunks.length).fill(-1);
+		chunks.forEach(function (c, ci) {
+			var k = parseKey(c.key);
+			if (c.count > chunkPoints && k[0] < MAX_DEPTH && cube.edge / Math.pow(2, k[0]) >= 2 * MIN_EDGE) {
+				var levels = Math.min(SUB, MAX_DEPTH - k[0]), n = Math.pow(2, levels);
+				slot[ci] = over.length;
+				over.push({ k: k, levels: levels, n: n, counts: new Uint32Array(n * n * n) });
+			}
+		});
+		if (!over.length) return chunks;
+		var locate = makeLocator(cube, chunks);
+		for await (var w of las._rawWindows(signal, READ_WINDOW)) {
+			var r = w.bytes, v = new DataView(r.buffer, r.byteOffset, r.byteLength);
+			for (var p = 0; p < r.length; p += len) {
+				var X = v.getInt32(p, true), Y = v.getInt32(p + 4, true), Z = v.getInt32(p + 8, true), s = slot[locate(X, Y, Z)];
+				if (s < 0) continue;
+				var o = over[s], D = o.k[0] + o.levels, N = Math.pow(2, D), e = cube.edge / N;
+				var cx = Math.min(N - 1, Math.max(0, Math.floor((X - cube.min[0]) / e))) - o.k[1] * o.n;
+				var cy = Math.min(N - 1, Math.max(0, Math.floor((Y - cube.min[1]) / e))) - o.k[2] * o.n;
+				var cz = Math.min(N - 1, Math.max(0, Math.floor((Z - cube.min[2]) / e))) - o.k[3] * o.n;
+				o.counts[cx + o.n * (cy + o.n * cz)]++;
+			}
+		}
+		var next = chunks.filter(function (c, ci) { return slot[ci] < 0; });
+		over.forEach(function (o) { next = next.concat(planChunks(o.counts, chunkPoints, o.levels, o.k)); });
+		chunks = next.sort(function (a, b) { return keyOrder(a.key, b.key); });
+	}
 }
 
 // Each value once, climbing; the total only from finish()
@@ -124,11 +202,13 @@ export async function buildTiles(las, opts) {
 	var h = las.header, len = h.recordLength, signal = opts.signal, onProgress = opts.onProgress;
 	var laz = opts.compress ? lazVlrFor(h.pointFormat, len, 0).vlr : null;   // UNSUPPORTED for formats 4, 5, 9, 10
 	var backend = await openBackend(opts.where);
-	if (await readManifest(backend)) {
-		if (!opts.replace) throw bad("a tile store already exists at that where; pass replace: true to rebuild it");
+	var existing = await readManifest(backend);
+	if (existing && !opts.replace) throw bad("a tile store already exists at that where; pass replace: true to rebuild it");
+	await backend.lock();   // before anything is deleted: a thread that cannot write refuses here
+	if (existing) {
 		await backend.removeAll();
+		await backend.lock();
 	}
-	await backend.lock();
 	var open = [], pool = null;
 	try {
 		var src = await fingerprint(las, opts.name);
@@ -144,8 +224,9 @@ export async function buildTiles(las, opts) {
 			counted = await countPass(las, cube, len, signal, null);
 		}
 		// 2. chunks
-		var chunks = planChunks(counted.counts, chunkPoints);
+		var chunks = await refineChunks(las, cube, len, planChunks(counted.counts, chunkPoints), chunkPoints, signal);
 		counted = null;
+		if (typeof opts._chunks === "function") opts._chunks(chunks.map(function (c) { return { key: c.key, count: c.count }; }));   // tests
 		// 3. distribute
 		await distribute(las, cube, len, chunks, backend, open, signal, phase(onProgress, "distribute", h.pointCount));
 		// 4. tiles
@@ -207,8 +288,8 @@ export async function buildTiles(las, opts) {
 			pointFormat: h.pointFormat, recordLength: len, scale: s, offset: o, laz: laz, cube: cube,
 			nodes: sortedNodes(nodes), columns: [], transform: null, edits: 0, deletes: 0, bytes: total
 		};
-		await writeManifest(backend, body);
-		var store = new TileStore(backend, body, head, las.evlrs.filter(function (e) { return e.bytes; }));
+		var seq = await writeManifest(backend, body);
+		var store = new TileStore(backend, body, head, las.evlrs.filter(function (e) { return e.bytes; }), seq);
 		backend.unlock();
 		return store;
 	} catch (err) {
@@ -264,22 +345,18 @@ async function countPass(las, cube, len, signal, progress) {
 }
 
 async function distribute(las, cube, len, chunks, backend, open, signal, progress) {
-	var cellChunk = new Int32Array(GRID * GRID * GRID).fill(-1);
-	chunks.forEach(function (c, ci) {
-		var k = parseKey(c.key), span = Math.pow(2, GRID_DEPTH - k[0]);
-		for (var z = k[3] * span; z < (k[3] + 1) * span; z++) for (var y = k[2] * span; y < (k[2] + 1) * span; y++) for (var x = k[1] * span; x < (k[1] + 1) * span; x++) cellChunk[x + GRID * (y + GRID * z)] = ci;
-	});
+	var locate = makeLocator(cube, chunks);
 	var cap = Math.max(1, Math.floor(BUFFER_BYTES / len)) * len, outs = [];
 	for (var i = 0; i < chunks.length; i++) {
 		var ap = await backend.appender("build/" + chunks[i].key + ".rec");
 		open.push(ap);
 		outs.push({ ap: ap, buf: new Uint8Array(cap), fill: 0 });
 	}
-	var cell = cellIndexer(cube), done = 0;
+	var done = 0;
 	for await (var w of las._rawWindows(signal, READ_WINDOW)) {
 		var r = w.bytes, v = new DataView(r.buffer, r.byteOffset, r.byteLength);
 		for (var p = 0; p < r.length; p += len) {
-			var out = outs[cellChunk[cell(v.getInt32(p, true), v.getInt32(p + 4, true), v.getInt32(p + 8, true))]];
+			var out = outs[locate(v.getInt32(p, true), v.getInt32(p + 4, true), v.getInt32(p + 8, true))];
 			var dst = out.buf, f = out.fill;
 			for (var b = 0; b < len; b++) dst[f + b] = r[p + b];   // a byte loop: no subarray object per point
 			out.fill = f + len;

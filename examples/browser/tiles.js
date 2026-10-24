@@ -166,8 +166,12 @@ export function initTiles(ctx) {
 		return p.map(function (v, i) { return v + (i % 2 ? tileOrigin.y : tileOrigin.x); });
 	}
 
+	// one edit at a time: the edit buttons wait for it (the library queues edits too)
+	function busy(on) { ["tilesDelete", "tilesClassify", "tilesSave"].forEach(function (id) { $(id).disabled = on || !active; }); }
+
 	async function edit(label, run) {
 		var t0 = performance.now();
+		busy(true);
 		try {
 			var sel = await ctx.call("selectPolygon", { polygon: worldPolygon() }).promise;
 			if (!sel.count) { ctx.setStatus(label + ": no points inside the polygon", true); return; }
@@ -175,7 +179,7 @@ export function initTiles(ctx) {
 			manifest = r.manifest;
 			ctx.setStatus(label + ": " + ctx.fmt(sel.count) + " points in " + ctx.fmt(ctx.since(t0)) + " ms; the store now holds " + ctx.fmt(Object.keys(manifest.nodes).reduce(function (s, k) { return s + manifest.nodes[k].count; }, 0)) + " points");
 			schedule();
-		} catch (err) { ctx.setStatus(label + ": " + err.message, true); }
+		} catch (err) { ctx.setStatus(label + ": " + err.message, true); } finally { busy(false); }
 	}
 
 	async function save() {

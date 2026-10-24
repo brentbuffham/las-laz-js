@@ -41,11 +41,22 @@ function measure(view, box) {
 	return { visible: visible, size: size };
 }
 
+// a node's box and every box below it (descendants found by their key, not the library's tables)
+function subtreeBox(manifest, key) {
+	var p = parseKey(key), out = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+	Object.keys(manifest.nodes).forEach(function (k) {
+		var q = parseKey(k), f = Math.pow(2, q[0] - p[0]), b = manifest.nodes[k].box;
+		if (q[0] < p[0] || !b || Math.floor(q[1] / f) !== p[1] || Math.floor(q[2] / f) !== p[2] || Math.floor(q[3] / f) !== p[3]) return;
+		for (var a = 0; a < 3; a++) { out[a] = Math.min(out[a], b[a]); out[3 + a] = Math.max(out[3 + a], b[3 + a]); }
+	});
+	return out;
+}
+
 function brute(manifest, view) {
 	var budget = view.pointBudget === undefined ? 10e6 : view.pointBudget, minPx = view.minPixels === undefined ? 100 : view.minPixels;
 	var keys = Object.keys(manifest.nodes), taken = new Map(), rejected = new Set(), out = [], used = 0;
 	var m = {};
-	keys.forEach(function (k) { m[k] = measure(view, manifest.nodes[k].box); });
+	keys.forEach(function (k) { m[k] = measure(view, subtreeBox(manifest, k)); });
 	taken.set("0-0-0-0", true); out.push("0-0-0-0"); used = manifest.nodes["0-0-0-0"].count;
 	for (;;) {
 		var best = null;

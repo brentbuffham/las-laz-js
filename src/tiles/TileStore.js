@@ -54,9 +54,11 @@ function describe(where) {
  * @param {object} body - the manifest
  * @param {Uint8Array} head - the source's header and VLR bytes
  * @param {Array} evlrs - the source's small EVLRs ({ userId, recordId, description, bytes })
+ * @param {number} seq - the manifest's sequence number (an edit refuses a store changed since)
  */
-export function TileStore(backend, body, head, evlrs) {
+export function TileStore(backend, body, head, evlrs, seq) {
 	this._backend = backend;
+	this._seq = seq;
 	/** The manifest (plain JSON: post it to another thread for selectTiles). */
 	this.manifest = body;
 	/** Where the store lives. */
@@ -116,14 +118,17 @@ async function loadSource(backend, where) {
 }
 
 // Remove blobs no manifest names, when this thread can take the write lock (a writer
-// elsewhere may be mid-edit, its next generation not yet in the manifest)
-async function sweep(backend, body) {
-	try { await backend.lock(); } catch (e) { return; }
+// elsewhere may be mid-edit, its next generation not yet in the manifest). The manifest is read
+// again under the lock (an edit may have landed since it was first read); the newest is returned.
+async function sweep(backend, m) {
+	try { await backend.lock(); } catch (e) { return m; }
 	try {
+		var now = await readManifest(backend) || m, body = now.body;
 		var keep = new Set(["store-a.json", "store-b.json", HEAD_NAME, EVLRS_NAME]);
 		Object.keys(body.nodes).forEach(function (k) { keep.add(tileName(k, body.nodes[k].gen)); });
 		var names = await backend.list();
 		for (var i = 0; i < names.length; i++) if (!keep.has(names[i])) await backend.remove(names[i]);
+		return now;
 	} finally {
 		backend.unlock();
 	}
@@ -141,8 +146,8 @@ export async function openTiles(where) {
 	if (!m) throw new LasError(ERROR_CODES.BAD_STORE, "no tile store at " + describe(where));
 	if (m.body.layout > LAYOUT_VERSION) throw new LasError(ERROR_CODES.UNSUPPORTED, "the tile store at " + describe(where) + " was built by a newer las-laz-js (layout " + m.body.layout + "); rebuild it");
 	var src = await loadSource(backend, where);
-	await sweep(backend, m.body);
-	return new TileStore(backend, m.body, src.head, src.evlrs);
+	m = await sweep(backend, m);
+	return new TileStore(backend, m.body, src.head, src.evlrs, m.seq);
 }
 
 /**

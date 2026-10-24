@@ -7,7 +7,8 @@ Tiles and level of detail (Kirra #129).
 - `buildTiles(las, { where })` splits a LAS / LAZ file into an additive octree of tiles (Potree
   style: each tile an even 128³-grid sample of its box, every point stored once) in memory, OPFS
   (`las-tiles/<id>`) or a Node folder. Two streamed passes, chunk octrees on the worker pool,
-  memory bounded whatever the cloud's size; the same store byte for byte whatever `threads` is.
+  memory bounded by `chunkPoints` (a grid cell over it, from a far outlier or a dense spot, is
+  counted again finer); the same store byte for byte whatever `threads` is.
   A tile is the file's own records, optionally one LAZ chunk.
 - `openTiles` reopens a store without rebuilding (A/B manifest, crash safe); `store.matches(file)`;
   `listTiles`, `removeTiles`.
