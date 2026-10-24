@@ -94,6 +94,11 @@ function opfsBackend(where) {
 	var base = TILES_DIR + "/" + where.opfs, held = null;
 	function opts(sub) { return { root: where.root, dir: sub ? base + "/" + sub : base }; }
 	function missing(e) { return e && e.name === "NotFoundError"; }
+	// a write refused before a byte went in: the empty file it made goes too
+	async function refused(p, e) {
+		try { await removeScratchFile(p[1], opts(p[0])); } catch (x) { /* not made */ }
+		return needWorker(e);
+	}
 	async function names(dir, prefix, out) {
 		for await (var h of dir.values()) {
 			if (h.kind === "directory") await names(h, prefix + h.name + "/", out);
@@ -116,12 +121,12 @@ function opfsBackend(where) {
 		},
 		put: async function (name, bytes) {
 			var p = split(name), w;
-			try { w = await openScratchSyncWriter(p[1], opts(p[0])); } catch (e) { throw needWorker(e); }
+			try { w = await openScratchSyncWriter(p[1], opts(p[0])); } catch (e) { throw await refused(p, e); }
 			try { w.write(bytes); } finally { w.close(); }
 		},
 		appender: async function (name) {
 			var p = split(name), w;
-			try { w = await openScratchSyncWriter(p[1], opts(p[0])); } catch (e) { throw needWorker(e); }
+			try { w = await openScratchSyncWriter(p[1], opts(p[0])); } catch (e) { throw await refused(p, e); }
 			return { write: function (bytes) { if (bytes.length) w.write(bytes); }, close: async function () { w.close(); } };
 		},
 		remove: async function (name) { var p = split(name); await removeScratchFile(p[1], opts(p[0])); },

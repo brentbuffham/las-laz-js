@@ -30,17 +30,13 @@ import { tileName } from "./TileStore.js";
 import { tightBox } from "./build.js";
 import { loadTile, rawRecords } from "./read.js";
 import { nodeWorldBox } from "./select.js";
+import { compareKeys as keyOrder } from "./octree.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
 var SETTABLE = { classification: [0, 255], classificationFlags: [0, 15], intensity: [0, 65535], userData: [0, 255], pointSourceId: [0, 65535], red: [0, 65535], green: [0, 65535], blue: [0, 65535] };
 var MORE_RESERVED = ["count", "positions", "bounds", "stats", "colours", "normal", "extra", "extraBytes", "index"];
 
-function keyOrder(a, b) {
-	var p = a.split("-").map(Number), q = b.split("-").map(Number);
-	for (var i = 0; i < 4; i++) if (p[i] !== q[i]) return p[i] - q[i];
-	return 0;
-}
 
 // ---- selections ----
 

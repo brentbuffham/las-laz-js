@@ -77,3 +77,20 @@ test("worker: the other edits and selections", { timeout: 60000 }, async functio
 	await h.handle({ id: 9, type: "removeColumn", payload: { name: "s" } });
 	assert.deepEqual(h.result(9).manifest.columns, []);
 });
+
+test("worker: a second store replaces the first; readTiles with no keys; an empty file's progress", async function () {
+	var h = harness(), a = new Map(), b = new Map();
+	await h.handle({ id: 1, type: "open", payload: { blob: new Blob([tileLas({ n: 0 })]) } });
+	await h.handle({ id: 2, type: "buildTiles", payload: { where: { memory: a } } });
+	var prog = h.of(2).filter(function (x) { return x.m.type === "progress"; });
+	assert.ok(prog.length && prog.every(function (p) { return p.m.fraction === 1; }), "a total of 0 reports fraction 1");
+	await h.handle({ id: 3, type: "open", payload: { blob: new Blob([tileLas({ n: 300, seed: 103 })]) } });
+	await h.handle({ id: 4, type: "buildTiles", payload: { where: { memory: b } } });
+	assert.equal(h.result(4).count, 300);
+	await h.handle({ id: 5, type: "openTiles", payload: { where: { memory: a } } });
+	assert.equal(h.result(5).count, 0);
+	await h.handle({ id: 6, type: "readTiles", payload: {} });
+	assert.equal(h.result(6).count, 0);
+	await h.handle({ id: 7, type: "selectPolygon", payload: { polygon: [478000, 6772000, 478100, 6772000, 478100, 6772100] } });
+	assert.equal(h.result(7).count, 0);
+});

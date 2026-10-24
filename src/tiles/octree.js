@@ -114,11 +114,13 @@ function partition(cube, key, records, recordLength) {
 	return parts;
 }
 
-function keyOrder(a, b) {
-	var p = parseKey(a.key), q = parseKey(b.key);
-	for (var i = 0; i < 4; i++) if (p[i] !== q[i]) return p[i] - q[i];
-	return 0;
+/** Key order (depth, then x, y, z), as a sort comparator on two keys. */
+export function compareKeys(a, b) {
+	var p = parseKey(a), q = parseKey(b);
+	return p[0] - q[0] || p[1] - q[1] || p[2] - q[2] || p[3] - q[3];
 }
+
+function keyOrder(a, b) { return compareKeys(a.key, b.key); }
 
 /**
  * Build the octree under one node from its records: split while a node holds more than

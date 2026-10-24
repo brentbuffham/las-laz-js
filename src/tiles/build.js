@@ -21,7 +21,7 @@ import { createLazPool, defaultThreads } from "../laz/pool.js";
 import { openBackend } from "./backends.js";
 import { encodeTile, decodeTile } from "./tileFile.js";
 import { readManifest, writeManifest, fnv1a, LAYOUT_VERSION } from "./manifest.js";
-import { keyOf, parseKey, childKey, sampleParent, MAX_DEPTH, MIN_EDGE } from "./octree.js";
+import { keyOf, parseKey, childKey, sampleParent, compareKeys as keyOrder, MAX_DEPTH, MIN_EDGE } from "./octree.js";
 import { chunkNodes, rawBox } from "./chunkNodes.js";
 import { TileStore, tileName, toBase64, HEAD_NAME, EVLRS_NAME } from "./TileStore.js";
 
@@ -50,11 +50,6 @@ export async function fingerprint(las, name) {
 	return { name: name || (blob && blob.name) || "", size: src.size, lastModified: blob && typeof blob.lastModified === "number" ? blob.lastModified : null, head: fnv1a(new Uint8Array(head)) };
 }
 
-function keyOrder(a, b) {
-	var p = parseKey(a), q = parseKey(b);
-	for (var i = 0; i < 4; i++) if (p[i] !== q[i]) return p[i] - q[i];
-	return 0;
-}
 
 /**
  * Group the cells of a 128³ count grid into chunks: from the root down, a node whose points

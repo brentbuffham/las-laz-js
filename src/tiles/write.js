@@ -14,12 +14,8 @@ import { chooseScaleOffset } from "../write/scaleOffset.js";
 import { transformBounds } from "../ops/transform.js";
 import { recordFields } from "../read/decodeRecords.js";
 import { readTiles } from "./read.js";
+import { compareKeys as keyOrder } from "./octree.js";
 
-function keyOrder(a, b) {
-	var p = a.split("-").map(Number), q = b.split("-").map(Number);
-	for (var i = 0; i < 4; i++) if (p[i] !== q[i]) return p[i] - q[i];
-	return 0;
-}
 
 /**
  * Write the store to a sink.
