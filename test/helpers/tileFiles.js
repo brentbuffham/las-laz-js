@@ -17,7 +17,7 @@ export function tileLas(o) {
 	var r = rng(o.seed || 1), n = o.n === undefined ? 20000 : o.n, span = o.span || 200, fmt = o.pointFormat || 0, pts = [];
 	for (var i = 0; i < n; i++) {
 		var p = o.same ? { x: 478000.5, y: 6772000.25, z: 312 } : { x: 478000 + r() * span, y: 6772000 + r() * span, z: o.flatZ !== undefined ? o.flatZ : 300 + r() * span / 4 };
-		p.intensity = i % 65536; p.returnNumber = 1 + (i % 3); p.numberOfReturns = 3; p.classification = 1 + (i % 7);
+		p.intensity = i % 65536; p.userData = (i * 11) % 256; p.returnNumber = 1 + (i % 3); p.numberOfReturns = 3; p.classification = 1 + (i % 7);
 		p.gpsTime = i * 0.001; p.pointSourceId = Math.floor(i / 65536); p.red = i % 65536; p.green = (i * 3) % 65536; p.blue = (i * 7) % 65536;
 		pts.push(p);
 	}

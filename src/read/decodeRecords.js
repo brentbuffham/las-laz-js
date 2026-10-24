@@ -70,6 +70,15 @@ function available(fmt) {
 }
 
 /**
+ * Every record field a point format holds (not index).
+ * @param {number} pointFormat
+ * @returns {string[]}
+ */
+export function recordFields(pointFormat) {
+	return Object.keys(available(POINT_FORMATS[pointFormat])).filter(function (k) { return k !== "index"; });
+}
+
+/**
  * The field list a read will produce for a header.
  * @param {object} header
  * @param {string[]} [fields] - "extra" stands for every extra column

@@ -92,6 +92,23 @@ Heap.prototype.pop = function () {
 };
 
 /**
+ * A node's box in world coordinates, moved by the store transform: its tight box, or its
+ * cube cell when it holds no points.
+ * @param {object} man - the manifest
+ * @param {string} key
+ * @returns {{minX, minY, minZ, maxX, maxY, maxZ}}
+ */
+export function nodeWorldBox(man, key) {
+	var b = man.nodes[key].box, s = man.scale, off = man.offset, box;
+	if (b) box = { minX: b[0], minY: b[1], minZ: b[2], maxX: b[3], maxY: b[4], maxZ: b[5] };
+	else {
+		var c = nodeBox(man.cube, key);
+		box = { minX: c.min[0] * s.x + off.x, minY: c.min[1] * s.y + off.y, minZ: c.min[2] * s.z + off.z, maxX: c.max[0] * s.x + off.x, maxY: c.max[1] * s.y + off.y, maxZ: c.max[2] * s.z + off.z };
+	}
+	return man.transform ? transformBounds(man.transform, box) : box;
+}
+
+/**
  * The nodes to draw for a camera.
  * @param {object} storeOrManifest - a TileStore, or its manifest (e.g. posted from a Worker)
  * @param {{viewProjection: number[], width: number, height: number, pointBudget?: number,
@@ -104,16 +121,10 @@ Heap.prototype.pop = function () {
  */
 export function selectTiles(storeOrManifest, view) {
 	var man = storeOrManifest && storeOrManifest.manifest ? storeOrManifest.manifest : storeOrManifest;
-	var v = checkView(view), m = v.m, planes = planesOf(m), nodes = man.nodes, T = man.transform;
-	var s = man.scale, off = man.offset, o = v.origin;
+	var v = checkView(view), m = v.m, planes = planesOf(m), nodes = man.nodes;
+	var o = v.origin;
 	function boxOf(key) {
-		var b = nodes[key].box, box;
-		if (b) box = { minX: b[0], minY: b[1], minZ: b[2], maxX: b[3], maxY: b[4], maxZ: b[5] };
-		else {
-			var c = nodeBox(man.cube, key);
-			box = { minX: c.min[0] * s.x + off.x, minY: c.min[1] * s.y + off.y, minZ: c.min[2] * s.z + off.z, maxX: c.max[0] * s.x + off.x, maxY: c.max[1] * s.y + off.y, maxZ: c.max[2] * s.z + off.z };
-		}
-		if (T) box = transformBounds(T, box);
+		var box = nodeWorldBox(man, key);
 		return { minX: box.minX - o[0], minY: box.minY - o[1], minZ: box.minZ - o[2], maxX: box.maxX - o[0], maxY: box.maxY - o[1], maxZ: box.maxZ - o[2] };
 	}
 	function measure(box) {

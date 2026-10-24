@@ -200,3 +200,38 @@ TileStore.prototype.readTiles = async function* (keys, opts) {
 	var { readTiles } = await import("./read.js");
 	yield* readTiles(this, keys, opts);
 };
+
+// Edits (src/tiles/edit.js); each runs where the store's blobs are writable (a Worker for OPFS)
+function editing(name) {
+	return async function () {
+		var edit = await import("./edit.js");
+		return edit[name].apply(null, [this].concat(Array.prototype.slice.call(arguments)));
+	};
+}
+
+/**
+ * Select points tile by tile: fn(cols, { key, count, box }) returns ascending indices or null.
+ * @function
+ * @param {function} fn
+ * @param {{fields?: string[], box?: object}} [opts] - fields read (x, y, z); only tiles meeting box
+ * @returns {Promise<{deletes: number, count: number, tiles: object}>} a tile selection
+ */
+TileStore.prototype.select = editing("select");
+/** The points inside a box (world, after the store transform). @function */
+TileStore.prototype.selectBox = editing("selectBox");
+/** The points inside an XY polygon (selectPolygon's options). @function */
+TileStore.prototype.selectPolygon = editing("selectPolygon");
+/** The points of some classes. @function */
+TileStore.prototype.selectClasses = editing("selectClasses");
+/** Delete the selected points. @function @returns {Promise<{removed: number}>} */
+TileStore.prototype.deletePoints = editing("deletePoints");
+/** Keep only the selected points. @function @returns {Promise<{removed: number}>} */
+TileStore.prototype.keepPoints = editing("keepPoints");
+/** Set a field for the selected points: a value, or { key: typed array }. @function */
+TileStore.prototype.setColumn = editing("setColumn");
+/** Add a column (name, type "u8" ... "f64", fill) to every point. @function */
+TileStore.prototype.addColumn = editing("addColumn");
+/** Remove an added column. @function */
+TileStore.prototype.removeColumn = editing("removeColumn");
+/** Compose a transform ({ m, t }, as makeTransform) onto the store's. @function */
+TileStore.prototype.transform = editing("transform");
