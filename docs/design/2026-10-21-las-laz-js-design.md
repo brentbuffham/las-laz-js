@@ -181,8 +181,12 @@ Roadmap revised 2026-10-23 (Brent): categorise first (small), registration befor
   columns can be written back.
 - **0.9.3 — fix:** `findFacets` progress reports the total once (Kirra: a rough wall revisits
   points, and each visit past the point count reported done again).
-- **0.10.0 — level of detail:** large clouds split into tiles held in binary scratch (memory or a
-  temp disk store, `ScratchBinaryFile`) and loaded by view, for Kirra #129.
+- **0.10.0 — tiles and level of detail** (spec `2026-10-24-tiles-lod-0.10.0-design.md`): an
+  additive octree of tiles in binary scratch (memory, OPFS through `ScratchBinaryFile`, a Node
+  folder), built in two streamed passes, picked by camera within a point budget, edited in place,
+  written back to LAS / LAZ, reopened without a rebuild; for Kirra #129.
+- **0.10.1 — 2D top-set pyramid** (highest point per XY cell at a few cell sizes) from a store.
+- **0.10.2 — queries across tiles:** box, radius and nearest point for snapping and picking.
 
 ## 7. Out of scope
 

@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.9.3";
+export var VERSION = "0.10.0";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -45,3 +45,7 @@ export { colourize, createChunkColourizer, RAMPS, CLASS_COLOURS } from "./colour
 export { writeLas, createLasWriter } from "./write/writeLas.js";
 export { chooseScaleOffset } from "./write/scaleOffset.js";
 export { createWorkerHandler } from "./workers/workerProtocol.js";
+export { buildTiles } from "./tiles/build.js";
+export { openTiles, listTiles, removeTiles, TileStore } from "./tiles/TileStore.js";
+export { selectTiles } from "./tiles/select.js";
+export { combineTileSelections } from "./tiles/edit.js";

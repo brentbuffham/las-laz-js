@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.10.0 (2026-10-24)
+
+Tiles and level of detail (Kirra #129).
+
+- `buildTiles(las, { where })` splits a LAS / LAZ file into an additive octree of tiles (Potree
+  style: each tile an even 128³-grid sample of its box, every point stored once) in memory, OPFS
+  (`las-tiles/<id>`) or a Node folder. Two streamed passes, chunk octrees on the worker pool,
+  memory bounded whatever the cloud's size; the same store byte for byte whatever `threads` is.
+  A tile is the file's own records, optionally one LAZ chunk.
+- `openTiles` reopens a store without rebuilding (A/B manifest, crash safe); `store.matches(file)`;
+  `listTiles`, `removeTiles`.
+- `selectTiles(storeOrManifest, view)`: the tiles a camera needs within a point budget, culled by
+  the frustum, largest on screen first, for orthographic and perspective cameras.
+- `store.readTile` / `readTiles` give point columns as `readPoints` does (local origin, Float32,
+  the store transform, added columns).
+- Edits in place: `select`, `selectBox`, `selectPolygon`, `selectClasses`,
+  `combineTileSelections`, `deletePoints`, `keepPoints`, `setColumn`, `addColumn`,
+  `removeColumn`, `transform`; `store.writeLas(sink)` writes the edited store to LAS / LAZ.
+- The Worker gains the tile messages; `ERROR_CODES.BAD_STORE`.
+
 ## 0.9.3 (2026-10-24)
 
 - `findFacets` `onProgress` climbs once to the total: growth revisits points on a rough wall, and

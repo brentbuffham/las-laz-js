@@ -17,6 +17,25 @@
 //   colourize           { points, by, ramp?, range? } -> Uint8Array
 //   abort               { id }                        -> cancels that job (it rejects ABORTED)
 //   close                                             -> closes the reader
+// Tile stores (one open store per handler; each change returns the manifest, so the main
+// thread runs selectTiles on its own copy):
+//   buildTiles          { where, ...buildTiles opts } -> { manifest, count } (from the open file;
+//                                                        progress posts { phase, done, total })
+//   openTiles           { where }                     -> { manifest, count }
+//   readTiles           { keys, fields?, localOrigin?, float32?, threads? }
+//                                                     -> streams { id, type: "tile", key, points },
+//                                                        then result { count }
+//   selectBox           { box }                       -> a tile selection { deletes, count, tiles }
+//   selectPolygon       { polygon, options? }         -> a tile selection
+//   selectClasses       { classes }                   -> a tile selection
+//   deletePoints / keepPoints { selection }           -> { removed, manifest }
+//   setColumn           { selection, name, value }    -> { manifest }
+//   addColumn           { name, type, fill? }         -> { manifest }
+//   removeColumn        { name }                      -> { manifest }
+//   transform           { transform: { m, t } }       -> { manifest }
+//   writeTiles          { scratchId, root?, dir?, ...writeLas opts } -> { scratchId, count }
+//                                                        (an OPFS scratch file: getScratchFile)
+//   closeTiles                                        -> { closed: true }
 // Out: { id, type: "progress", fraction, label } while a job runs, then
 //      { id, type: "result", result } or { id, type: "error", code, message }.
 // Column buffers are transferred, not copied. One open file per handler.
@@ -26,6 +45,9 @@ import { LasError, ERROR_CODES } from "../errors.js";
 import { openLas } from "../LasReader.js";
 import { colourize, createChunkColourizer } from "../colour/colourize.js";
 import { checkTransform, transformBounds } from "../ops/transform.js";
+import { buildTiles } from "../tiles/build.js";
+import { openTiles } from "../tiles/TileStore.js";
+import { openScratchSyncWriter } from "../io/ScratchBinaryFile.js";
 
 function buffersOf(cols) {
 	var out = [];
@@ -39,8 +61,26 @@ function buffersOf(cols) {
  *   its promise settles once the job's final message is posted
  */
 export function createWorkerHandler(post) {
-	var reader = null;
+	var reader = null, store = null;
 	var jobs = new Map();
+
+	function needStore() {
+		if (!store) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "no tile store is open; send \"buildTiles\" or \"openTiles\" first");
+		return store;
+	}
+
+	function opened(s) {
+		if (store && store !== s) store.close();
+		store = s;
+		return { result: { manifest: s.manifest, count: s.count } };
+	}
+
+	function selection(sel) {
+		var transfer = Object.keys(sel.tiles).map(function (k) { return sel.tiles[k].buffer; });
+		return { result: sel, transfer: transfer };
+	}
+
+	function changed(extra) { return { result: Object.assign({ manifest: store.manifest }, extra || {}) }; }
 
 	function needReader() {
 		if (!reader) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "no LAS file is open; send \"open\" first");
@@ -106,6 +146,47 @@ export function createWorkerHandler(post) {
 		close: async function () {
 			if (reader) await reader.close();
 			reader = null;
+			return { result: { closed: true } };
+		},
+		buildTiles: async function (id, payload, controller) {
+			var o = Object.assign({}, payload, {
+				signal: controller.signal,
+				onProgress: function (p) { post({ id: id, type: "progress", phase: p.phase, done: p.done, total: p.total, fraction: p.total ? p.done / p.total : 1, label: p.phase }); }
+			});
+			return opened(await buildTiles(needReader(), o));
+		},
+		openTiles: async function (id, payload) { return opened(await openTiles(payload.where)); },
+		readTiles: async function (id, payload) {
+			var count = 0;
+			for await (var t of needStore().readTiles(payload.keys || [], payload)) {
+				count += t.points.count;
+				post({ id: id, type: "tile", key: t.key, points: t.points }, buffersOf(t.points));
+			}
+			return { result: { count: count } };
+		},
+		selectBox: async function (id, payload) { return selection(await needStore().selectBox(payload.box)); },
+		selectPolygon: async function (id, payload) { return selection(await needStore().selectPolygon(payload.polygon, payload.options)); },
+		selectClasses: async function (id, payload) { return selection(await needStore().selectClasses(payload.classes)); },
+		deletePoints: async function (id, payload) { return changed(await needStore().deletePoints(payload.selection)); },
+		keepPoints: async function (id, payload) { return changed(await needStore().keepPoints(payload.selection)); },
+		setColumn: async function (id, payload) { await needStore().setColumn(payload.selection, payload.name, payload.value); return changed(); },
+		addColumn: async function (id, payload) { await needStore().addColumn(payload.name, payload.type, payload.fill); return changed(); },
+		removeColumn: async function (id, payload) { await needStore().removeColumn(payload.name); return changed(); },
+		transform: async function (id, payload) { await needStore().transform(payload.transform); return changed(); },
+		writeTiles: async function (id, payload) {
+			var s = needStore(), o = Object.assign({}, payload);
+			if (typeof o.scratchId !== "string" || !o.scratchId) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "writeTiles needs a scratchId (the OPFS scratch file to write)");
+			var sink = await openScratchSyncWriter(o.scratchId, { root: o.root, dir: o.dir });
+			try {
+				var r = await s.writeLas(sink, { compress: o.compress, chunkSize: o.chunkSize, threads: o.threads, version: o.version, pointFormat: o.pointFormat });
+				return { result: { scratchId: o.scratchId, count: r.count } };
+			} finally {
+				sink.close();
+			}
+		},
+		closeTiles: async function () {
+			if (store) store.close();
+			store = null;
 			return { result: { closed: true } };
 		}
 	};

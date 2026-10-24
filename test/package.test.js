@@ -55,3 +55,9 @@ test("(static pin) every src/laz file names laz-rs, the Apache licence and the c
 	assert.match(readFileSync(new URL("../NOTICE", import.meta.url), "utf8"), /Apache License, Version 2\.0/);
 	assert.match(readFileSync(new URL("../LICENSE-APACHE", import.meta.url), "utf8"), /^Apache License/);
 });
+
+test("the tile store API is exported, and VERSION is the package version", async function () {
+	var lib = await import("../src/index.js");
+	["buildTiles", "openTiles", "listTiles", "removeTiles", "selectTiles", "combineTileSelections", "TileStore"].forEach(function (n) { assert.equal(typeof lib[n], "function", n); });
+	assert.equal(lib.VERSION, pkg.version);
+});

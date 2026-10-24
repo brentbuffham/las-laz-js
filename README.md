@@ -22,6 +22,9 @@ runs in the browser and in Node — and built for files far larger than memory.
 - Big files: a 1.1 GB, 34-million-point LAS reads in under a second in Node, and a 10-million-point
   LAZ decodes on every core (a 10-million-point file in about 0.6 s); neither is held in memory
   whole (see LAZ below for the one exception).
+- Tiles and level of detail: `buildTiles` splits a cloud of any size into an octree of tiles in
+  memory, OPFS or a Node folder; `selectTiles` picks the tiles a camera needs within a point
+  budget; tiles load as columns, are edited in place and written back to LAS / LAZ. See Tiles.
 - Also: a ready-made module Worker (`las-laz-js/worker`) and a
   [Three.js demo](https://brentbuffham.github.io/las-laz-js/).
 
@@ -547,6 +550,88 @@ for await (var chunk of las.chunks({ fields: ["x", "y", "z"] })) {
 In the browser, `readPointsToScratch` streams the selected columns into OPFS scratch files (one
 per field) instead of memory; run it in a Worker, which OPFS sync access needs.
 
+## Tiles and level of detail
+
+For clouds bigger than a GPU (or a tab) holds. `buildTiles` splits a LAS / LAZ file into an
+octree of tiles kept in binary scratch; `selectTiles` picks the ones a camera needs within a point
+budget; each tile loads as point columns. The library draws nothing: rendering stays with you.
+
+```js
+import { openLas, buildTiles, openTiles, selectTiles } from "las-laz-js";
+
+// in a Worker (OPFS writes need one)
+var store = await buildTiles(await openLas(file), { where: { opfs: "scan-123" }, compress: true, onProgress });
+// later, after a reload: no rebuild
+var store = await openTiles({ opfs: "scan-123" });
+await store.matches(file);              // true when built from this file
+
+// every frame, on the main thread, from the manifest the Worker posts
+var pick = selectTiles(store.manifest, { viewProjection, width, height, pointBudget: 20e6, localOrigin });
+// -> [{ key, depth, count, box }], most important first, a tile's parent always before it
+var keys = pick.map(function (n) { return n.key; });
+for await (var t of store.readTiles(keys, { fields: ["x", "y", "z", "red", "green", "blue"], localOrigin, float32: true })) {
+	draw(t.key, t.points);
+}
+```
+
+- **Where:** `{ memory: true }` (gone with the page), `{ opfs: id }` (an OPFS folder
+  `las-tiles/<id>`, kept until removed; `listTiles()` lists them, `removeTiles(where)` removes one),
+  or `{ dir: path }` in Node.
+- **The octree is additive** (as Potree's): each tile holds an even sample of its box, one point
+  per cell of a 128³ grid (the one nearest the cell centre), and its children hold the rest. Every
+  point is stored once, so loading deeper tiles adds detail without repeating points. On a surface,
+  as scans are, that is about 16,000 points a tile; a sparse cloud's root holds most of it.
+- **A tile is the file's own LAS records** (optionally one LAZ chunk each, `compress: true`), so
+  every field and extra byte is kept.
+- **The build** streams the file twice and never holds the cloud: it counts points in a grid,
+  cuts the cloud into chunks of `chunkPoints`, appends each record to its chunk, then builds each
+  chunk's octree on the worker pool. Measured in Node: the peak stays about the same from 2 to
+  16 million points (about 95 MB on one thread, about 280 MB with two workers, most of it the
+  workers' own heaps); an 8-million-point file builds in about 3.5 s on one thread. The same file
+  and options give the same store, byte for byte, whatever `threads` is.
+- **`selectTiles`** works on the manifest alone (plain JSON), so it runs every frame on the main
+  thread. `viewProjection` is Three.js's `camera.projectionMatrix × camera.matrixWorldInverse`
+  (16 numbers, column-major), in world coordinates minus `localOrigin`. A tile's size on screen is
+  measured by projecting its box's corners, so orthographic and perspective cameras both work.
+  Tiles outside the view are skipped with everything under them; the largest on screen come
+  first; a tile's children are considered once it covers `minPixels`.
+- **Reopen:** the store's manifest is written in two alternating copies, so a crash mid-write
+  leaves the previous one; the store records the source's name, size, date and a hash of its
+  first 4 KB (`store.matches(file)`).
+
+| Option | Default | Meaning |
+|---|---|---|
+| `where` | required | `{ memory: true }`, `{ opfs: id }` or `{ dir: path }` |
+| `compress` | `false` | each tile one LAZ chunk (point formats 0–3 and 6–8) |
+| `tilePoints` | `50000` | a tile splits while it holds more |
+| `chunkPoints` | `2000000` | points per build chunk: the build's memory |
+| `threads` | automatic | workers for the chunk octrees and compression; `1`: this thread |
+| `replace` | `false` | rebuild over an existing store |
+| `pointBudget` | `10000000` | `selectTiles`: the most points to return |
+| `minPixels` | `100` | `selectTiles`: a tile smaller on screen is not opened further |
+
+### Editing tiles
+
+```js
+var sel = await store.selectBox({ minX, maxX, minY, maxY });      // also selectPolygon, selectClasses
+var sel = await store.select(function (cols, tile) { return selectPolygon(cols, poly); }, { fields: ["x", "y"] });
+await store.deletePoints(sel);                                     // or keepPoints
+await store.setColumn(sel, "classification", 64);                  // a value, or { [key]: typed array }
+await store.addColumn("facet", "i32", -1);                         // written back as extra bytes
+await store.transform(T);                                          // makeTransform's { m, t }; no tile rewritten
+await store.writeLas(sink, { compress: true });                    // tile by tile through createLasWriter
+```
+
+A selection is `{ deletes, count, tiles: { [key]: Uint32Array } }` (`combineTileSelections(a, b,
+"union" | "intersect" | "subtract")`). A delete or keep moves points, so a selection made before
+one is refused: select again. `setColumn` takes `classification`, `classificationFlags`,
+`intensity`, `userData`, `pointSourceId`, `red`, `green`, `blue` or an added column; only that
+field's bytes change, in every point format. Each edit writes the tiles it changes as new files,
+then the manifest, then removes the old files, so an edit cut short leaves the store as it was.
+`writeLas` writes the source's version, point format, scale, offset, CRS, class names and extra
+bytes, plus the added columns; an unedited store gives back every source record byte for byte (in
+tile order, not the file's). Undo is the caller's.
+
 ## Colour
 
 ```js
@@ -700,6 +785,12 @@ worker.postMessage({ id: 2, type: "chunks", payload: { fields: ["x", "y", "z"], 
 The protocol is documented in `src/workers/workerProtocol.js` and can be driven directly with
 `createWorkerHandler(post)`.
 
+Tile stores: `buildTiles` (from the open file), `openTiles`, `readTiles` (streams
+`{ type: "tile", key, points }`), `selectBox` / `selectPolygon` / `selectClasses`, `deletePoints`,
+`keepPoints`, `setColumn`, `addColumn`, `removeColumn`, `transform`, `writeTiles` (to an OPFS
+scratch file) and `closeTiles`; each change returns the manifest, for `selectTiles` on the main
+thread.
+
 **Bundlers.** The worker entry and the LAZ decode and encode workers are found through
 `new Worker(new URL(..., import.meta.url))`, which Vite and webpack 5 follow. With Vite, keep the
 package out of dependency pre-bundling (`optimizeDeps: { exclude: ["las-laz-js"] }`), so the
@@ -709,7 +800,8 @@ worker files stay next to the module that loads them.
 
 Every failure is a `LasError` with a stable `code` (`ERROR_CODES`) and, for byte-level problems,
 the file `offset`: `NOT_LAS`, `UNSUPPORTED_VERSION`, `UNSUPPORTED`, `TRUNCATED`, `BAD_HEADER`,
-`BAD_VLR`, `INVALID_ARGUMENT`, `ABORTED`, `TOO_MANY_POINTS`. A file shorter than its header
+`BAD_VLR`, `INVALID_ARGUMENT`, `ABORTED`, `TOO_MANY_POINTS`, `BAD_STORE` (a tile store with no
+manifest, a missing or damaged tile file, or a store open for writing in another tab). A file shorter than its header
 promises is `TRUNCATED`, never garbage points. (`COMPRESSED_LAZ` is kept for 0.1 callers but is no
 longer thrown: LAZ is read.)
 
