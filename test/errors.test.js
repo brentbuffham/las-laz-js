@@ -23,7 +23,7 @@ test("without an offset the message is unchanged", function () {
 
 test("ERROR_CODES is frozen and every value equals its key", function () {
 	assert.ok(Object.isFrozen(ERROR_CODES));
-	var expected = ["NOT_LAS", "UNSUPPORTED_VERSION", "UNSUPPORTED", "COMPRESSED_LAZ", "TRUNCATED", "BAD_HEADER", "BAD_VLR", "INVALID_ARGUMENT", "ABORTED", "TOO_MANY_POINTS"];
+	var expected = ["NOT_LAS", "UNSUPPORTED_VERSION", "UNSUPPORTED", "COMPRESSED_LAZ", "TRUNCATED", "BAD_HEADER", "BAD_VLR", "INVALID_ARGUMENT", "ABORTED", "TOO_MANY_POINTS", "BAD_STORE"];
 	assert.deepEqual(Object.keys(ERROR_CODES).sort(), expected.slice().sort());
 	Object.keys(ERROR_CODES).forEach(function (k) { assert.equal(ERROR_CODES[k], k); });
 });

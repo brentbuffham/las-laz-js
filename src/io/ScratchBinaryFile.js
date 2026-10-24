@@ -27,9 +27,12 @@ var DEFAULT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // Raised by OPFS when another tab or worker holds a sync handle on the file
 var LOCKED_ERRORS = ["NoModificationAllowedError", "InvalidModificationError"];
 
+// options.dir may be a path ("las-tiles/scan-1/build"): each segment is a folder
 async function getScratchDir(options) {
-	var root = (options && options.root) || await navigator.storage.getDirectory();
-	return root.getDirectoryHandle((options && options.dir) || SCRATCH_DIR, { create: true });
+	var dir = (options && options.root) || await navigator.storage.getDirectory();
+	var segs = ((options && options.dir) || SCRATCH_DIR).split("/");
+	for (var i = 0; i < segs.length; i++) if (segs[i]) dir = await dir.getDirectoryHandle(segs[i], { create: true });
+	return dir;
 }
 
 /**
