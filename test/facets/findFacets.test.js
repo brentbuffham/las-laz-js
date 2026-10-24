@@ -122,7 +122,20 @@ test("onProgress", function () {
 	assert.equal(last[0], last[1]);
 });
 
-test("growth stays linear", { skip: !!process.env.NODE_V8_COVERAGE }, function () {
+test("onProgress climbs once to the total on a rough wall that revisits points", function () {
+	// noise near the plane distance and an area no facet reaches: every facet is released and its
+	// points grown into again, so growth visits more points than the cloud holds (Kirra: WALL.las)
+	var c = planesCloud({ planes: [{ centre: [0, 0, 0], dip: 80, dipDirection: 10, width: 6, height: 6 }], spacing: 0.05, noise: 0.03, seed: 5 });
+	var calls = [];
+	findFacets(c.cols, { maxDistance: 0.2, maxAngle: 25, minArea: 1e9, onProgress: function (d, t) { calls.push([d, t]); } });
+	var total = calls[0][1], ends = calls.filter(function (x) { return x[0] === total; });
+	assert.equal(ends.length, 1, "the total is reported " + ends.length + " times");
+	assert.deepEqual(calls[calls.length - 1], [total, total]);
+	for (var i = 1; i < calls.length; i++) assert.ok(calls[i][0] > calls[i - 1][0], "call " + i + " does not climb: " + calls[i - 1][0] + " then " + calls[i][0]);
+	assert.ok(calls.length <= 202, calls.length + " calls");
+});
+
+test("growth stays linear",{ skip: !!process.env.NODE_V8_COVERAGE }, function () {
 	function time(side) {
 		var c = planesCloud({ planes: [{ centre: [0, 0, 0], dip: 5, dipDirection: 200, width: side, height: side }], spacing: 0.05, noise: 0.003, seed: 6 });
 		var n = pointNormals(c.cols, { k: 16, maxDistance: 0.2 });

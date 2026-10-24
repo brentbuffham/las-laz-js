@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `findFacets` `onProgress` climbs once to the total: growth revisits points on a rough wall, and
+  each visit past the point count reported the total again (millions of calls on a 4 M-point scan;
+  reported by Kirra). Progress now counts the points seen, each value is reported once, and the
+  total only when the facets are done.
+
 ## 0.9.2 (2026-10-24)
 
 Extra bytes: the LAS 1.4 Extra Bytes VLR, read and written, LAS and LAZ.

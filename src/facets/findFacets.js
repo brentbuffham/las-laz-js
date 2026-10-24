@@ -71,7 +71,8 @@ function options(cols, opts) {
 export function findFacets(cols, opts) {
 	var o = options(cols, opts), n = cols.count;
 	var computeNormals = !o.normals, total = (computeNormals ? n : 0) + n, last = -1;
-	function tick(done) { if (o.onProgress && (done === total || done - last >= Math.max(1, total / 100))) { last = done; o.onProgress(done, total); } }
+	// each value once, climbing: growth revisits points, so it counts the points seen, not the visits
+	function tick(done) { if (o.onProgress && done > last && (done === total || done - last >= Math.max(1, total / 100))) { last = done; o.onProgress(done, total); } }
 	if (!n) { if (o.onProgress) o.onProgress(0, 0); return { facet: new Uint32Array(0), facets: [], planeDistance: o.planeDistance || o.maxDistance / 10 }; }
 	var nm = o.normals || pointNormals(cols, { k: o.k, maxDistance: o.maxDistance, onProgress: function (d) { tick(d); } });
 	var N = nm.normal, RES = nm.residual, off = computeNormals ? n : 0;
@@ -96,7 +97,7 @@ export function findFacets(cols, opts) {
 	var seeds = new Uint32Array(ns0);
 	for (i = 0; i < n; i++) if (hasNormal(i)) seeds[counts[binOf(i)]++] = i;
 
-	var facet = new Uint32Array(n), noSeed = new Uint8Array(n), out = new Uint8Array(n), released = new Uint8Array(n), queue = new Uint32Array(n);
+	var facet = new Uint32Array(n), seen = new Uint8Array(n), noSeed = new Uint8Array(n), out = new Uint8Array(n), released = new Uint8Array(n), queue = new Uint32Array(n);
 	var P = new Uint32Array(o.k), Dd = new Float64Array(o.k), eig = new Float64Array(5), cov = new Float64Array(6);
 	var found = [], id = 0, processed = 0, spacing = new Float64Array(SPACING_SAMPLE);
 
@@ -123,8 +124,7 @@ export function findFacets(cols, opts) {
 		var head = 0, len = 1;
 		while (head < len) {
 			var p = queue[head++];
-			processed++;
-			tick(off + Math.min(n, processed));
+			if (!seen[p]) { seen[p] = 1; processed++; tick(off + Math.min(n - 1, processed)); }   // the total only once done
 			var m = kdNearest(tree, X[p * st], Y[p * st], Z[p * st], o.k, maxD2, p, P, Dd);
 			if (m && ns < SPACING_SAMPLE) spacing[ns++] = Math.sqrt(Dd[0]);
 			for (var j = 0; j < m; j++) {
