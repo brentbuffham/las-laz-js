@@ -177,3 +177,26 @@ export async function removeTiles(where) {
 	var backend = await openBackend(where);
 	await backend.removeAll();
 }
+
+/**
+ * One node as point columns, as readPoints gives them.
+ * @param {string} key
+ * @param {{fields?: string[], localOrigin?: {x, y, z}, float32?: boolean}} [opts] - fields as
+ *   readPoints (standard fields, "extra", the file's extra columns) plus added columns
+ * @returns {Promise<object>} PointColumns
+ */
+TileStore.prototype.readTile = async function (key, opts) {
+	var { readTile } = await import("./read.js");
+	return readTile(this, key, opts);
+};
+
+/**
+ * Nodes as point columns, in the order given (LAZ nodes decode on a pool).
+ * @param {string[]} keys
+ * @param {{fields?, localOrigin?, float32?, threads?: number}} [opts]
+ * @returns {AsyncGenerator<{key: string, points: object}>}
+ */
+TileStore.prototype.readTiles = async function* (keys, opts) {
+	var { readTiles } = await import("./read.js");
+	yield* readTiles(this, keys, opts);
+};
