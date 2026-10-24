@@ -232,6 +232,19 @@ LasReader.prototype._scan = async function* (opts, into) {
 	}
 };
 
+// Every window's raw records, as the tile build reads them (internal): { bytes, firstRecord }.
+// The bytes may be reused once the next window is asked for.
+LasReader.prototype._rawWindows = async function* (signal) {
+	var plan = await this._plan();
+	var pool = await this._pool(plan);
+	try {
+		var buf = !pool && plan.bufferSize ? new Uint8Array(plan.bufferSize) : null, w = 0;
+		for await (var bytes of windowBytes(plan, pool, buf, signal)) yield { bytes: bytes, firstRecord: plan.list[w++].firstRecord };
+	} finally {
+		if (pool) pool.close();
+	}
+};
+
 // Each window's raw records in order. With a pool the next window is already
 // decoding while this one is used; without one, one buffer is reused.
 async function* windowBytes(plan, pool, buf, signal) {
