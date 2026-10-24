@@ -235,3 +235,14 @@ TileStore.prototype.addColumn = editing("addColumn");
 TileStore.prototype.removeColumn = editing("removeColumn");
 /** Compose a transform ({ m, t }, as makeTransform) onto the store's. @function */
 TileStore.prototype.transform = editing("transform");
+
+/**
+ * Write the store as LAS / LAZ, node by node (src/tiles/write.js).
+ * @param {object} sink - as createLasWriter: an OPFS scratch writer, a Node FileHandle, or any { write(bytes, position) }
+ * @param {{compress?: boolean, chunkSize?: number, threads?: number, version?: string, pointFormat?: number}} [opts]
+ * @returns {Promise<{count: number}>}
+ */
+TileStore.prototype.writeLas = async function (sink, opts) {
+	var { writeTilesLas } = await import("./write.js");
+	return writeTilesLas(this, sink, opts);
+};
