@@ -587,14 +587,19 @@ for await (var t of store.readTiles(keys, { fields: ["x", "y", "z", "red", "gree
   cuts the cloud into chunks of `chunkPoints`, appends each record to its chunk, then builds each
   chunk's octree on the worker pool. Measured in Node: the peak stays about the same from 2 to
   16 million points (about 95 MB on one thread, about 280 MB with two workers, most of it the
-  workers' own heaps); an 8-million-point file builds in about 3.5 s on one thread. The same file
-  and options give the same store, byte for byte, whatever `threads` is.
+  workers' own heaps); a 10-million-point LAZ builds in about 4 s on the worker pool (5 s
+  compressed). In Chrome, a 34-million-point LAS (1.16 GB) builds into 2,634 compressed tiles
+  (113 MB of OPFS) in about 37 s; reopened after a reload, its first tiles draw in about 0.6 s.
+  The same file and options give the same store, byte for byte, whatever `threads` is.
 - **`selectTiles`** works on the manifest alone (plain JSON), so it runs every frame on the main
   thread. `viewProjection` is Three.js's `camera.projectionMatrix × camera.matrixWorldInverse`
   (16 numbers, column-major), in world coordinates minus `localOrigin`. A tile's size on screen is
   measured by projecting its box's corners, so orthographic and perspective cameras both work.
   Tiles outside the view are skipped with everything under them; the largest on screen come
-  first; a tile's children are considered once it covers `minPixels`.
+  first; a tile's children are considered once it covers `minPixels`. Each manifest is prepared
+  once and cached by the object (under half a millisecond a frame on 2,634 tiles in Chrome; about
+  2 ms for 10,000 picked of 16,000), so never edit a manifest in place: the store and the Worker
+  hand out a new one on every change.
 - **Reopen:** the store's manifest is written in two alternating copies, so a crash mid-write
   leaves the previous one; the store records the source's name, size, date and a hash of its
   first 4 KB (`store.matches(file)`).

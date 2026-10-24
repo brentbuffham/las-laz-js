@@ -42,6 +42,7 @@
 				<button class="tab" data-tab="edit" role="tab">Edit</button>
 				<button class="tab" data-tab="register" role="tab">Register</button>
 				<button class="tab" data-tab="facets" role="tab">Facets</button>
+				<button class="tab" data-tab="tiles" role="tab">Tiles</button>
 				<button class="tab" data-tab="colour" role="tab">Colour</button>
 				<button class="tab" data-tab="stats" role="tab">Stats</button>
 				<button class="tab" data-tab="write" role="tab">Write</button>
@@ -265,6 +266,33 @@
 					<button class="button" id="facCsvSets">Sets CSV</button>
 					<button class="button" id="facDxf" title="Each facet's outline as a closed 3D polyline, a layer per joint set (SET_1 …, NO_SET), world coordinates: the facets as surfaces for CAD or Kirra">Facets DXF</button>
 				</div>
+			</div>
+
+			<div class="tab-body hidden" id="tab-tiles">
+				<p class="muted">Splits the open file into an octree of tiles (<code>buildTiles</code>, in the Worker) kept in the browser's private storage (OPFS), so it is there after a reload. The view then draws only the tiles the camera needs, within the point budget (<code>selectTiles</code>, run here as the camera moves); the Worker streams them in. Edits change the store itself; Save writes it as a new LAS or LAZ.</p>
+				<label class="field">Compress tiles (LAZ)
+					<input type="checkbox" id="tilesCompress" checked title="Each tile one LAZ chunk: about a fifth of the space, slower to load">
+				</label>
+				<div class="row"><button class="button" id="tilesBuild" disabled>Build tiles</button></div>
+				<h3>Stored tiles</h3>
+				<table class="grid-table" id="tilesList"></table>
+				<div class="row"><button class="button small" id="tilesRefresh">Refresh</button></div>
+				<h3>View</h3>
+				<label class="field">Point budget
+					<input type="range" id="tilesBudget" min="1" max="30" step="1" value="10"> <span id="tilesBudgetText">10 M</span>
+				</label>
+				<label class="field">Colour
+					<select id="tilesColour"><option value="rgb">RGB</option><option value="elevation">Elevation</option><option value="classification">Class</option><option value="intensity">Intensity</option></select>
+				</label>
+				<div id="tilesInfo" class="muted small">No tiles shown.</div>
+				<h3>Edit the store</h3>
+				<p class="muted small">Draw and close a polygon on the Edit tab, then:</p>
+				<div class="row"><button class="button" id="tilesDelete" disabled>Delete inside polygon</button></div>
+				<div class="row"><label class="field">Class <input type="number" id="tilesClass" value="6" min="0" max="255"></label><button class="button" id="tilesClassify" disabled>Classify inside polygon</button></div>
+				<label class="field">Save as LAZ
+					<input type="checkbox" id="tilesSaveCompress" checked>
+				</label>
+				<div class="row"><button class="button" id="tilesSave" disabled>Save the store</button><button class="button" id="tilesClose" disabled>Close tiles</button></div>
 			</div>
 
 			<div class="tab-body hidden" id="tab-colour">

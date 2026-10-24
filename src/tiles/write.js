@@ -1,7 +1,8 @@
 // src/tiles/write.js
 //==========================================================
 // A tile store written out as LAS / LAZ through createLasWriter, node
-// by node in key order, never the whole cloud in memory. The source's
+// by node in key order (LAZ nodes decoded on the store's pool), never
+// the whole cloud in memory. The source's
 // version, point format, scale and offset, CRS, class names and extra
 // bytes, plus the added columns as extra bytes. A transformed store
 // keeps the source's scale with an offset chosen from the moved
@@ -12,7 +13,7 @@ import { createLasWriter } from "../write/writeLas.js";
 import { chooseScaleOffset } from "../write/scaleOffset.js";
 import { transformBounds } from "../ops/transform.js";
 import { recordFields } from "../read/decodeRecords.js";
-import { readTile } from "./read.js";
+import { readTiles } from "./read.js";
 
 function keyOrder(a, b) {
 	var p = a.split("-").map(Number), q = b.split("-").map(Number);
@@ -45,10 +46,8 @@ export async function writeTilesLas(store, sink, opts) {
 		extraBytes: extra.length ? extra : undefined, compress: !!opts.compress, chunkSize: opts.chunkSize, threads: opts.threads
 	});
 	var fields = recordFields(m.pointFormat).concat(["extra"]);
-	var keys = Object.keys(m.nodes).sort(keyOrder);
-	for (var i = 0; i < keys.length; i++) {
-		if (!m.nodes[keys[i]].count) continue;
-		await w.writePoints(await readTile(store, keys[i], { fields: fields }));
-	}
+	var keys = Object.keys(m.nodes).sort(keyOrder).filter(function (k) { return m.nodes[k].count > 0; });
+	// LAZ nodes decode on the store's pool, ahead of the writer
+	for await (var t of readTiles(store, keys, { fields: fields, threads: opts.threads })) await w.writePoints(t.points);
 	return w.close();
 }

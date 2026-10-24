@@ -17,7 +17,7 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { parseKey, childKey, nodeBox } from "./octree.js";
+import { nodeBox } from "./octree.js";
 import { transformBounds } from "../ops/transform.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
@@ -57,40 +57,6 @@ function planesOf(m) {
 	return out;
 }
 
-function keyLess(a, b) {
-	var p = parseKey(a), q = parseKey(b);
-	for (var i = 0; i < 4; i++) if (p[i] !== q[i]) return p[i] < q[i];
-	return false;
-}
-
-// a max-heap on { size, key }
-function Heap() { this.a = []; }
-Heap.prototype.above = function (x, y) { return x.size > y.size || (x.size === y.size && keyLess(x.key, y.key)); };
-Heap.prototype.push = function (x) {
-	var a = this.a, i = a.length;
-	a.push(x);
-	while (i > 0) {
-		var p = Math.floor((i - 1) / 2);
-		if (!this.above(a[i], a[p])) break;
-		var t = a[i]; a[i] = a[p]; a[p] = t; i = p;
-	}
-};
-Heap.prototype.pop = function () {
-	var a = this.a, top = a[0], last = a.pop();
-	if (a.length) {
-		a[0] = last;
-		var i = 0;
-		for (;;) {
-			var l = 2 * i + 1, r = l + 1, m = i;
-			if (l < a.length && this.above(a[l], a[m])) m = l;
-			if (r < a.length && this.above(a[r], a[m])) m = r;
-			if (m === i) break;
-			var t = a[i]; a[i] = a[m]; a[m] = t; i = m;
-		}
-	}
-	return top;
-};
-
 /**
  * A node's box in world coordinates, moved by the store transform: its tight box, or its
  * cube cell when it holds no points.
@@ -108,6 +74,31 @@ export function nodeWorldBox(man, key) {
 	return man.transform ? transformBounds(man.transform, box) : box;
 }
 
+// What selectTiles needs from a manifest, made once per manifest object (an edit posts a new
+// one): the nodes in key order (their index is the tie order), counts, moved world boxes and
+// each node's children by index
+var prepared = new WeakMap();
+function prepare(man) {
+	var p = prepared.get(man);
+	if (p) return p;
+	var keys = Object.keys(man.nodes).map(function (k) { return { key: k, k: k.split("-").map(Number) }; });
+	keys.sort(function (a, b) { for (var i = 0; i < 4; i++) if (a.k[i] !== b.k[i]) return a.k[i] - b.k[i]; return 0; });
+	var n = keys.length, at = new Map(), count = new Float64Array(n), box = new Float64Array(6 * n), kids = new Int32Array(8 * n).fill(-1);
+	keys.forEach(function (e, i) { at.set(e.key, i); });
+	keys.forEach(function (e, i) {
+		count[i] = man.nodes[e.key].count;
+		var b = nodeWorldBox(man, e.key);
+		box[6 * i] = b.minX; box[6 * i + 1] = b.minY; box[6 * i + 2] = b.minZ; box[6 * i + 3] = b.maxX; box[6 * i + 4] = b.maxY; box[6 * i + 5] = b.maxZ;
+		if (e.k[0] > 0) {
+			var parent = at.get((e.k[0] - 1) + "-" + Math.floor(e.k[1] / 2) + "-" + Math.floor(e.k[2] / 2) + "-" + Math.floor(e.k[3] / 2));
+			if (parent !== undefined) kids[8 * parent + (e.k[1] % 2) + 2 * (e.k[2] % 2) + 4 * (e.k[3] % 2)] = i;
+		}
+	});
+	p = { keys: keys, count: count, box: box, kids: kids, root: at.get("0-0-0-0") };
+	prepared.set(man, p);
+	return p;
+}
+
 /**
  * The nodes to draw for a camera.
  * @param {object} storeOrManifest - a TileStore, or its manifest (e.g. posted from a Worker)
@@ -121,49 +112,72 @@ export function nodeWorldBox(man, key) {
  */
 export function selectTiles(storeOrManifest, view) {
 	var man = storeOrManifest && storeOrManifest.manifest ? storeOrManifest.manifest : storeOrManifest;
-	var v = checkView(view), m = v.m, planes = planesOf(m), nodes = man.nodes;
-	var o = v.origin;
-	function boxOf(key) {
-		var box = nodeWorldBox(man, key);
-		return { minX: box.minX - o[0], minY: box.minY - o[1], minZ: box.minZ - o[2], maxX: box.maxX - o[0], maxY: box.maxY - o[1], maxZ: box.maxZ - o[2] };
-	}
-	function measure(box) {
-		var visible = true, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, behind = false;
-		var corners = [];
-		for (var i = 0; i < 8; i++) corners.push([i % 2 ? box.maxX : box.minX, Math.floor(i / 2) % 2 ? box.maxY : box.minY, Math.floor(i / 4) ? box.maxZ : box.minZ]);
-		for (var p = 0; p < 6 && visible; p++) {
-			var pl = planes[p], any = false;
-			for (var c = 0; c < 8 && !any; c++) if (pl[0] * corners[c][0] + pl[1] * corners[c][1] + pl[2] * corners[c][2] + pl[3] >= 0) any = true;
-			if (!any) visible = false;
+	var v = checkView(view), m = v.m, pl = [].concat.apply([], planesOf(m)), P = prepare(man);
+	var o = v.origin, B = P.box, W = v.width / 2, H = v.height / 2;
+	var cx = new Float64Array(8), cy = new Float64Array(8), cz = new Float64Array(8);
+	// -1 when culled, else the size on screen in pixels (Infinity when a corner is at or behind the eye)
+	function measure(i) {
+		var x0 = B[6 * i] - o[0], y0 = B[6 * i + 1] - o[1], z0 = B[6 * i + 2] - o[2], x1 = B[6 * i + 3] - o[0], y1 = B[6 * i + 4] - o[1], z1 = B[6 * i + 5] - o[2];
+		for (var q = 0; q < 8; q++) { cx[q] = q % 2 ? x1 : x0; cy[q] = q % 4 >= 2 ? y1 : y0; cz[q] = q >= 4 ? z1 : z0; }
+		for (var p = 0; p < 24; p += 4) {
+			var any = false;
+			for (var c = 0; c < 8; c++) if (pl[p] * cx[c] + pl[p + 1] * cy[c] + pl[p + 2] * cz[c] + pl[p + 3] >= 0) { any = true; break; }
+			if (!any) return -1;
 		}
+		var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
 		for (var k = 0; k < 8; k++) {
-			var x = corners[k][0], y = corners[k][1], z = corners[k][2];
-			var w = m[3] * x + m[7] * y + m[11] * z + m[15];
-			if (w <= 0) { behind = true; continue; }
-			var sx = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) / 2 * v.width;
-			var sy = ((m[1] * x + m[5] * y + m[9] * z + m[13]) / w + 1) / 2 * v.height;
+			var x = cx[k], y = cy[k], z = cz[k], w = m[3] * x + m[7] * y + m[11] * z + m[15];
+			if (w <= 0) return Infinity;
+			var sx = (m[0] * x + m[4] * y + m[8] * z + m[12]) / w * W, sy = (m[1] * x + m[5] * y + m[9] * z + m[13]) / w * H;
 			if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
 			if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
 		}
-		return { visible: visible, size: behind ? Infinity : Math.hypot(maxX - minX, maxY - minY) };
+		var dx = maxX - minX, dy = maxY - minY;
+		return Math.sqrt(dx * dx + dy * dy);
 	}
-	var out = [], used = 0, heap = new Heap();
-	function take(key, box, size) {
-		out.push({ key: key, depth: parseKey(key)[0], count: nodes[key].count, box: box });
-		used += nodes[key].count;
-		if (!(size >= v.minPixels)) return;
-		for (var c = 0; c < 8; c++) {
-			var ck = childKey(key, c);
-			if (!nodes[ck]) continue;
-			var cb = boxOf(ck), me = measure(cb);
-			if (me.visible) heap.push({ key: ck, size: me.size, box: cb });
+	// a max-heap of node indices on size, ties to the lower index (key order)
+	var heap = new Int32Array(P.keys.length), hn = 0, size = new Float64Array(P.keys.length);
+	function above(a, b) { return size[a] > size[b] || (size[a] === size[b] && a < b); }
+	function push(i) {
+		var j = hn++;
+		heap[j] = i;
+		while (j > 0) {
+			var up = (j - 1 - (j - 1) % 2) / 2;
+			if (!above(heap[j], heap[up])) break;
+			var t = heap[j]; heap[j] = heap[up]; heap[up] = t; j = up;
 		}
 	}
-	var root = "0-0-0-0", rb = boxOf(root);
-	take(root, rb, measure(rb).size);
-	while (heap.a.length) {
-		var next = heap.pop();
-		if (used + nodes[next.key].count <= v.budget) take(next.key, next.box, next.size);
+	function pop() {
+		var top = heap[0];
+		heap[0] = heap[--hn];
+		var j = 0;
+		for (;;) {
+			var l = 2 * j + 1, r = l + 1, best = j;
+			if (l < hn && above(heap[l], heap[best])) best = l;
+			if (r < hn && above(heap[r], heap[best])) best = r;
+			if (best === j) break;
+			var t = heap[j]; heap[j] = heap[best]; heap[best] = t; j = best;
+		}
+		return top;
+	}
+	var out = [], used = 0;
+	function take(i) {
+		var e = P.keys[i];
+		out.push({ key: e.key, depth: e.k[0], count: P.count[i], box: { minX: B[6 * i] - o[0], minY: B[6 * i + 1] - o[1], minZ: B[6 * i + 2] - o[2], maxX: B[6 * i + 3] - o[0], maxY: B[6 * i + 4] - o[1], maxZ: B[6 * i + 5] - o[2] } });
+		used += P.count[i];
+		if (!(size[i] >= v.minPixels)) return;
+		for (var c = 0; c < 8; c++) {
+			var ch = P.kids[8 * i + c];
+			if (ch < 0) continue;
+			var s = measure(ch);
+			if (s >= 0) { size[ch] = s; push(ch); }
+		}
+	}
+	size[P.root] = measure(P.root);
+	take(P.root);
+	while (hn) {
+		var next = pop();
+		if (used + P.count[next] <= v.budget) take(next);
 	}
 	return out;
 }

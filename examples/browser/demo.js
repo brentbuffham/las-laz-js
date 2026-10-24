@@ -7,7 +7,8 @@
 // The Edit tab selects and edits those points (src/ops), classifies them
 // (existing classes kept unless Overwrite) and can crop the file on read
 // with the polygon drawn on the viewer. The Register tab (register.js)
-// moves the cloud onto a reference cloud or the grid.
+// moves the cloud onto a reference cloud or the grid. The Tiles tab
+// (tiles.js) builds a tile store and flies it within a point budget.
 // Imports the library from ../../src so it always runs current code.
 //==========================================================
 
@@ -22,6 +23,7 @@ import { createViewer } from "./viewer.js";
 import { initRegister } from "./register.js";
 import { createPartsSink } from "./fileParts.js";
 import { initFacets } from "./facets.js";
+import { initTiles } from "./tiles.js";
 
 // ?drawCap=N lowers the cap, to try a cloud bigger than what is drawn with a small file
 var DRAW_CAP = Math.floor(Number(new URLSearchParams(location.search).get("drawCap"))) || 20000000;
@@ -36,7 +38,7 @@ var fileOrigin = null;   // the open file's own origin (its bounds' centre): eve
 worker.onmessage = function (event) {
 	var m = event.data, job = pending.get(m.id);
 	if (!job) return;
-	if (m.type === "progress" || m.type === "chunk") { job.onEvent(m); return; }
+	if (m.type === "progress" || m.type === "chunk" || m.type === "tile") { job.onEvent(m); return; }
 	pending.delete(m.id);
 	if (m.type === "result") job.resolve(m.result); else job.reject(Object.assign(new Error(m.message), { code: m.code }));
 };
@@ -67,6 +69,7 @@ async function openFile(f) {
 	var h = info.header;
 	origin = fileOrigin = { x: (h.bounds.minX + h.bounds.maxX) / 2, y: (h.bounds.minY + h.bounds.maxY) / 2, z: (h.bounds.minZ + h.bounds.maxZ) / 2 };
 	register.onOpen();
+	tiles.fileOpened();
 	showHeader();
 	classNames = Object.assign({}, info.classNames || {});
 	refreshClassSelect();
@@ -379,11 +382,11 @@ function setDrawing(on) {
 function polyInfo(text) { $("polyInfo").textContent = text; }
 
 function toggleDraw() {
-	if (!cloud) return;
+	if (!cloud && !tiles.active()) return;   // the Tiles tab's store, with no cloud read
 	if (drawing) { setDrawing(false); polyInfo(poly.length / 2 + " vertices (open) — Draw to add more, Finish to close"); return; }
 	if (polyClosed || !poly.length) {          // start a new polygon, looking straight down
 		poly = []; polyClosed = false; lastClick = null;
-		polyZ = ext ? ext.midZ : 0;
+		polyZ = tiles.active() ? tiles.midZ() : ext ? ext.midZ : 0;
 		viewer.setOutline([]);
 		viewer.topView();
 	}
@@ -911,4 +914,13 @@ var facets = initFacets({
 	},
 	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; }
 });
-window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets };   // for checks from the console
+// The Tiles tab: builds and edits go through the Worker; selectTiles runs here
+var tiles = initTiles({
+	$: $, viewer: viewer, call: call, setStatus: setStatus, fmt: fmt, since: since,
+	file: function () { return file; }, origin: function () { return origin; },
+	polygon: function () { return polyClosed && poly.length >= 6 ? poly.slice() : null; },
+	setMainVisible: function (on) { viewer.setVisible("moving", on); },
+	// the Edit tab's polygon tools work on the tiles too, with no cloud read
+	polygonTools: function (on) { ["drawButton", "finishButton", "clearPolyButton", "topViewButton"].forEach(function (id) { $(id).disabled = !on && !cloud; }); }
+});
+window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, tiles: tiles, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets };   // for checks from the console

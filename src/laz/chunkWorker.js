@@ -8,11 +8,11 @@
 //      (s / e index into packed; base is packed's file offset)
 // In (compress): { id, op: "compress", vlr, recordLength, records: ArrayBuffer, counts: number[] }
 //      (counts: each chunk's points, back to back from the start of records)
-// In (octree): { id, op: "octree", records: ArrayBuffer, recordLength, cube, rootKey, opts }
-//      (a tile build's chunk: src/tiles/octree.js buildChunkOctree)
+// In (octree): { id, op: "octree", records: ArrayBuffer, recordLength, cube, rootKey, opts, laz }
+//      (a tile build's chunk: src/tiles/chunkNodes.js)
 // Out: { ready: true } once listening, then per task
 //      decode { id, records: ArrayBuffer }, compress { id, chunks: ArrayBuffer, sizes: number[] }
-//      (the chunks back to back, and each one's length), octree { id, nodes: [{ key, count, records: ArrayBuffer }] },
+//      (the chunks back to back, and each one's length), octree { id, nodes: [{ key, count, records: ArrayBuffer, packed, box }] },
 //      or { id, error: { code, message, offset } }
 //
 // Uses the chunk decoder translated from laz-rs (https://github.com/laz-rs/laz-rs),
@@ -24,7 +24,7 @@
 
 import { createChunkDecoder } from "./decompressChunk.js";
 import { createChunkCompressor } from "./compressChunk.js";
-import { buildChunkOctree } from "../tiles/octree.js";
+import { chunkNodes } from "../tiles/chunkNodes.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -75,10 +75,10 @@ function compress(m) {
 }
 
 function octree(m) {
-	var nodes = buildChunkOctree(new Uint8Array(m.records), m.recordLength, m.cube, m.rootKey, m.opts);
+	var nodes = chunkNodes(new Uint8Array(m.records), m.recordLength, m.cube, m.rootKey, m.opts, m.laz || null);
 	var out = nodes.map(function (n) {
 		var r = n.records, whole = r.byteOffset === 0 && r.byteLength === r.buffer.byteLength;
-		return { key: n.key, count: n.count, records: whole ? r.buffer : r.slice().buffer };
+		return { key: n.key, count: n.count, records: whole ? r.buffer : r.slice().buffer, packed: n.packed, box: n.box };
 	});
 	port.post({ id: m.id, nodes: out }, out.map(function (n) { return n.records; }));
 }

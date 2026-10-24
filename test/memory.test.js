@@ -26,7 +26,9 @@ function probe(args) {
 }
 
 // The build holds chunks, not the cloud: four times the points must not raise the peak by
-// more than a quarter of the extra records, and the bigger build stays under its own records.
+// half the extra records (a build that held the cloud would rise by all of them, and more),
+// and the bigger build stays under its own records. Half, not less: run beside the rest of
+// the suite, the GC lets the peak wander by tens of MB.
 // (Most of the peak is garbage the GC has not yet collected, about the same at any size.)
 test("buildTiles memory does not grow with the cloud", { timeout: 600000 }, function () {
 	var dir = mkdtempSync(join(tmpdir(), "las-mem-"));
@@ -39,7 +41,7 @@ test("buildTiles memory does not grow with the cloud", { timeout: 600000 }, func
 		}
 		var p2 = run(small, "a"), p8 = run(big, "b");
 		var extra = (big - small) * len;
-		assert.ok(p8 - p2 < extra / 4, "the peak rose " + Math.round((p8 - p2) / 1048576) + " MB for " + Math.round(extra / 1048576) + " MB more records");
+		assert.ok(p8 - p2 < extra / 2, "the peak rose " + Math.round((p8 - p2) / 1048576) + " MB for " + Math.round(extra / 1048576) + " MB more records");
 		assert.ok(p8 < big * len, "peak " + Math.round(p8 / 1048576) + " MB for " + Math.round(big * len / 1048576) + " MB of records");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });

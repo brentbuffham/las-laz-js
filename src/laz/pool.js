@@ -156,13 +156,13 @@ export async function createLazPool(n, nodeUrl) {
 			return run(Object.assign({ op: "compress" }, task), [task.records], function (m) { return { bytes: new Uint8Array(m.chunks), sizes: m.sizes }; });
 		},
 		/**
-		 * Build one tile chunk's octree (src/tiles/octree.js buildChunkOctree) from its records (transferred).
-		 * @param {{records: ArrayBuffer, recordLength: number, cube: object, rootKey: string, opts: object}} task
-		 * @returns {Promise<Array<{key: string, count: number, records: Uint8Array}>>}
+		 * Build one tile chunk's nodes (src/tiles/chunkNodes.js) from its records (transferred).
+		 * @param {{records: ArrayBuffer, recordLength: number, cube: object, rootKey: string, opts: object, laz: object|null}} task
+		 * @returns {Promise<Array<{key: string, count: number, records: Uint8Array, packed: boolean, box: number[]|null}>>}
 		 */
 		octree: function (task) {
 			return run(Object.assign({ op: "octree" }, task), [task.records], function (m) {
-				return m.nodes.map(function (n) { return { key: n.key, count: n.count, records: new Uint8Array(n.records) }; });
+				return m.nodes.map(function (n) { return { key: n.key, count: n.count, records: new Uint8Array(n.records), packed: n.packed, box: n.box }; });
 			});
 		},
 		close: function () {

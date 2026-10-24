@@ -4,7 +4,8 @@
 // node's records through decodeRecords (record × scale + offset → the
 // store transform → minus localOrigin → Float32 when asked), with the
 // added columns attached by name. LAZ nodes decode on this thread, or
-// on a pool for readTiles.
+// on the store's pool for readTiles (started once, kept for later calls,
+// closed by store.close()).
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -84,11 +85,8 @@ export async function readTile(store, key, opts) {
 export async function* readTiles(store, keys, opts) {
 	opts = opts || {};
 	var m = store.manifest, pool = null;
-	if (m.laz && opts.threads !== 1 && keys.length >= 2) {
-		var n = Math.min(opts.threads > 0 ? Math.floor(opts.threads) : await defaultThreads(), keys.length);
-		if (n >= 2) pool = await createLazPool(n);
-	}
-	try {
+	if (m.laz && opts.threads !== 1 && keys.length >= 2) pool = await storePool(store, opts.threads > 0 ? Math.floor(opts.threads) : 0);
+	{
 		if (!pool) {
 			for (var i = 0; i < keys.length; i++) yield { key: keys[i], points: await readTile(store, keys[i], opts) };
 			return;
@@ -111,7 +109,17 @@ export async function* readTiles(store, keys, opts) {
 			if (next < keys.length) start();
 			yield { key: head.key, points: columnsOf(store, got.t, got.records, opts) };
 		}
-	} finally {
-		if (pool) pool.close();
 	}
+}
+
+// The store's decode pool: started on first use (n workers, or the default when n is 0) and
+// kept, as a view loads tiles again and again; a different n starts a new one
+async function storePool(store, n) {
+	var want = n || await defaultThreads();
+	if (want < 2) return null;
+	if (store._pool && store._poolSize === want) return store._pool;
+	if (store._pool) store._pool.close();
+	store._pool = await createLazPool(want);
+	store._poolSize = want;
+	return store._pool;
 }

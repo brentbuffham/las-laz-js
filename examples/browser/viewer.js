@@ -9,7 +9,9 @@
 // straight down to do it (topView). The Register tab adds a second,
 // reference cloud (setReference), numbered pick markers on either
 // cloud (setMarkers, with HTML labels kept on their points) and
-// picking on one layer (pick(..., layer)).
+// picking on one layer (pick(..., layer)). The Tiles tab draws a tile
+// store's tiles as a layer of their own (setTile / removeTile), and
+// reads the camera's view-projection for selectTiles (viewState).
 //==========================================================
 
 import * as THREE from "three";
@@ -50,6 +52,11 @@ export function createViewer(container) {
 	var outlineGroup = new THREE.Group();
 	scene.add(outlineGroup);
 	var facetLineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, depthTest: false, transparent: true, opacity: 0.8 });
+	// tiles (Tiles tab): one THREE.Points per tile key, and listeners told when the camera moves
+	var tileGroup = new THREE.Group();
+	scene.add(tileGroup);
+	var tileMap = new Map(), tileBox = new THREE.Box3(), cameraListeners = [];
+	controls.addEventListener("change", function () { cameraListeners.forEach(function (fn) { fn(); }); });
 	var labelLayer = document.createElement("div");
 	labelLayer.className = "pick-labels";
 	container.appendChild(labelLayer);
@@ -65,6 +72,7 @@ export function createViewer(container) {
 		renderer.setSize(w, h);
 		camera.aspect = w / h;
 		camera.updateProjectionMatrix();
+		cameraListeners.forEach(function (fn) { fn(); });
 	}
 	window.addEventListener("resize", resize);
 	resize();
@@ -114,7 +122,7 @@ export function createViewer(container) {
 		},
 		/** Frame the whole cloud (and the reference cloud, when there is one). */
 		fit: function () {
-			var all = box.clone().union(refBox);
+			var all = box.clone().union(refBox).union(tileBox);
 			if (all.isEmpty()) return;
 			var centre = all.getCenter(new THREE.Vector3());
 			var size = all.getSize(new THREE.Vector3()).length() || 1;
@@ -125,14 +133,15 @@ export function createViewer(container) {
 		},
 		/** Look straight down over the cloud's box, north (+Y) up. */
 		topView: function () {
-			if (box.isEmpty()) return;
-			var centre = box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3());
+			var b = box.isEmpty() ? tileBox : box;
+			if (b.isEmpty()) return;
+			var centre = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
 			var size = s.length() || 1;
 			// the height at which the box's X and Y extents fill the view, with a margin
 			var h = Math.max(s.y, s.x / camera.aspect, size * 0.01) / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.1;
 			controls.target.copy(centre);
 			// a hair south of overhead: straight down, camera.up (+Z) would leave the heading undefined
-			camera.position.set(centre.x, centre.y - h * 1e-4, box.max.z + h);
+			camera.position.set(centre.x, centre.y - h * 1e-4, b.max.z + h);
 			camera.near = size / 10000; camera.far = Math.max(size, h) * 20;
 			camera.updateProjectionMatrix();
 			controls.update();
@@ -176,6 +185,48 @@ export function createViewer(container) {
 			});
 		},
 		drawnCount: function () { return drawn; },
+		/** One tile: positions Float32Array (x,y,z, local), colours Uint8Array (r,g,b); replaces the key's tile. */
+		setTile: function (key, positions, colours) {
+			this.removeTile(key);
+			var geom = new THREE.BufferGeometry();
+			geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+			geom.setAttribute("color", new THREE.BufferAttribute(colours, 3, true));
+			geom.computeBoundingBox();
+			if (positions.length) tileBox.union(geom.boundingBox);
+			var points = new THREE.Points(geom, material);
+			tileGroup.add(points);
+			tileMap.set(key, { points: points, count: positions.length / 3 });
+		},
+		/** Remove one tile. */
+		removeTile: function (key) {
+			var t = tileMap.get(key);
+			if (!t) return;
+			tileGroup.remove(t.points);
+			t.points.geometry.dispose();
+			tileMap.delete(key);
+		},
+		/** Remove every tile. */
+		clearTiles: function () {
+			tileMap.forEach(function (t) { tileGroup.remove(t.points); t.points.geometry.dispose(); });
+			tileMap.clear();
+			tileBox.makeEmpty();
+		},
+		/** The tile keys drawn, and their points. */
+		tileKeys: function () { return Array.from(tileMap.keys()); },
+		tilePoints: function () { var n = 0; tileMap.forEach(function (t) { n += t.count; }); return n; },
+		/** Frame a box given in the local frame: { min: [x, y, z], max: [x, y, z] }. */
+		fitBox: function (b) {
+			tileBox.set(new THREE.Vector3(b.min[0], b.min[1], b.min[2]), new THREE.Vector3(b.max[0], b.max[1], b.max[2]));
+			this.fit();
+		},
+		/** For selectTiles: the camera's view-projection (column-major) and the canvas size in pixels. */
+		viewState: function () {
+			camera.updateMatrixWorld();
+			var m = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+			return { viewProjection: m.elements.slice(), width: container.clientWidth || 1, height: container.clientHeight || 1 };
+		},
+		/** Call fn whenever the camera moves or the view resizes. */
+		onCameraChange: function (fn) { cameraListeners.push(fn); },
 		/** The reference cloud: positions Float32Array (x,y,z, local like the main cloud), colours Uint8Array (r,g,b); replaces any before. */
 		setReference: function (positions, colours) {
 			this.clearReference();

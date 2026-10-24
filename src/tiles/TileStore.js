@@ -82,8 +82,11 @@ Object.defineProperty(TileStore.prototype, "count", {
 	}
 });
 
-/** Release the store's write lock, if this thread holds it. */
-TileStore.prototype.close = function () { this._backend.unlock(); };
+/** Release the store's write lock, if this thread holds it, and its tile-decoding workers. */
+TileStore.prototype.close = function () {
+	this._backend.unlock();
+	if (this._pool) { this._pool.close(); this._pool = null; }
+};
 
 /**
  * True when the store was built from this source (same size and first 4 KB; name and date

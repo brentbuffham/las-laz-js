@@ -89,3 +89,19 @@ test("an unknown key or field is refused; a damaged node is BAD_STORE", async fu
 	await store._backend.remove("0-0-0-0.0.tile");
 	await assert.rejects(store.readTile("0-0-0-0"), function (e) { return e.code === "BAD_STORE" && /missing/.test(e.message); });
 });
+
+test("readTiles keeps one decode pool on the store; close() ends it", { timeout: 60000 }, async function () {
+	var store = await buildTiles(await openLas(bytes), { where: { memory: true }, tilePoints: 800, compress: true });
+	var keys = Object.keys(store.manifest.nodes).slice(0, 4);
+	for await (var a of store.readTiles(keys, { fields: ["x"], threads: 2 })) assert.ok(a.points.count >= 0);
+	var pool = store._pool;
+	assert.ok(pool, "a pool was started");
+	for await (var b of store.readTiles(keys, { fields: ["x"], threads: 2 })) assert.ok(b.points.count >= 0);
+	assert.equal(store._pool, pool, "the same pool serves the next call");
+	store.close();
+	assert.equal(store._pool, null);
+	var got = [];
+	for await (var c of store.readTiles(keys, { fields: ["x"], threads: 2 })) got.push(c.key);
+	assert.deepEqual(got, keys);
+	store.close();
+});
