@@ -8,9 +8,12 @@
 //      (s / e index into packed; base is packed's file offset)
 // In (compress): { id, op: "compress", vlr, recordLength, records: ArrayBuffer, counts: number[] }
 //      (counts: each chunk's points, back to back from the start of records)
+// In (octree): { id, op: "octree", records: ArrayBuffer, recordLength, cube, rootKey, opts }
+//      (a tile build's chunk: src/tiles/octree.js buildChunkOctree)
 // Out: { ready: true } once listening, then per task
 //      decode { id, records: ArrayBuffer }, compress { id, chunks: ArrayBuffer, sizes: number[] }
-//      (the chunks back to back, and each one's length), or { id, error: { code, message, offset } }
+//      (the chunks back to back, and each one's length), octree { id, nodes: [{ key, count, records: ArrayBuffer }] },
+//      or { id, error: { code, message, offset } }
 //
 // Uses the chunk decoder translated from laz-rs (https://github.com/laz-rs/laz-rs),
 // itself a port of LASzip by rapidlasso. (c) 2007-2015 martin isenburg,
@@ -21,6 +24,7 @@
 
 import { createChunkDecoder } from "./decompressChunk.js";
 import { createChunkCompressor } from "./compressChunk.js";
+import { buildChunkOctree } from "../tiles/octree.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -50,6 +54,7 @@ var decoder = cache(createChunkDecoder), compressor = cache(createChunkCompresso
 function handle(m) {
 	try {
 		if (m.op === "compress") compress(m);
+		else if (m.op === "octree") octree(m);
 		else decode(m);
 	} catch (err) {
 		port.post({ id: m.id, error: { code: err && err.code, message: err && err.message ? err.message : String(err), offset: err && err.offset } });
@@ -67,6 +72,15 @@ function compress(m) {
 	var out = new Uint8Array(total), o = 0;
 	chunks.forEach(function (c) { out.set(c, o); o += c.length; });
 	port.post({ id: m.id, chunks: out.buffer, sizes: chunks.map(function (c) { return c.length; }) }, [out.buffer]);
+}
+
+function octree(m) {
+	var nodes = buildChunkOctree(new Uint8Array(m.records), m.recordLength, m.cube, m.rootKey, m.opts);
+	var out = nodes.map(function (n) {
+		var r = n.records, whole = r.byteOffset === 0 && r.byteLength === r.buffer.byteLength;
+		return { key: n.key, count: n.count, records: whole ? r.buffer : r.slice().buffer };
+	});
+	port.post({ id: m.id, nodes: out }, out.map(function (n) { return n.records; }));
 }
 
 function decode(m) {

@@ -16,6 +16,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { lazVlrFor } from "../laz/LazVlr.js";
 import { createChunkCompressor } from "../laz/compressChunk.js";
+import { createLazPool, defaultThreads } from "../laz/pool.js";
 import { openBackend } from "./backends.js";
 import { encodeTile, decodeTile } from "./tileFile.js";
 import { readManifest, writeManifest, fnv1a, LAYOUT_VERSION } from "./manifest.js";
@@ -24,6 +25,7 @@ import { TileStore, tileName, toBase64, HEAD_NAME, EVLRS_NAME } from "./TileStor
 
 var GRID = 128, GRID_DEPTH = 7;
 var BUFFER_BYTES = 65536;
+var READ_WINDOW = 4 * 1048576;   // the build's own read window: its memory bound leaves out the reader's
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -121,6 +123,7 @@ export async function buildTiles(las, opts) {
 	if (!opts.where) throw bad("buildTiles needs a where: { memory: true }, { opfs: id } or { dir: path }");
 	var tilePoints = wholeOption(opts, "tilePoints", 50000), chunkPoints = wholeOption(opts, "chunkPoints", 2000000);
 	if (opts.onProgress !== undefined && typeof opts.onProgress !== "function") throw bad("onProgress must be a function");
+	var threads = wholeOption(opts, "threads", 0);   // 0 = automatic
 	var h = las.header, len = h.recordLength, signal = opts.signal, onProgress = opts.onProgress;
 	var laz = opts.compress ? lazVlrFor(h.pointFormat, len, 0).vlr : null;   // UNSUPPORTED for formats 4, 5, 9, 10
 	var backend = await openBackend(opts.where);
@@ -129,7 +132,7 @@ export async function buildTiles(las, opts) {
 		await backend.removeAll();
 	}
 	await backend.lock();
-	var open = [];
+	var open = [], pool = null;
 	try {
 		var src = await fingerprint(las, opts.name);
 		var s = h.scale, o = h.offset, b = h.bounds;
@@ -158,28 +161,50 @@ export async function buildTiles(las, opts) {
 		};
 		var tiles = phase(onProgress, "tiles", chunks.length + 1);
 		var tileOpts = { tilePoints: tilePoints, maxDepth: MAX_DEPTH, minEdge: MIN_EDGE };
+		if (threads !== 1 && chunks.length >= 2) {
+			var want = Math.min(threads || await defaultThreads(), chunks.length);
+			if (want >= 2) pool = await createLazPool(want);   // null when workers cannot start: this thread
+		}
+		// at most pool.size chunks in flight, settled in chunk order
+		var inflight = [], settled = 0;
+		var settle = async function (job) {
+			var built = await job.nodes;
+			for (var n = 0; n < built.length; n++) await put(built[n].key, built[n].records);
+			await backend.remove(job.blob);
+			tiles.tick(++settled);
+		};
 		for (var c = 0; c < chunks.length; c++) {
 			aborted(signal);
-			var blob = "build/" + chunks[c].key + ".rec";
-			var built = buildChunkOctree(await backend.get(blob), len, cube, chunks[c].key, tileOpts);
-			for (var n = 0; n < built.length; n++) await put(built[n].key, built[n].records);
-			await backend.remove(blob);
-			tiles.tick(c + 1);
+			var blob = "build/" + chunks[c].key + ".rec", recs = await backend.get(blob);
+			if (!pool) { await settle({ blob: blob, nodes: buildChunkOctree(recs, len, cube, chunks[c].key, tileOpts) }); continue; }
+			var job = { blob: blob, nodes: pool.octree({ records: recs.slice().buffer, recordLength: len, cube: cube, rootKey: chunks[c].key, opts: tileOpts }) };
+			job.nodes.catch(function () {});   // awaited in settle; an abort must not leave it unhandled
+			inflight.push(job);
+			if (inflight.length >= pool.size) await settle(inflight.shift());
 		}
+		while (inflight.length) await settle(inflight.shift());
 		await upperLevels(chunks, cube, len, backend, put);
 		tiles.finish();
 		// 5. compress
 		if (laz) {
 			var keys = Object.keys(nodes).sort(keyOrder), pack = createChunkCompressor(laz, len);
-			var comp = phase(onProgress, "compress", keys.length);
+			var comp = phase(onProgress, "compress", keys.length), packing = [], packed = 0;
+			var store1 = async function (job) {
+				var bytes = encodeTile({ count: job.count, records: await job.chunk, compressed: true, columns: [] });
+				await backend.put(tileName(job.key, 0), bytes);
+				sizes[job.key] = bytes.length;
+				comp.tick(++packed);
+			};
 			for (var k = 0; k < keys.length; k++) {
 				aborted(signal);
 				var t = decodeTile(await backend.get(tileName(keys[k], 0)), [], keys[k]);
-				var bytes = encodeTile({ count: t.count, records: pack(t.records, 0, t.count), compressed: true, columns: [] });
-				await backend.put(tileName(keys[k], 0), bytes);
-				sizes[keys[k]] = bytes.length;
-				comp.tick(k + 1);
+				if (!pool) { await store1({ key: keys[k], count: t.count, chunk: pack(t.records, 0, t.count) }); continue; }
+				var cj = { key: keys[k], count: t.count, chunk: pool.compress({ vlr: laz, recordLength: len, records: t.records.slice().buffer, counts: [t.count] }).then(function (r) { return r.bytes; }) };
+				cj.chunk.catch(function () {});
+				packing.push(cj);
+				if (packing.length >= pool.size) await store1(packing.shift());
 			}
+			while (packing.length) await store1(packing.shift());
 			comp.finish();
 		}
 		// 6. the source's header and VLRs, then the manifest
@@ -199,9 +224,12 @@ export async function buildTiles(las, opts) {
 		backend.unlock();
 		return store;
 	} catch (err) {
+		if (pool) { pool.close(); pool = null; }
 		for (var a = 0; a < open.length; a++) { try { await open[a].close(); } catch (e) { /* already closed */ } }
 		await backend.removeAll();
 		throw err;
+	} finally {
+		if (pool) pool.close();
 	}
 }
 
@@ -230,7 +258,7 @@ async function countPass(las, cube, len, signal, progress) {
 	var counts = new Uint32Array(GRID * GRID * GRID), cell = cellIndexer(cube), done = 0, outside = false;
 	var min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
 	var lo = cube.min, hi = [cube.min[0] + cube.edge, cube.min[1] + cube.edge, cube.min[2] + cube.edge];
-	for await (var w of las._rawWindows(signal)) {
+	for await (var w of las._rawWindows(signal, READ_WINDOW)) {
 		var r = w.bytes, v = new DataView(r.buffer, r.byteOffset, r.byteLength);
 		for (var p = 0; p < r.length; p += len) {
 			var X = v.getInt32(p, true), Y = v.getInt32(p + 4, true), Z = v.getInt32(p + 8, true);
@@ -260,7 +288,7 @@ async function distribute(las, cube, len, chunks, backend, open, signal, progres
 		outs.push({ ap: ap, buf: new Uint8Array(cap), fill: 0 });
 	}
 	var cell = cellIndexer(cube), done = 0;
-	for await (var w of las._rawWindows(signal)) {
+	for await (var w of las._rawWindows(signal, READ_WINDOW)) {
 		var r = w.bytes, v = new DataView(r.buffer, r.byteOffset, r.byteLength);
 		for (var p = 0; p < r.length; p += len) {
 			var out = outs[cellChunk[cell(v.getInt32(p, true), v.getInt32(p + 4, true), v.getInt32(p + 8, true))]];

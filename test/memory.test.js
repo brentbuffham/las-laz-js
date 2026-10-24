@@ -25,7 +25,28 @@ function probe(args) {
 	return JSON.parse(execFileSync(process.execPath, [PROBE].concat(args), { encoding: "utf8" }).trim());
 }
 
-test("readPoints peaks at under 1.5x the columns it returns", { timeout: 120000 }, function () {
+// The build holds chunks, not the cloud: four times the points must not raise the peak by
+// more than a quarter of the extra records, and the bigger build stays under its own records.
+// (Most of the peak is garbage the GC has not yet collected, about the same at any size.)
+test("buildTiles memory does not grow with the cloud", { timeout: 600000 }, function () {
+	var dir = mkdtempSync(join(tmpdir(), "las-mem-"));
+	try {
+		var len = 20, small = 2000000, big = 8000000;
+		function run(M, name) {
+			var r = probe(["tiles", join(dir, name + ".las"), String(M), "100000", "1", join(dir, name)]);   // one thread: workers add their own heaps, the same at any size
+			assert.equal(r.outBytes, M);
+			return r.peakDelta;
+		}
+		var p2 = run(small, "a"), p8 = run(big, "b");
+		var extra = (big - small) * len;
+		assert.ok(p8 - p2 < extra / 4, "the peak rose " + Math.round((p8 - p2) / 1048576) + " MB for " + Math.round(extra / 1048576) + " MB more records");
+		assert.ok(p8 < big * len, "peak " + Math.round(p8 / 1048576) + " MB for " + Math.round(big * len / 1048576) + " MB of records");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("readPoints peaks at under 1.5x the columns it returns",{ timeout: 120000 }, function () {
 	var dir = mkdtempSync(join(tmpdir(), "las-mem-"));
 	try {
 		var pts = new Array(N);

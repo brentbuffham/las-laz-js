@@ -139,9 +139,11 @@ export function LasReader(src, header, vlrs, evlrs, windowSize) {
 
 // How to read this file's points: the windows, and how to turn one into raw
 // LAS records (a LAS window is read as it is; a LAZ window is a run of whole
-// chunks, decompressed into the scan's buffer). Built once per reader.
-LasReader.prototype._plan = async function () {
-	if (this._planned) return this._planned;
+// chunks, decompressed into the scan's buffer). Built once per reader and window size
+// (the tile build reads with its own, smaller windows).
+LasReader.prototype._plan = async function (windowSize) {
+	var size = windowSize || this._windowSize;
+	if (this._planned && this._plannedSize === size) return this._planned;
 	var h = this.header, src = this._src, len = h.recordLength;
 	var plan;
 	if (!h.compressed) {
@@ -149,7 +151,7 @@ LasReader.prototype._plan = async function () {
 		if (end > src.size) {
 			throw new LasError(ERROR_CODES.TRUNCATED, "the header promises " + h.pointCount + " points ending at byte " + end + " but the file is " + src.size + " bytes", src.size);
 		}
-		var list = windows(h, this._windowSize);
+		var list = windows(h, size);
 		plan = {
 			list: list,
 			// a source that can fill one reused buffer gets one (no bytes outlive a window)
@@ -160,7 +162,7 @@ LasReader.prototype._plan = async function () {
 		var vlr = findLazVlr(this.vlrs);
 		if (!vlr) throw new LasError(ERROR_CODES.BAD_VLR, "this LAZ file has no LASzip VLR (user \"laszip encoded\", record 22204), so its points cannot be decompressed");
 		var decode = createChunkDecoder(vlr, len);
-		var lazList = lazWindows(await readChunks(src, h, vlr), len, this._windowSize);
+		var lazList = lazWindows(await readChunks(src, h, vlr), len, size);
 		plan = {
 			list: lazList,
 			bufferSize: lazList.reduce(function (m, w) { return Math.max(m, w.count * len); }, 0),
@@ -185,6 +187,7 @@ LasReader.prototype._plan = async function () {
 		};
 	}
 	this._planned = plan;
+	this._plannedSize = size;
 	return plan;
 };
 
@@ -234,8 +237,8 @@ LasReader.prototype._scan = async function* (opts, into) {
 
 // Every window's raw records, as the tile build reads them (internal): { bytes, firstRecord }.
 // The bytes may be reused once the next window is asked for.
-LasReader.prototype._rawWindows = async function* (signal) {
-	var plan = await this._plan();
+LasReader.prototype._rawWindows = async function* (signal, windowSize) {
+	var plan = await this._plan(windowSize);
 	var pool = await this._pool(plan);
 	try {
 		var buf = !pool && plan.bufferSize ? new Uint8Array(plan.bufferSize) : null, w = 0;
