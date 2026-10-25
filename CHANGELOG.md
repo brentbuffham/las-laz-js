@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.0 (2026-10-26)
+
+Fragments and size distribution.
+
+- `findFragments(cols, { maxDistance })` splits a muckpile scan into fragments (rocks): facets on
+  rock-face settings merged across convex edges, strongest first, while the fragment stays
+  convex; steps and valleys keep rocks apart; edge-on faces join the rock they stay convex with;
+  a one-hop fill; per fragment its PCA axes (2nd–98th percentile spans), `size` (b), area and
+  outline; `surfaceArea` and `unassignedArea`. The pile's outward direction comes from a coarse
+  grid, or from a `viewpoint`.
+- `sizeDistribution(fragments)`: % passing by volume, area or count, an optional fines share,
+  Swebrec or Rosin–Rammler fitted to the coarse part, P-values marked when extrapolated.
+- Demo: a Fragments tab (floor warning, colours, outlines, hover, select fragment / oversize, the
+  size curve, CSV, DXF) and the `fragment` extra-bytes field on save. Facets DXF polylines now
+  carry their dummy point and 3D / closed flags (they sat inside a comment).
+
 ## 0.10.0 (2026-10-24)
 
 Tiles and level of detail (Kirra #129).

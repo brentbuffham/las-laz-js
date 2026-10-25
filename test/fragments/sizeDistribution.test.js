@@ -135,3 +135,30 @@ test("bad options are refused, naming them", function () {
 test("exports", function () {
 	assert.equal(lib.sizeDistribution, sizeDistribution);
 });
+
+test("edge paths", function () {
+	assert.throws(function () { sizeDistribution(HAND, null); }, /options/);
+	assert.throws(function () { sizeDistribution([null]); }, /fragments\[0\]/);
+	assert.throws(function () { sizeDistribution([{ size: 1, axes: [1, 1] }]); }, /axes/);
+	var d = sizeDistribution(SWEBREC, { weight: "count" }), r = sizeDistribution(quantiles(500, rosinInverse(0.4, 1.3)), { weight: "count", model: "rosin-rammler" });
+	assert.ok(Number.isNaN(d.sizeAt(NaN)) && Number.isNaN(d.passingAt(NaN)));
+	// below the measured curve, the fit
+	var f40 = sizeDistribution(SWEBREC, { weight: "count", fines: 0.4 }), below = f40.size[0] / 2;
+	assert.equal(f40.passingAt(below), f40.fit.passing(below));
+	// the fitted curves at and beyond their ends
+	assert.equal(d.fit.passing(0), 0);
+	assert.equal(d.fit.passing(d.fit.xmax * 2), 100);
+	assert.equal(d.fit.sizeAt(0), 0);
+	assert.equal(d.fit.sizeAt(100), d.fit.xmax);
+	assert.equal(r.fit.passing(-1), 0);
+	assert.equal(r.fit.sizeAt(0), 0);
+	assert.equal(r.fit.sizeAt(100), Infinity);
+	// weight none at all: every size passes everything
+	var zero = sizeDistribution([{ size: 1, area: 0 }, { size: 2, area: 0 }], { weight: "area" });
+	assert.deepEqual(Array.from(zero.passing), [100, 100]);
+	// a fragment of no weight between two: a flat step, read as its lower size
+	var flat = sizeDistribution([{ size: 1, area: 1 }, { size: 2, area: 0 }, { size: 3, area: 1 }], { weight: "area" });
+	assert.deepEqual(Array.from(flat.passing), [50, 50, 100]);
+	assert.equal(flat.sizeAt(50), 1);
+	assert.ok(Math.abs(flat.passingAt(1.5) - 50) < 1e-12);
+});

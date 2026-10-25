@@ -14,6 +14,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findFragments, convexVote } from "../../src/fragments/findFragments.js";
 import * as lib from "../../src/index.js";
+import { pointNormals } from "../../src/ops/normals.js";
 import { rockPile } from "../helpers/rocks.js";
 import { buildKdTree, kdNearest } from "../../src/index/kdtree.js";
 import { sizeDistribution } from "../../src/fragments/sizeDistribution.js";
@@ -129,6 +130,26 @@ test("a bevelled box is one", function () {
 	assert.ok(f.fragments[m[0].fragment - 1].facets.length >= 2, "top and bevel");
 });
 
+test("an edge-on face with no convex partner stays on its own", function () {
+	// a free-standing near-vertical face (3 degrees off) whose foot meets box B's top: convex with B
+	// for neither of its sides, so it is not given to B
+	var pts = [], truth = [], s = 0.02, t3 = Math.tan(3 * Math.PI / 180), k = 2 * Math.PI / (4.5 * s);
+	function add(x, y, z, id) { pts.push(x, y, z); truth.push(id); }
+	for (var x = s / 2; x < 4; x += s) for (var y = s / 2; y < 3; y += s) {
+		if (x >= 2 + t3 * 0.5 && x < 2.6 && y >= 1.2 && y < 1.8) add(x, y, 0.5, 2);
+		else add(x, y, 0.75 * s * Math.sin(k * x) * Math.sin(0.87 * k * y), 0);
+	}
+	for (var z = 0.5 + s / 2; z < 1; z += s) for (y = 1 + s / 2; y < 2; y += s) add(2 + t3 * (1 - z), y, z, 1);
+	// and a lone face standing clear of everything: no contacts, its own fragment
+	for (z = 0.5 + s / 2; z < 1; z += s) for (y = 0.2 + s / 2; y < 0.8; y += s) add(3.5 + t3 * (1 - z), y, z, 3);
+	var c = cloudOf(pts), f = findFragments(c, { maxDistance: MD, surfaceDistance: 3 }), face = {}, boxB = {}, lone = {};
+	for (var i = 0; i < c.count; i++) { var t = truth[i] === 1 ? face : truth[i] === 2 ? boxB : truth[i] === 3 ? lone : null; if (t) t[f.fragment[i]] = (t[f.fragment[i]] || 0) + 1; }
+	function top(t) { return Number(Object.keys(t).filter(function (id) { return id !== "0"; }).sort(function (p, q) { return t[q] - t[p]; })[0]); }
+	assert.ok(top(face) > 0 && top(boxB) > 0);
+	assert.notEqual(top(face), top(boxB), "the face is not given to B");
+	assert.ok(top(lone) > 0 && top(lone) !== top(face) && top(lone) !== top(boxB), "the lone face is a fragment of its own");
+});
+
 test("a flat floor is one fragment, the largest", function () {
 	// fines too fine to resolve make a noisy plane - a facet like any other (the demo warns of it)
 	var p = rockPile({ boxes: [{ centre: [2, 2], size: [1, 1, 0.6], yaw: 20, tilt: 5 }], extent: 6, spacing: 0.02, noise: 0.002, seed: 1 });
@@ -236,6 +257,22 @@ test("fill off leaves more at 0; the fill never spreads", function () {
 	for (k = 2; k <= 10; k++) assert.equal(f.fragment[c.count - 11 + k], 0, "tail point " + k);
 });
 
+test("reused normals and a given outline cell", function () {
+	var p = rockPile({ boxes: [{ centre: [2, 2], size: [1.5, 1, 0.8], yaw: 30, tilt: 8 }], extent: 4, spacing: 0.02, noise: 0.002, seed: 2, fines: "pebbles" });
+	var a = findFragments(p.cols, { maxDistance: MD });
+	var nm = pointNormals(p.cols, { k: 16, maxDistance: MD }), calls = [];
+	var b = findFragments(p.cols, { maxDistance: MD, normals: nm, onProgress: function (d, t) { calls.push([d, t]); } });
+	assert.deepEqual(b.fragment, a.fragment);
+	assert.equal(calls[calls.length - 1][1], 2 * p.cols.count, "no normals in the total");
+	var c = findFragments(p.cols, { maxDistance: MD, facetOptions: { outlineCell: 0.1 } });
+	var box = matchBoxes(p, c)[0];
+	var ar = c.fragments[box.fragment - 1].area, a0 = a.fragments[matchBoxes(p, a)[0].fragment - 1].area;
+	assert.ok(ar > a0, "a coarser outline grid covers more: " + ar + " vs " + a0);
+	var none = [];
+	findFragments({ count: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0) }, { maxDistance: MD, onProgress: function (d, t) { none.push([d, t]); } });
+	assert.deepEqual(none, [[0, 0]]);
+});
+
 test("hard inputs do not crash", function () {
 	var empty = findFragments({ count: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0) }, { maxDistance: MD });
 	assert.equal(empty.fragments.length, 0);
@@ -251,7 +288,11 @@ test("hard inputs do not crash", function () {
 	pts = [];
 	for (i = 0; i < 1000; i++) pts.push(1, 2, 3);
 	var dup = findFragments(cloudOf(pts), { maxDistance: MD });
-	[line, dup].forEach(function (f) {
+	pts = [];
+	for (i = 0; i < 500; i++) pts.push(i % 25, Math.floor(i / 25), 0);   // 1 m apart: no neighbours at all
+	var sparse = findFragments(cloudOf(pts), { maxDistance: MD });
+	assert.equal(sparse.fragments.length, 0);
+	[line, dup, sparse].forEach(function (f) {
 		for (var j = 0; j < f.fragment.length; j++) assert.ok(f.fragment[j] <= f.fragments.length);
 		noNaN(f);
 		assert.ok(Number.isFinite(f.surfaceArea) && Number.isFinite(f.unassignedArea));

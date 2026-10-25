@@ -511,6 +511,74 @@ facet or joint set (points in no set grey), outlines on the cloud, the sets tabl
 readout, and downloads: facets CSV, sets CSV, and **Facets DXF** (each outline a closed 3D polyline,
 a layer per set, world coordinates: the facets as surfaces for CAD or Kirra).
 
+## Fragments
+
+Split a muckpile scan into **fragments**, the rocks, and turn them into a **size distribution**:
+% passing by size, P-values and a fitted Swebrec or Rosin–Rammler curve, with no dependencies.
+
+```js
+import { findFragments, sizeDistribution } from "las-laz-js";
+
+var fr = findFragments(pts, { maxDistance: 0.06 });   // the pile's points (a selection), any frame
+fr.fragment;        // Uint32Array per point: its fragment (1 … n, largest first), 0 = none
+fr.fragments;       // [{ id, count, centroid, normal, axes: [a, b, c], size, area, outline, facets }]
+fr.surfaceArea;     // the scan's area
+fr.unassignedArea;  // the part in no fragment
+
+var psd = sizeDistribution(fr.fragments);              // by volume, Swebrec fitted from 60 % passing
+psd.size, psd.passing;   // the measured curve, sizes ascending
+psd.sizeAt(80);          // P80
+psd.p;                   // { 10, 20, 50, 80, 90: { size, extrapolated } }
+psd.fit;                 // { model, x50, xmax, b, rmse, from, range, passing(x), sizeAt(P) } or null
+```
+
+**`findFragments`** runs `findFacets` at rock-face settings (`maxAngle` 20, `minArea` 0,
+`minPoints` 10; override with `facetOptions`), so each face of a rock is a facet, then joins the
+facets of one rock. Where two facets touch, each boundary pair of points votes: a ridge (convex)
+says one rock, a valley (concave) says two. Two facets within `concaveAngle` (default 10°) of each
+other on one plane are one face; parallel but offset is a step, a rock on a rock. Merges go
+strongest first and only while the fragment stays convex, so rough ground does not chain into
+one huge fragment. Each facet's outward side comes from the pile's own direction, a coarse grid
+of `surfaceDistance` (default a quarter of the cloud's longest side); give `viewpoint` (the
+scanner, or any point on the open side) for a drawpoint or a steep face. A point in no facet
+joins the nearest fragment within `fillDistance` (default `maxDistance`), one hop only, so fines
+between rocks stay out. Fragments under `minPoints` (50) are dropped. `axes` are the 2nd–98th
+percentile spans along the fragment's principal axes, longest first; `size` is b, the
+intermediate one, the sieve-size estimate.
+
+**`sizeDistribution`** weighs each fragment by `volume` ((π/6)·a·b², the unseen depth taken as b;
+the default), `area` or `count`. The fit uses only the coarse part, from `fitFrom` (default 60 %)
+up, where a scan's sizes hold; P-values below the measured curve come from the fit and are
+marked `extrapolated`. `fines` (a share of the whole mass) adds a bin under the smallest fragment;
+`unassignedArea / surfaceArea` is a start for it, not applied by itself, as a scan cannot see how
+deep fines go. `model: "rosin-rammler"` fits Rosin–Rammler instead.
+
+**What a scan can and cannot see.** Only the visible surface is measured: c is the depth of the
+shell the scan saw, not the rock's, which is why `size` is b. Fragments under a few point spacings
+are not resolved. Anything flat at the facets' scale is a facet like a rock face: a bench floor or
+a wall in the run comes back as one big fragment and swamps a volume-weighted curve (keep the run
+to the pile; the demo warns when one fragment covers a quarter of the surface), and pebbly fines
+come back as pebble-sized fragments at the fine end. Two rocks pressed flush whose tops form one
+convex surface merge, as they would for any method without a crack to go on.
+
+On a synthetic pile (boxes of known size on pebbly fines, 5 mm noise at 2 cm spacing) 93 % of the
+boxes come back as one fragment each with `size` within 10 % of what was visible, and P50 and P80
+within 3 % and 7 %. At SLAM-like noise (2 cm at 4 cm spacing) that falls to about 70 % of boxes:
+faces split more. No real muckpile scan has been checked yet.
+
+**Speed:** about 6–11 s a million points in Node (`findFacets` most of it), and about 80–110
+bytes a point beyond the columns.
+
+### In the demo
+
+The Fragments tab runs on the selection (a polygon round the pile) or the whole cloud, the
+camera's position as the viewpoint: colour by fragment, outlines on the cloud, a hover readout
+(fragment, size, axes), **Select fragment** (the one last hovered) and **Select oversize** (the
+fragments above a size become the selection, to delete or Classify), the floor warning, the size
+curve (model, weight, fit from, fines) with its P-values, and downloads: fragments CSV, curve CSV
+and **Fragments DXF** (each outline a closed 3D polyline). Save with facet / set / fragment
+writes the `fragment` extra-bytes field.
+
 ## LAZ
 
 A LAZ file is opened and read with the same calls as LAS. Each LASzip chunk (50,000 points in
