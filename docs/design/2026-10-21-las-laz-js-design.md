@@ -187,6 +187,10 @@ Roadmap revised 2026-10-23 (Brent): categorise first (small), registration befor
   written back to LAS / LAZ, reopened without a rebuild; for Kirra #129.
 - **0.10.1 — 2D top-set pyramid** (highest point per XY cell at a few cell sizes) from a store.
 - **0.10.2 — queries across tiles:** box, radius and nearest point for snapping and picking.
+- **0.11.0 — fragments and size distribution** (spec `2026-10-25-fragments-0.11.0-design.md`;
+  Brent, 2026-10-25): `findFragments` merges facets across convex edges into rock fragments
+  (a muckpile's rocks), with axes and a sieve-size estimate; `sizeDistribution` gives the
+  % passing curve, P-values and a Swebrec / Rosin–Rammler fit. Kirra's side later.
 
 ## 7. Out of scope
 
