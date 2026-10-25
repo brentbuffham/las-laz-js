@@ -23,6 +23,7 @@ import { createViewer } from "./viewer.js";
 import { initRegister } from "./register.js";
 import { createPartsSink } from "./fileParts.js";
 import { initFacets } from "./facets.js";
+import { initFragments } from "./fragments.js";
 import { initTiles } from "./tiles.js";
 
 // ?drawCap=N lowers the cap, to try a cloud bigger than what is drawn with a small file
@@ -229,6 +230,7 @@ async function read(crop, note) {
 		showSelection();
 		register.onRead();
 		facets.onRead();
+		fragments.onRead();
 		$("writeButton").disabled = false;
 	} catch (err) {
 		setStatus(err.code === "ABORTED" ? "Stopped" : err.message, err.code !== "ABORTED");
@@ -261,7 +263,7 @@ function display(refit) {
 function colours() {
 	if ($("colourBy").value === "rgb" && !cloud.red) $("colourBy").value = "elevation";   // this format holds no colour
 	var by = $("colourBy").value;
-	var c = by === "roughness" ? roughColours() : by === "facet" || by === "set" ? facets.colours(drawn, drawnIdx, by) : colourize(drawn, colourOpts());
+	var c = by === "roughness" ? roughColours() : by === "facet" || by === "set" ? facets.colours(drawn, drawnIdx, by) : by === "fragment" ? fragments.colours(drawn, drawnIdx) : colourize(drawn, colourOpts());
 	for (var j = 0; j < drawn.count; j++) {
 		var i = drawnIdx ? drawnIdx[j] : j;
 		if (splitAt >= 0 && i >= splitAt) for (var d = j * 3; d < j * 3 + 3; d++) c[d] = 70 + c[d] * 0.2;
@@ -439,6 +441,7 @@ var splitAt = -1;       // after Split: the points from here on are the outside 
 
 function showSelection() {
 	if (typeof facets !== "undefined" && facets) facets.onSelection();
+	if (typeof fragments !== "undefined" && fragments) fragments.onSelection();
 	if (!selection) { $("selInfo").textContent = "nothing selected"; return; }
 	$("selInfo").textContent = fmt(selection.length) + " selected" + (drawnIdx ? " · " + fmt(onScreen(selection).length) + " of them on screen; edits apply to all" : "");
 }
@@ -497,6 +500,7 @@ function edit(name, make) {
 	beforeClassify = null; $("undoClassifyButton").disabled = true;
 	register.onEdit(name);
 	facets.onEdit(name, cloud.count !== before);
+	fragments.onEdit(name);
 	if (out.transformed) transformed = true;
 	if (!out.keep) { selection = null; splitAt = -1; }
 	if (out.splitAt !== undefined) splitAt = out.splitAt;
@@ -659,6 +663,7 @@ function reset() {
 	showSelection();
 	register.onRead();
 	facets.onRead();
+	fragments.onRead();
 	setStatus("Reset: " + fmt(before) + " → " + fmt(cloud.count) + " points in " + since(t0) + " ms (the last read)");
 }
 
@@ -733,14 +738,17 @@ async function openTarget(name) {
 async function save() {
 	var h = info.header, F = POINT_FORMATS[h.pointFormat].fields;
 	var wf = Number($("writeFormat").value), compress = $("writeCompress").checked;
-	var fc = $("writeFacets").checked ? facets.columns() : null;   // Save with facet / set: the cloud as read, two more fields
+	// Save with facet / set / fragment: the cloud as read, the fields of whichever has run
+	var fc = $("writeFacets").checked ? Object.assign({}, facets.columns() || {}, fragments.columns() || {}) : null;
 	var fromEdit = edited || !!fc, target = null;
 	var extra = writableExtra(), dropped = droppedExtra();
 	if (fc) {
-		extra = extra.filter(function (e) { return e.name !== "facet" && e.name !== "joint_set" && e.column !== "facet" && e.column !== "joint_set"; });
-		extra.push({ name: "facet", type: "u32", description: "las-laz-js findFacets" });
+		var ours = ["facet", "joint_set", "fragment"];
+		extra = extra.filter(function (e) { return ours.indexOf(e.name) < 0 && ours.indexOf(e.column) < 0; });
+		if (fc.facet) extra.push({ name: "facet", type: "u32", description: "las-laz-js findFacets" });
 		if (fc.joint_set) extra.push({ name: "joint_set", type: "u16", description: "las-laz-js jointSets" });
-		else fc = { facet: fc.facet };
+		else delete fc.joint_set;
+		if (fc.fragment) extra.push({ name: "fragment", type: "u32", description: "las-laz-js findFragments" });
 	}
 	var name = file.name.replace(/\.[^.]*$/, "") + "-las-laz-js" + (compress ? ".laz" : ".las");
 	$("writeResult").className = "muted small";
@@ -822,7 +830,8 @@ $("viewer").addEventListener("mousemove", function (e) {
 		$("hud").textContent = "X " + (c.x[i] + origin.x).toFixed(3) + "  Y " + (c.y[i] + origin.y).toFixed(3) + "  Z " + (c.z[i] + origin.z).toFixed(3) +
 			"  · class " + c.classification[i] + "  · intensity " + c.intensity[i] + "  · return " + c.returnNumber[i] +
 			(c.index ? "  · record " + c.index[i] : "") + extraText(c, i) +
-			(function () { var f = facets.facetOf(i); return f ? "  · facet " + f.id + " " + f.dip.toFixed(0) + "/" + ("00" + f.dipDirection.toFixed(0)).slice(-3) + (f.set ? " set " + f.set : "") : ""; })();
+			(function () { var f = facets.facetOf(i); return f ? "  · facet " + f.id + " " + f.dip.toFixed(0) + "/" + ("00" + f.dipDirection.toFixed(0)).slice(-3) + (f.set ? " set " + f.set : "") : ""; })() +
+			(function () { var g = fragments.fragmentOf(i); return g ? "  · fragment " + g.id + " size " + g.size.toFixed(2) + " · " + g.axes.map(function (v) { return v.toFixed(2); }).join(" / ") : ""; })();
 	});
 });
 
@@ -840,9 +849,9 @@ $("abortButton").addEventListener("click", stop);
 $("writeButton").addEventListener("click", save);
 $("writeFormat").addEventListener("change", writeChoice);
 $("writeCompress").addEventListener("change", writeChoice);
-// Save with facet / set: only while there are facets (checked each time the Write tab is shown)
+// Save with facet / set / fragment: only while there are facets or fragments (checked each time the Write tab is shown)
 document.querySelector('.tab[data-tab="write"]').addEventListener("click", function () {
-	var has = !!facets.columns();
+	var has = !!(facets.columns() || fragments.columns());
 	$("writeFacets").disabled = !has;
 	if (!has) $("writeFacets").checked = false;
 });
@@ -914,6 +923,17 @@ var facets = initFacets({
 	},
 	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; }
 });
+// The Fragments tab, the same way
+var fragments = initFragments({
+	$: $, viewer: viewer, setStatus: setStatus, fmt: fmt, since: since, clearSelection: clearSelection, recolour: recolour, keepPoints: keepPoints,
+	setSelection: function (s, name) {
+		selection = s && s.length ? s : null;
+		if (cloud) viewer.setColours(colours());
+		showSelection();
+		setStatus(name);
+	},
+	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; }
+});
 // The Tiles tab: builds and edits go through the Worker; selectTiles runs here
 var tiles = initTiles({
 	$: $, viewer: viewer, call: call, setStatus: setStatus, fmt: fmt, since: since,
@@ -923,4 +943,4 @@ var tiles = initTiles({
 	// the Edit tab's polygon tools work on the tiles too, with no cloud read
 	polygonTools: function (on) { ["drawButton", "finishButton", "clearPolyButton", "topViewButton"].forEach(function (id) { $(id).disabled = !on && !cloud; }); }
 });
-window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, tiles: tiles, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets };   // for checks from the console
+window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, tiles: tiles, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets, fragments: fragments };   // for checks from the console

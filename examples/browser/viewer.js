@@ -225,6 +225,8 @@ export function createViewer(container) {
 			var m = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
 			return { viewProjection: m.elements.slice(), width: container.clientWidth || 1, height: container.clientHeight || 1 };
 		},
+		/** The camera's position, in the local frame (the Fragments tab's viewpoint). */
+		cameraPosition: function () { return [camera.position.x, camera.position.y, camera.position.z]; },
 		/** Call fn whenever the camera moves or the view resizes. */
 		onCameraChange: function (fn) { cameraListeners.push(fn); },
 		/** The reference cloud: positions Float32Array (x,y,z, local like the main cloud), colours Uint8Array (r,g,b); replaces any before. */

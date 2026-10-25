@@ -42,6 +42,7 @@
 				<button class="tab" data-tab="edit" role="tab">Edit</button>
 				<button class="tab" data-tab="register" role="tab">Register</button>
 				<button class="tab" data-tab="facets" role="tab">Facets</button>
+				<button class="tab" data-tab="fragments" role="tab">Fragments</button>
 				<button class="tab" data-tab="tiles" role="tab">Tiles</button>
 				<button class="tab" data-tab="colour" role="tab">Colour</button>
 				<button class="tab" data-tab="stats" role="tab">Stats</button>
@@ -268,6 +269,37 @@
 				</div>
 			</div>
 
+			<div class="tab-body hidden" id="tab-fragments">
+				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragments</code>: facets that meet at a ridge are one rock, a valley keeps two apart. <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; a flat floor or fines flat at this scale come out as fragments too, so keep the run to the pile. The camera's position is the viewpoint. The page pauses while it runs.</p>
+				<h3>Fragments</h3>
+				<div class="form-grid">
+					<label>Max distance (m) <input type="number" id="fraMaxDist" value="0.15" min="0.01" step="0.01" title="Rock-face scale: the k nearest within this distance, a few point spacings"></label>
+					<label>Concave angle (°) <input type="number" id="fraConcave" value="10" min="1" max="89" step="1" title="Two facets this close in angle, on one plane, are one face"></label>
+					<label>Min points <input type="number" id="fraMinPoints" value="50" min="3" step="10" title="Smaller fragments go back to none"></label>
+					<label>Plane distance (m) <input type="number" id="fraPlaneDist" placeholder="measured" min="0" step="0.005" title="The facets' plane distance; blank = 3 x the measured noise"></label>
+				</div>
+				<label class="small">Fill <input type="checkbox" id="fraFill" checked title="A point in no facet joins the nearest fragment within max distance (one hop: fines stay out)"></label>
+				<div class="row wrap">
+					<span class="muted small" id="fraScope">Runs on the whole cloud</span>
+					<button class="button small hidden" id="fraClearSel" title="Run on the whole cloud again">Clear selection</button>
+				</div>
+				<div class="row wrap">
+					<button class="button" id="fraRun">Find fragments</button>
+					<button class="button" id="fraClear" title="Remove the fragments, their colours and outlines">Clear fragments</button>
+					<label class="small">Show outlines <input type="checkbox" id="fraOutlines" checked></label>
+				</div>
+				<p class="small" id="fraInfo"></p>
+				<div class="row wrap">
+					<button class="button" id="fraSelectOne" title="The fragment last under the pointer: its points become the selection">Select fragment</button>
+					<label class="small">over <input type="number" id="fraOversize" value="1" min="0" step="0.1" style="width: 5em"> m</label>
+					<button class="button" id="fraSelectBig" title="The points of every fragment larger than this size become the selection">Select oversize</button>
+				</div>
+				<div class="row wrap">
+					<button class="button" id="fraCsv">Fragments CSV</button>
+					<button class="button" id="fraDxf" title="Each fragment's outline a closed 3D polyline on layer FRAGMENTS, world coordinates">Fragments DXF</button>
+				</div>
+			</div>
+
 			<div class="tab-body hidden" id="tab-tiles">
 				<p class="muted">Splits the open file into an octree of tiles (<code>buildTiles</code>, in the Worker) kept in the browser's private storage (OPFS), so it is there after a reload. The view then draws only the tiles the camera needs, within the point budget (<code>selectTiles</code>, run here as the camera moves); the Worker streams them in. Edits change the store itself; Save writes it as a new LAS or LAZ.</p>
 				<label class="field">Compress tiles (LAZ)
@@ -304,6 +336,7 @@
 						<option value="classification">Classification</option>
 						<option value="facet" title="Each facet its own colour (Facets tab); points in no facet grey">Facet</option>
 						<option value="set" title="Each joint set its colour (Facets tab); points in no set grey">Joint set</option>
+						<option value="fragment" title="Each fragment its own colour (Fragments tab); points in none grey">Fragment</option>
 						<option value="roughness" title="Each point's RMS distance from its fitted plane (Edit tab's k and max distance)">Roughness</option>
 					</select>
 				</label>
@@ -343,8 +376,8 @@
 				<label class="field">Compress (LAZ)
 					<input type="checkbox" id="writeCompress" title="LAZ for point formats 0–3 and 6–8">
 				</label>
-				<label class="field">Save with facet / set
-					<input type="checkbox" id="writeFacets" disabled title="After Find facets: adds the facet (u32) and joint_set (u16) extra-bytes fields">
+				<label class="field">Save with facet / set / fragment
+					<input type="checkbox" id="writeFacets" disabled title="After Find facets or Find fragments: adds the facet (u32), joint_set (u16) and fragment (u32) extra-bytes fields of whichever has run">
 				</label>
 				<div class="row"><button class="button" id="writeButton" disabled>Save as LAS</button></div>
 				<div id="writeResult" class="muted small"></div>

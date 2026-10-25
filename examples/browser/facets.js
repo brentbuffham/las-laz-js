@@ -59,6 +59,38 @@ export function aciOf(rgb, used) {
 	}
 	return best;
 }
+/**
+ * An R12 DXF of closed 3D polylines: a POLYLINE each (the spec's dummy point, flags 3D and closed,
+ * VERTEX flag 32) on its layer, BYLAYER colour; the layers table from layers ({ name: ACI });
+ * $EXTMIN / $EXTMAX from lo / hi.
+ * @param {Array<{layer: string, v: number[][]}>} ents - each loop's vertices, world coordinates.
+ * @param {object} layers - { layer name: ACI colour }.
+ * @param {number[]} lo - the vertices' minimum x, y, z; hi their maximum.
+ * @param {number[]} hi
+ * @returns {string}
+ */
+export function writeDxf(ents, layers, lo, hi) {
+	var out = [];
+	function g(code, value) { out.push(String(code), String(value)); }
+	if (!ents.length) { lo = [0, 0, 0]; hi = [0, 0, 0]; }
+	g(0, "SECTION"); g(2, "HEADER");
+	g(9, "$ACADVER"); g(1, "AC1009");
+	g(9, "$EXTMIN"); g(10, lo[0].toFixed(3)); g(20, lo[1].toFixed(3)); g(30, lo[2].toFixed(3));
+	g(9, "$EXTMAX"); g(10, hi[0].toFixed(3)); g(20, hi[1].toFixed(3)); g(30, hi[2].toFixed(3));
+	g(0, "ENDSEC");
+	g(0, "SECTION"); g(2, "TABLES"); g(0, "TABLE"); g(2, "LAYER"); g(70, Object.keys(layers).length);
+	Object.keys(layers).forEach(function (name) { g(0, "LAYER"); g(2, name); g(70, 0); g(62, layers[name]); g(6, "CONTINUOUS"); });
+	g(0, "ENDTAB"); g(0, "ENDSEC");
+	g(0, "SECTION"); g(2, "ENTITIES");
+	ents.forEach(function (e) {
+		g(0, "POLYLINE"); g(8, e.layer); g(62, 256); g(66, 1);   // 256 = BYLAYER: the layer's colour
+		g(10, 0); g(20, 0); g(30, 0); g(70, 9);   // the dummy point; 8 = 3D, 1 = closed
+		e.v.forEach(function (p) { g(0, "VERTEX"); g(8, e.layer); g(10, p[0].toFixed(3)); g(20, p[1].toFixed(3)); g(30, p[2].toFixed(3)); g(70, 32); });
+		g(0, "SEQEND"); g(8, e.layer);
+	});
+	g(0, "ENDSEC"); g(0, "EOF");
+	return out.join("\r\n") + "\r\n";
+}
 export function setCss(id) { var c = setRgb(id); return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; }
 
 /**
@@ -209,12 +241,10 @@ export function initFacets(ctx) {
 		}).join("\n") + "\n";
 	}
 
-	// The facet outlines as an R12 DXF: a closed 3D POLYLINE each (the spec's dummy point, VERTEX
-	// flag 32), a layer per joint set (SET_1 …, NO_SET) coloured as the demo colours the set (the
-	// nearest ACI) with the polylines BYLAYER, world coordinates, $EXTMIN / $EXTMAX set
+	// The facet outlines as an R12 DXF (writeDxf): a layer per joint set (SET_1 …, NO_SET) coloured as
+	// the demo colours the set (the nearest ACI), world coordinates
 	function facetsDxf() {
-		var o = ctx.origin, fam = res.sets ? res.sets.family : null, out = [], lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-		function g(code, value) { out.push(String(code), String(value)); }
+		var o = ctx.origin, fam = res.sets ? res.sets.family : null, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
 		var layers = {}, ents = [], aciUsed = { 8: true }, aciOfSet = {};
 		// each set its nearest unused ACI, lowest set first (NO_SET keeps 8, grey)
 		(res.sets ? res.sets.families : []).forEach(function (fm) { var a = aciOf(setRgb(fm.id), aciUsed); aciUsed[a] = true; aciOfSet[fm.id] = a; });
@@ -229,23 +259,7 @@ export function initFacets(ctx) {
 			}
 			if (v.length >= 3) ents.push({ layer: layer, colour: colour, v: v });
 		});
-		if (!ents.length) { lo = [0, 0, 0]; hi = [0, 0, 0]; }
-		g(0, "SECTION"); g(2, "HEADER");
-		g(9, "$ACADVER"); g(1, "AC1009");
-		g(9, "$EXTMIN"); g(10, lo[0].toFixed(3)); g(20, lo[1].toFixed(3)); g(30, lo[2].toFixed(3));
-		g(9, "$EXTMAX"); g(10, hi[0].toFixed(3)); g(20, hi[1].toFixed(3)); g(30, hi[2].toFixed(3));
-		g(0, "ENDSEC");
-		g(0, "SECTION"); g(2, "TABLES"); g(0, "TABLE"); g(2, "LAYER"); g(70, Object.keys(layers).length);
-		Object.keys(layers).forEach(function (name) { g(0, "LAYER"); g(2, name); g(70, 0); g(62, layers[name]); g(6, "CONTINUOUS"); });
-		g(0, "ENDTAB"); g(0, "ENDSEC");
-		g(0, "SECTION"); g(2, "ENTITIES");
-		ents.forEach(function (e) {
-			g(0, "POLYLINE"); g(8, e.layer); g(62, 256); g(66, 1);   // 256 = BYLAYER: the set's layer colour g(10, 0); g(20, 0); g(30, 0); g(70, 9);   // 8 = 3D, 1 = closed
-			e.v.forEach(function (p) { g(0, "VERTEX"); g(8, e.layer); g(10, p[0].toFixed(3)); g(20, p[1].toFixed(3)); g(30, p[2].toFixed(3)); g(70, 32); });
-			g(0, "SEQEND"); g(8, e.layer);
-		});
-		g(0, "ENDSEC"); g(0, "EOF");
-		return out.join("\r\n") + "\r\n";
+		return writeDxf(ents, layers, lo, hi);
 	}
 
 	// --- wiring -------------------------------------------------------------------
