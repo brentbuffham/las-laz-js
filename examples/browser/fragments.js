@@ -6,13 +6,15 @@
 // the cloud, a hover line, Select fragment (the one last hovered) and
 // Select oversize (the points of fragments above a size: the selection,
 // to delete, Classify or crop), a warning when one fragment covers a
-// quarter of the surface (the floor or a wall in the run), Fragments CSV
-// and a DXF of the outlines. Results are in the cloud's local frame;
+// quarter of the surface (the floor or a wall in the run), the size curve
+// (sizeDistribution: model, weight, fit from, fines; sizeChart.js) with
+// its P-values, Fragments and Curve CSV, and a DXF of the outlines. Results are in the cloud's local frame;
 // CSV centroids are world coordinates.
 //==========================================================
 
-import { findFragments } from "../../src/index.js";
+import { findFragments, sizeDistribution } from "../../src/index.js";
 import { writeDxf } from "./facets.js";
+import { drawSizeChart } from "./sizeChart.js";
 
 var NONE_RGB = [90, 90, 90], FLOOR_SHARE = 0.25;
 
@@ -29,7 +31,7 @@ function fragmentRgb(id) {
  */
 export function initFragments(ctx) {
 	var $ = ctx.$, fmt = ctx.fmt;
-	var res = null;   // { fr (findFragments on the run's points), idx (run point -> cloud point, or null), fragment (per cloud point) }
+	var res = null;   // { fr (findFragments on the run's points), idx (run point -> cloud point, or null), fragment (per cloud point), psd }
 	var hovered = 0;   // the fragment under the pointer last (Select fragment)
 
 	function status(t, err) { ctx.setStatus("Fragments: " + t, err); }
@@ -64,6 +66,8 @@ export function initFragments(ctx) {
 			var big = floorWarning();
 			$("fraInfo").textContent = big;
 			$("fraInfo").classList.toggle("error", !!big);
+			$("fraFinesHint").textContent = "Area in no fragment: " + (100 * share).toFixed(0) + " % of the surface — a start for Fines, if those parts are fines (it is not applied by itself: a scan cannot see their depth).";
+			curve();
 			status(text + (big ? " · " + big : ""));
 			if (ctx.onResult) ctx.onResult();
 		}, 0); });
@@ -75,6 +79,32 @@ export function initFragments(ctx) {
 		fr.fragments.forEach(function (f) { if (!big || f.area > big.area) big = f; });
 		if (!big || big.area <= FLOOR_SHARE * fr.surfaceArea) return "";
 		return "Fragment " + big.id + " covers " + (100 * big.area / fr.surfaceArea).toFixed(0) + " % of the surface — the floor or a wall? Hover it, Select fragment and delete it, then find fragments again.";
+	}
+
+	// --- the size curve ---------------------------------------------------------------
+	function curve() {
+		if (!res) { drawSizeChart($("sizeChart"), null); $("fraPTable").innerHTML = ""; $("fraFitInfo").textContent = ""; return; }
+		try {
+			res.psd = sizeDistribution(res.fr.fragments, { model: $("fraModel").value, weight: $("fraWeight").value, fitFrom: num("fraFitFrom", 60), fines: num("fraFines", 0) / 100 });
+		} catch (err) { status(err.message, true); return; }
+		var psd = res.psd, fit = psd.fit;
+		drawSizeChart($("sizeChart"), psd);
+		var t = $("fraPTable");
+		t.innerHTML = "<tr><th></th><th>P10</th><th>P20</th><th>P50</th><th>P80</th><th>P90</th></tr>";
+		var tr = t.insertRow();
+		tr.insertCell().textContent = "size (m)";
+		[10, 20, 50, 80, 90].forEach(function (P) {
+			var q = psd.p[P], c = tr.insertCell();
+			c.textContent = q.size > 0 ? m(q.size) + (q.extrapolated ? " *" : "") : "—";
+			if (q.extrapolated) c.title = "From the fit, below the measured curve";
+		});
+		$("fraFitInfo").textContent = fit ? (fit.model === "swebrec" ? "Swebrec: x50 " + m(fit.x50) + " m, xmax " + m(fit.xmax) + " m, b " + fit.b.toFixed(2) : "Rosin–Rammler: x50 " + m(fit.x50) + " m, n " + fit.n.toFixed(2)) +
+			", RMSE " + fit.rmse.toFixed(2) + " % over " + m(fit.range[0]) + "–" + m(fit.range[1]) + " m · * extrapolated" : "No fit: fewer than 3 measured points from Fit from up.";
+	}
+	function curveCsv() {
+		var psd = res.psd, fit = psd.fit, rows = [];
+		for (var i = 0; i < psd.size.length; i++) rows.push([psd.size[i].toPrecision(6), psd.passing[i].toFixed(3), fit ? fit.passing(psd.size[i]).toFixed(3) : ""].join(","));
+		return "size,measured,fitted\n" + rows.join("\n") + "\n";
 	}
 
 	// --- select -------------------------------------------------------------------
@@ -152,6 +182,8 @@ export function initFragments(ctx) {
 		res = null; hovered = 0;
 		ctx.viewer.clearOutlines();
 		$("fraInfo").textContent = "";
+		$("fraFinesHint").textContent = "";
+		curve();
 		if (why) status(why);
 		if (ctx.onResult) ctx.onResult();
 	}
@@ -170,6 +202,9 @@ export function initFragments(ctx) {
 	$("fraSelectBig").addEventListener("click", selectOversize);
 	$("fraCsv").addEventListener("click", function () { if (res) download("fragments.csv", fragmentsCsv()); });
 	$("fraDxf").addEventListener("click", function () { if (res) download("fragments.dxf", fragmentsDxf()); });
+	$("fraCurveCsv").addEventListener("click", function () { if (res && res.psd) download("size-curve.csv", curveCsv()); });
+	$("fraCurve").addEventListener("click", curve);
+	drawSizeChart($("sizeChart"), null);
 
 	return {
 		colours: colours,

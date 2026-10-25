@@ -294,8 +294,22 @@
 					<label class="small">over <input type="number" id="fraOversize" value="1" min="0" step="0.1" style="width: 5em"> m</label>
 					<button class="button" id="fraSelectBig" title="The points of every fragment larger than this size become the selection">Select oversize</button>
 				</div>
+				<h3>Size curve</h3>
+				<p class="muted small"><code>sizeDistribution</code>: % passing by size b. The fit uses the coarse part only (from <em>Fit from</em> up), where a scan's sizes hold; below the measured curve it is dashed: extrapolated, not measured.</p>
+				<div class="form-grid">
+					<label>Model <select id="fraModel"><option value="swebrec">Swebrec</option><option value="rosin-rammler">Rosin–Rammler</option></select></label>
+					<label>Weight <select id="fraWeight" title="Volume: (π/6) a b², an ellipsoid with the unseen depth taken as b"><option value="volume">Volume</option><option value="count">Count</option><option value="area">Area</option></select></label>
+					<label>Fit from (%) <input type="number" id="fraFitFrom" value="60" min="0" max="99" step="5"></label>
+					<label>Fines (%) <input type="number" id="fraFines" value="0" min="0" max="99" step="1" title="The share of the mass below the smallest fragment, added under the curve"></label>
+				</div>
+				<p class="muted small" id="fraFinesHint"></p>
+				<div class="row"><button class="button" id="fraCurve">Recompute curve</button></div>
+				<svg id="sizeChart" class="size-chart" viewBox="0 0 400 250" role="img" aria-label="The fragments' size curve"></svg>
+				<table class="grid-table" id="fraPTable"></table>
+				<p class="muted small" id="fraFitInfo"></p>
 				<div class="row wrap">
 					<button class="button" id="fraCsv">Fragments CSV</button>
+					<button class="button" id="fraCurveCsv" title="size, measured % passing, fitted % passing">Curve CSV</button>
 					<button class="button" id="fraDxf" title="Each fragment's outline a closed 3D polyline on layer FRAGMENTS, world coordinates">Fragments DXF</button>
 				</div>
 			</div>
