@@ -45,11 +45,11 @@ test("given boxes are placed as given", function () {
 	for (var i = 0; i < p.cols.count; i++) if (p.truth[i] === 1) { cnt++; top = Math.max(top, p.cols.z[i]); assert.ok(Math.abs(p.cols.x[i] - 2) <= 0.5 && Math.abs(p.cols.y[i] - 2) <= 0.5); }
 	assert.ok(Math.abs(cnt * 0.0004 - 1) < 0.03, "a 1 x 1 top: " + cnt * 0.0004);
 	assert.ok(Math.abs(top - 0.6) < 1e-9, "top at 0.6: " + top);
-	// a bevel takes the +a top edge off: the top is narrower, the box still seen
+	// a bevel takes the +a top edge off: the top is narrower, the 45 degree face sampled over its area
 	var b = rockPile({ boxes: [{ centre: [2, 2], size: [1, 1, 0.6], yaw: 0, tilt: 0, bevel: 0.2 }], extent: 4, spacing: 0.02, noise: 0, seed: 1 });
 	var flat = 0, slope = 0;
 	for (i = 0; i < b.cols.count; i++) if (b.truth[i] === 1) { if (b.cols.z[i] > 0.6 - 1e-9) flat++; else slope++; }
-	assert.ok(Math.abs(flat * 0.0004 - 0.8) < 0.03 && Math.abs(slope * 0.0004 - 0.2) < 0.03, "flat " + flat + ", slope " + slope);
+	assert.ok(Math.abs(flat * 0.0004 - 0.8) < 0.03 && Math.abs(slope * 0.0004 - 0.2 * Math.SQRT2) < 0.03, "flat " + flat + ", slope " + slope);
 	// float32 about an origin: the same cloud less the origin, in Float32
 	var f = rockPile(Object.assign({}, PILE, { float32: true, origin: [478000, 6772000, 300] }));
 	var d = rockPile(PILE);

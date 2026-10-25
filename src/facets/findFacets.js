@@ -31,7 +31,15 @@ var D = Math.PI / 180, SPACING_SAMPLE = 4096;
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 function positive(v) { return typeof v === "number" && isFinite(v) && v > 0; }
 
-function options(cols, opts) {
+/**
+ * findFacets' option checks and defaults, shared with findFragments so its facetOptions are
+ * refused before any work.
+ * @param {object} cols - point columns.
+ * @param {object} opts - findFacets' options.
+ * @returns {object} the options with their defaults filled in.
+ * @throws {LasError} INVALID_ARGUMENT naming the bad option.
+ */
+export function checkFacetOptions(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFacets needs options: { maxDistance, … }");
 	var o = opts, n = cols.count;
 	var k = o.k === undefined ? 16 : o.k;
@@ -69,7 +77,7 @@ function options(cols, opts) {
  * @throws {LasError} INVALID_ARGUMENT naming the bad option.
  */
 export function findFacets(cols, opts) {
-	var o = options(cols, opts), n = cols.count;
+	var o = checkFacetOptions(cols, opts), n = cols.count;
 	var computeNormals = !o.normals, total = (computeNormals ? n : 0) + n, last = -1;
 	// each value once, climbing: growth revisits points, so it counts the points seen, not the visits
 	function tick(done) { if (o.onProgress && done > last && (done === total || done - last >= Math.max(1, total / 100))) { last = done; o.onProgress(done, total); } }

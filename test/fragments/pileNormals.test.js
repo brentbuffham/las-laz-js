@@ -90,6 +90,15 @@ test("sparse cells take their parent's normal", function () {
 	assert.equal(none.cellOf.length, 0);
 });
 
+test("a tall rock on flat ground keeps the pile facing out", function () {
+	// a 2 x 1.4 x 1 m block on a 12 x 12 m floor, seen from above (top and floor only), cells 0.6 m:
+	// a step taller than a cell - every cell's normal faces up (z > 0)
+	var pts = [];
+	for (var x = 0.01; x < 12; x += 0.02) for (var y = 0.01; y < 12; y += 0.02) pts.push(x, y, x > 5 && x < 7 && y > 5 && y < 6.4 ? 1 : 0);
+	var r = pileNormals(cloud(pts), { cellSize: 0.6 });
+	for (var c = 0; c < r.cells; c++) assert.ok(r.normal[3 * c + 2] > 0, "cell " + c + " faces down: " + normalOf(r, c).map(function (v) { return v.toFixed(2); }));
+});
+
 test("cellOf maps every point", function () {
 	var cols = cloud(rect([], [3, 4, 5], poleFromOrientation(50, 200), 12, 9, 0.1)), r = pileNormals(cols, { cellSize: 2 });
 	var sum = new Float64Array(3 * r.cells), cnt = new Float64Array(r.cells);
