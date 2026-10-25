@@ -162,3 +162,13 @@ test("edge paths", function () {
 	assert.equal(flat.sizeAt(50), 1);
 	assert.ok(Math.abs(flat.passingAt(1.5) - 50) < 1e-12);
 });
+
+test("Swebrec's xmax is never below the largest fragment measured", function () {
+	// the top point (100 %) is not fitted, but a measured 3.5 m boulder bounds xmax all the same
+	var withBoulder = quantiles(300, swebrecInverse(0.4, 2.0, 2.2)).concat([{ size: 3.5, axes: [4, 3.5, 2], area: 12 }]);
+	["count", "volume"].forEach(function (w) {
+		var d = sizeDistribution(withBoulder, { weight: w });
+		assert.ok(d.fit.xmax > 3.5, w + ": xmax " + d.fit.xmax);
+		assert.ok(d.fit.passing(3.0) < 100, w + ": passing(3.0) " + d.fit.passing(3.0));
+	});
+});

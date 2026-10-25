@@ -9,7 +9,8 @@
 // fit stands in, and P-values taken from it are marked extrapolated.
 // Swebrec, P = 1 / (1 + (ln(xmax / x) / ln(xmax / x50))^b), is a
 // straight line in ln(1/P - 1) against ln ln(xmax / x) for a fixed
-// xmax; a golden-section search picks xmax. Rosin-Rammler,
+// xmax; a golden-section search picks xmax, above the largest fragment
+// measured and up to 3 x it. Rosin-Rammler,
 // P = 1 - exp(-ln 2 (x / x50)^n), is a straight line in
 // ln(-ln(1 - P)) against ln x. Both are deterministic.
 //==========================================================
@@ -94,7 +95,8 @@ function swebrecAt(xs, ps, xmax) {
 	return { x50: x50, b: b, curve: curve, rmse: rmseOf(xs, ps, curve.passing) };
 }
 
-function fitCurve(xs, ps, model, fitFrom) {
+// largest: the largest fragment measured (the top point, at 100 %, is not fitted, but bounds xmax all the same)
+function fitCurve(xs, ps, model, fitFrom, largest) {
 	if (xs.length < 3) return null;
 	var best = null, lo, hi;
 	if (model === "rosin-rammler") {
@@ -103,7 +105,6 @@ function fitCurve(xs, ps, model, fitFrom) {
 		var n = l.s, x50 = Math.exp((Math.log(Math.LN2) - l.c) / n), rc = rosinCurve(x50, n);
 		best = { model: model, x50: x50, n: n, rmse: rmseOf(xs, ps, rc.passing), curve: rc };
 	} else {
-		var largest = xs[xs.length - 1];
 		lo = largest * (1 + 1e-6); hi = 3 * largest;
 		var score = function (xmax) {
 			var f = swebrecAt(xs, ps, xmax);
@@ -156,7 +157,7 @@ export function sizeDistribution(fragments, opts) {
 
 	var xs = [], ps = [];
 	for (i = 0; i < m; i++) if (passing[i] >= o.fitFrom && passing[i] < 100) { xs.push(size[i]); ps.push(passing[i] / 100); }
-	var fit = fitCurve(xs, ps, o.model, o.fitFrom);
+	var fit = m ? fitCurve(xs, ps, o.model, o.fitFrom, size[m - 1]) : null;
 
 	function sizeAt(P) {
 		if (!m || !(P === P)) return NaN;

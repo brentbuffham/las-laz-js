@@ -209,6 +209,28 @@ test("a pile turned 90 degrees with a viewpoint is the same", function () {
 	assert.ok(Math.abs(f.fragments.length - r.fr.fragments.length) <= 0.05 * r.fr.fragments.length);
 });
 
+test("a long narrow strip of the pile gives its boxes back", function () {
+	// the middle 3 m of the 12 m pile: the default pile scale (a quarter of 12 m) makes one row of cells,
+	// whose centroids lie on a line (without the fallback, 5 of the 9 whole boxes came back)
+	var r = run("pile", PILE), c = r.pile.cols, keep = [], inside = {}, total = {};
+	for (var i = 0; i < c.count; i++) {
+		var t = r.pile.truth[i], on = c.y[i] >= 4.5 && c.y[i] < 7.5;
+		if (on) keep.push(i);
+		if (t) { total[t] = (total[t] || 0) + 1; if (on) inside[t] = (inside[t] || 0) + 1; }
+	}
+	var strip = { count: keep.length, x: Float64Array.from(keep, function (q) { return c.x[q]; }), y: Float64Array.from(keep, function (q) { return c.y[q]; }), z: Float64Array.from(keep, function (q) { return c.z[q]; }) };
+	var f = findFragments(strip, { maxDistance: MD }), whole = r.pile.boxes.filter(function (b) { return inside[b.id] === total[b.id] && b.visibleB >= 10 * PILE.spacing; }), good = 0;
+	assert.ok(whole.length >= 8);
+	whole.forEach(function (b) {
+		var cnt = {}, best = 0, bn = 0, n = 0;
+		for (var k = 0; k < keep.length; k++) if (r.pile.truth[keep[k]] === b.id) { n++; cnt[f.fragment[k]] = (cnt[f.fragment[k]] || 0) + 1; }
+		Object.keys(cnt).forEach(function (g) { if (g !== "0" && cnt[g] > bn) { bn = cnt[g]; best = Number(g); } });
+		var fr = f.fragments[best - 1];
+		if (bn >= 0.9 * n && fr && Math.abs(fr.size - b.visibleB) <= 0.1 * b.visibleB) good++;
+	});
+	assert.ok(good >= 0.85 * whole.length, good + " of " + whole.length + " whole boxes");
+});
+
 test("Float32 local at a UTM origin equals Float64 at the origin", function () {
 	var r = run("pile", PILE), f32 = rockPile(Object.assign({}, PILE, { float32: true, origin: [478000, 6772000, 300] }));
 	// Float32 rounding may flip a few pebble-sized fragments; the boxes' fragments are the same

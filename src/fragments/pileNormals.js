@@ -3,7 +3,9 @@
 // The pile's own outward direction, at a scale well above a rock's: a
 // coarse voxel grid (index/grid.js) of cellSize; each occupied cell's
 // centroid; each cell's plane from the centroids of the occupied cells
-// among its 27 (when there are at least 3). A fitted plane has no
+// among its 27 (when there are at least 3 and they spread in two
+// directions; else, as for a pile one cell wide, the direction towards
+// the viewpoint, or up, square to the line the centroids lie on). A fitted plane has no
 // inside or outside, so the orientation spreads breadth-first over the
 // occupied neighbour cells, each flipped to agree with the cell it was
 // reached from; a cell with no plane of its own takes that cell's
@@ -17,6 +19,9 @@
 
 import { coordsOf, buildGrid, lookup } from "../index/grid.js";
 import { smallestEigen } from "../ops/normals.js";
+import { symmetricEigen } from "../register/eigen4.js";
+
+var FLAT = 0.03;   // a spread whose middle axis is under 3 % of its longest is a line, not a plane
 
 /**
  * Outward normals of the pile, one per coarse grid cell.
@@ -60,6 +65,22 @@ export function pileNormals(cols, opts) {
 		return m;
 	}
 
+	// centroids on a line (a pile one cell wide) fix only that the normal is square to the line: take
+	// the reference direction (towards the viewpoint, else up) square to it, into eig; false when the
+	// line runs along the reference
+	var vp0 = opts.viewpoint;
+	function squareToLine(c) {
+		var e = symmetricEigen([cov[0], cov[1], cov[2], cov[1], cov[3], cov[4], cov[2], cov[4], cov[5]], 3), big = 0;
+		for (var a = 1; a < 3; a++) if (e.values[a] > e.values[big]) big = a;
+		var u = [e.vectors[3 * big], e.vectors[3 * big + 1], e.vectors[3 * big + 2]];
+		var r = vp0 ? [vp0[0] - centroid[3 * c], vp0[1] - centroid[3 * c + 1], vp0[2] - centroid[3 * c + 2]] : [0, 0, 1];
+		var rl = Math.hypot(r[0], r[1], r[2]), d = (r[0] * u[0] + r[1] * u[1] + r[2] * u[2]) / rl;
+		var v = [r[0] / rl - d * u[0], r[1] / rl - d * u[1], r[2] / rl - d * u[2]], vl = Math.hypot(v[0], v[1], v[2]);
+		if (!(vl > 0.1)) return false;
+		eig[0] = v[0] / vl; eig[1] = v[1] / vl; eig[2] = v[2] / vl;
+		return true;
+	}
+
 	// each cell's plane from its neighbourhood's centroids
 	var hasPlane = new Uint8Array(cells), cov = new Float64Array(6), eig = new Float64Array(5);
 	for (c = 0; c < cells; c++) {
@@ -74,6 +95,7 @@ export function pileNormals(cols, opts) {
 			cov[0] += dx * dx; cov[1] += dx * dy; cov[2] += dx * dz; cov[3] += dy * dy; cov[4] += dy * dz; cov[5] += dz * dz;
 		}
 		if (!smallestEigen(cov, eig)) continue;
+		if (!(eig[4] >= FLAT * (cov[0] + cov[3] + cov[5] - eig[3] - eig[4])) && !squareToLine(c)) continue;
 		hasPlane[c] = 1; normal[3 * c] = eig[0]; normal[3 * c + 1] = eig[1]; normal[3 * c + 2] = eig[2];
 	}
 

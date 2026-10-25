@@ -270,7 +270,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-fragments">
-				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragments</code>: facets that meet at a ridge are one rock, a valley keeps two apart. <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; a flat floor or fines flat at this scale come out as fragments too, so keep the run to the pile. The camera's position is the viewpoint. The page pauses while it runs.</p>
+				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragments</code>: facets that meet at a ridge are one rock, a valley keeps two apart. <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; a flat floor or fines flat at this scale come out as fragments too, so keep the run to the pile. The pile faces up; for a drawpoint or a steep face, look at it from the open side and tick Camera as viewpoint. The page pauses while it runs.</p>
 				<h3>Fragments</h3>
 				<div class="form-grid">
 					<label>Max distance (m) <input type="number" id="fraMaxDist" value="0.15" min="0.01" step="0.01" title="Rock-face scale: the k nearest within this distance, a few point spacings"></label>
@@ -279,6 +279,7 @@
 					<label>Plane distance (m) <input type="number" id="fraPlaneDist" placeholder="measured" min="0" step="0.005" title="The facets' plane distance; blank = 3 x the measured noise"></label>
 				</div>
 				<label class="small">Fill <input type="checkbox" id="fraFill" checked title="A point in no facet joins the nearest fragment within max distance (one hop: fines stay out)"></label>
+				<label class="small">Camera as viewpoint <input type="checkbox" id="fraCamera" title="For a drawpoint or a steep face: the camera stands on the open side. Off: the pile faces up. A camera below the pile turns every face inside out"></label>
 				<div class="row wrap">
 					<span class="muted small" id="fraScope">Runs on the whole cloud</span>
 					<button class="button small hidden" id="fraClearSel" title="Run on the whole cloud again">Clear selection</button>

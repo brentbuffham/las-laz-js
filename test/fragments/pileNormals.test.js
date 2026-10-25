@@ -99,6 +99,32 @@ test("a tall rock on flat ground keeps the pile facing out", function () {
 	for (var c = 0; c < r.cells; c++) assert.ok(r.normal[3 * c + 2] > 0, "cell " + c + " faces down: " + normalOf(r, c).map(function (v) { return v.toFixed(2); }));
 });
 
+test("a long narrow strip faces up", function () {
+	// 48 x 3 m with cells 12 m: one row of cells, whose centroids lie on a line and give no plane;
+	// each cell falls back to the plane of its own points
+	var pts = [];
+	for (var x = 0.05; x < 48; x += 0.1) for (var y = 0.05; y < 3; y += 0.1) pts.push(x, y, 0.02 * Math.sin(3 * x) * Math.cos(5 * y) + 0.01 * y);
+	var r = pileNormals(cloud(pts), { cellSize: 12 });
+	for (var c = 0; c < r.cells; c++) assert.ok(r.normal[3 * c + 2] > Math.cos(5 * Math.PI / 180), "cell " + c + ": " + normalOf(r, c).map(function (v) { return v.toFixed(2); }));
+});
+
+test("a long low wall faces its viewpoint; a tall column falls back cleanly", function () {
+	// a vertical strip 48 m long and 3 m high in the plane y = 0, cells 12 m: one row, square to its
+	// length towards the viewpoint
+	var pts = [], c;
+	for (var x = 0.05; x < 48; x += 0.1) for (var z = 0.05; z < 3; z += 0.1) pts.push(x, 0.01 * Math.sin(2 * x), z);
+	var r = pileNormals(cloud(pts), { cellSize: 12, viewpoint: [24, 20, 1.5] });
+	for (c = 0; c < r.cells; c++) assert.ok(r.normal[3 * c + 1] > Math.cos(5 * Math.PI / 180), "toward +y: " + normalOf(r, c).map(function (v) { return v.toFixed(2); }));
+	r = pileNormals(cloud(pts), { cellSize: 12, viewpoint: [24, -20, 1.5] });
+	for (c = 0; c < r.cells; c++) assert.ok(r.normal[3 * c + 1] < -Math.cos(5 * Math.PI / 180), "toward -y");
+	// a column 1 m wide and 48 m tall: its line runs along up, so no direction square to it is known;
+	// the cells still get unit normals, never NaN
+	pts = [];
+	for (z = 0.05; z < 48; z += 0.1) for (x = 0.05; x < 1; x += 0.1) pts.push(x, 0, z);
+	r = pileNormals(cloud(pts), { cellSize: 12 });
+	for (c = 0; c < r.cells; c++) assert.ok(Math.abs(Math.hypot.apply(null, normalOf(r, c)) - 1) < 1e-12, "unit: " + normalOf(r, c));
+});
+
 test("cellOf maps every point", function () {
 	var cols = cloud(rect([], [3, 4, 5], poleFromOrientation(50, 200), 12, 9, 0.1)), r = pileNormals(cols, { cellSize: 2 });
 	var sum = new Float64Array(3 * r.cells), cnt = new Float64Array(r.cells);

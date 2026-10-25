@@ -539,8 +539,10 @@ says one rock, a valley (concave) says two. Two facets within `concaveAngle` (de
 other on one plane are one face; parallel but offset is a step, a rock on a rock. Merges go
 strongest first and only while the fragment stays convex, so rough ground does not chain into
 one huge fragment. Each facet's outward side comes from the pile's own direction, a coarse grid
-of `surfaceDistance` (default a quarter of the cloud's longest side); give `viewpoint` (the
-scanner, or any point on the open side) for a drawpoint or a steep face. A point in no facet
+of `surfaceDistance` (default a quarter of the cloud's longest side; a pile one cell wide takes
+up, or the viewpoint, square to its length); give `viewpoint` (the scanner, or any point on the
+open side) for a drawpoint or a steep face. A viewpoint on the wrong side (below a pile) turns
+every face inside out, so the demo uses the camera only when asked. A point in no facet
 joins the nearest fragment within `fillDistance` (default `maxDistance`), one hop only, so fines
 between rocks stay out. Fragments under `minPoints` (50) are dropped. `axes` are the 2nd–98th
 percentile spans along the fragment's principal axes, longest first; `size` is b, the
@@ -554,7 +556,10 @@ marked `extrapolated`. `fines` (a share of the whole mass) adds a bin under the 
 deep fines go. `model: "rosin-rammler"` fits Rosin–Rammler instead.
 
 **What a scan can and cannot see.** Only the visible surface is measured: c is the depth of the
-shell the scan saw, not the rock's, which is why `size` is b. Fragments under a few point spacings
+shell the scan saw, not the rock's, which is why `size` is b. b is measured on what was seen, so a
+rock showing its top and a side reads larger than its true b (the side tilts the axes): on the
+synthetic pile the visible b ran a median 13 % (up to 33 %) above the boxes' true b. The accuracy
+figures below are against the visible b, not the true one; read P50 and P80 with that in mind. Fragments under a few point spacings
 are not resolved. Anything flat at the facets' scale is a facet like a rock face: a bench floor or
 a wall in the run comes back as one big fragment and swamps a volume-weighted curve (keep the run
 to the pile; the demo warns when one fragment covers a quarter of the surface), and pebbly fines
@@ -562,8 +567,8 @@ come back as pebble-sized fragments at the fine end. Two rocks pressed flush who
 convex surface merge, as they would for any method without a crack to go on.
 
 On a synthetic pile (boxes of known size on pebbly fines, 5 mm noise at 2 cm spacing) 93 % of the
-boxes come back as one fragment each with `size` within 10 % of what was visible, and P50 and P80
-within 3 % and 7 %. At SLAM-like noise (2 cm at 4 cm spacing) that falls to about 70 % of boxes:
+boxes come back as one fragment each with `size` within 10 % of their visible b, and P50 and P80
+within 3 % and 7 % of the visible boxes'. At SLAM-like noise (2 cm at 4 cm spacing) that falls to about 70 % of boxes:
 faces split more. No real muckpile scan has been checked yet.
 
 **Speed:** about 6–11 s a million points in Node (`findFacets` most of it), and about 80–110
@@ -571,8 +576,8 @@ bytes a point beyond the columns.
 
 ### In the demo
 
-The Fragments tab runs on the selection (a polygon round the pile) or the whole cloud, the
-camera's position as the viewpoint: colour by fragment, outlines on the cloud, a hover readout
+The Fragments tab runs on the selection (a polygon round the pile) or the whole cloud (the
+camera as the viewpoint when ticked): colour by fragment, outlines on the cloud, a hover readout
 (fragment, size, axes), **Select fragment** (the one last hovered) and **Select oversize** (the
 fragments above a size become the selection, to delete or Classify), the floor warning, the size
 curve (model, weight, fit from, fines) with its P-values, and downloads: fragments CSV, curve CSV

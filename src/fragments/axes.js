@@ -37,7 +37,7 @@ export function fragmentAxes(X, Y, Z, stride, points) {
 	var e = symmetricEigen(c, 3), V = e.vectors, lo = Math.floor(0.02 * (m - 1)), hi = Math.ceil(0.98 * (m - 1));
 	var proj = new Float64Array(m), found = [];
 	for (var j = 0; j < 3; j++) {
-		var v = [V[j * 3], V[j * 3 + 1], V[j * 3 + 2]], l = Math.hypot(v[0], v[1], v[2]) || 1;
+		var v = [V[j * 3], V[j * 3 + 1], V[j * 3 + 2]], l = Math.hypot(v[0], v[1], v[2]);   // Jacobi keeps the vectors unit; this only trims rounding
 		v = [v[0] / l, v[1] / l, v[2] / l];
 		for (k = 0; k < m; k++) { o = points[k] * stride; proj[k] = (X[o] - x0) * v[0] + (Y[o] - y0) * v[1] + (Z[o] - z0) * v[2]; }
 		proj.sort();

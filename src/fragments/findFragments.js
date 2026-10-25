@@ -142,7 +142,7 @@ export function findFragments(cols, opts) {
 	for (i = 0; i < n; i++) if (facet[i]) { var c = cellOf[i], f = facet[i]; sum[3 * f] += PN[3 * c]; sum[3 * f + 1] += PN[3 * c + 1]; sum[3 * f + 2] += PN[3 * c + 2]; }
 	var FN = new Float64Array(3 * (F + 1)), edgeOn = new Uint8Array(F + 1);
 	for (f = 1; f <= F; f++) {
-		var pn = poleOf(ff.facets[f - 1].normal), sl = Math.hypot(sum[3 * f], sum[3 * f + 1], sum[3 * f + 2]) || 1;
+		var pn = poleOf(ff.facets[f - 1].normal), sl = Math.hypot(sum[3 * f], sum[3 * f + 1], sum[3 * f + 2]);   // never 0 in practice; 0 gives NaN: the pole kept, not edge-on
 		var dot = (pn[0] * sum[3 * f] + pn[1] * sum[3 * f + 1] + pn[2] * sum[3 * f + 2]) / sl;
 		var sg = dot < 0 ? -1 : 1;
 		FN[3 * f] = sg * pn[0]; FN[3 * f + 1] = sg * pn[1]; FN[3 * f + 2] = sg * pn[2];

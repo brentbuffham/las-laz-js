@@ -1,8 +1,9 @@
 // examples/browser/fragments.js
 //==========================================================
 // The demo's Fragments tab: findFragments on the selection (a polygon
-// round the muckpile) or the whole cloud, the camera's position as the
-// viewpoint. Colours by fragment (the Colour tab's list), outlines on
+// round the muckpile) or the whole cloud; the camera's position is the
+// viewpoint only when asked (a camera below the pile would turn every
+// face inside out). Colours by fragment (the Colour tab's list), outlines on
 // the cloud, a hover line, Select fragment (the one last hovered) and
 // Select oversize (the points of fragments above a size: the selection,
 // to delete, Classify or crop), a warning when one fragment covers a
@@ -44,7 +45,8 @@ export function initFragments(ctx) {
 		if (!cloud) return;
 		var sel = ctx.selection, cols = { count: cloud.count, x: cloud.x, y: cloud.y, z: cloud.z }, idx = null;
 		if (sel && sel.length) { cols = ctx.keepPoints(cols, sel); idx = sel; }
-		var opts = { maxDistance: num("fraMaxDist", 0.15), concaveAngle: num("fraConcave", 10), minPoints: num("fraMinPoints", 50), fill: $("fraFill").checked, viewpoint: ctx.viewer.cameraPosition() };
+		var opts = { maxDistance: num("fraMaxDist", 0.15), concaveAngle: num("fraConcave", 10), minPoints: num("fraMinPoints", 50), fill: $("fraFill").checked };
+		if ($("fraCamera").checked) opts.viewpoint = ctx.viewer.cameraPosition();
 		var pd = num("fraPlaneDist", undefined);
 		if (pd !== undefined) opts.facetOptions = { planeDistance: pd };
 		status("finding fragments in " + fmt(cols.count) + " points" + (idx ? " (the selection)" : "") + "…");

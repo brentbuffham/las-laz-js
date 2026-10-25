@@ -743,7 +743,8 @@ async function save() {
 	var fromEdit = edited || !!fc, target = null;
 	var extra = writableExtra(), dropped = droppedExtra();
 	if (fc) {
-		var ours = ["facet", "joint_set", "fragment"];
+		// replace only the fields this save writes; a facet field already in the file stays when only fragments ran
+		var ours = Object.keys(fc).filter(function (k) { return fc[k]; });
 		extra = extra.filter(function (e) { return ours.indexOf(e.name) < 0 && ours.indexOf(e.column) < 0; });
 		if (fc.facet) extra.push({ name: "facet", type: "u32", description: "las-laz-js findFacets" });
 		if (fc.joint_set) extra.push({ name: "joint_set", type: "u16", description: "las-laz-js jointSets" });
