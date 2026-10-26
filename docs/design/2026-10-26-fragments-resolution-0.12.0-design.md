@@ -66,6 +66,13 @@ b / true b 0.93 median.) The floor is where most rocks of a size come out whole:
 spacing, as photogrammetry smooths over a few pixels whatever the spacing. Two clouds do not fix
 the law, so the rule takes the cautious end: **floor = 30 × spacing**.
 
+**Measured by `pointSpacing`** (built 2026-10-26), the clouds read wider than √(area ÷ points),
+as ODM's points cluster where the photos have texture: the ultra corner 1.61 cm (1.36 by area),
+the "3.3 cm" corner 2.83 cm (3.3 was its bounding box ÷ points). On that measure the floor is
+about 28 spacings on the ultra corner (0.45 m) and 25 on the default one (0.7 m), a steadier
+law than by area; `FLOOR_SPACINGS` stays 30 (the cautious end), so the ultra corner's floor is
+about 0.48 m, and "fine" ends at 0.017 so that ODM ultra (Brent's "1.5 cm, good rock") is fine.
+
 Real rocks are not sheets: of the 60 drawn rocks, c/b under 0.15 is 1 at 3.3 cm and 0 at
 1.36 cm (q10 0.31). maxDistance at the ultra corner: 0.04 (3 spacings) missed 9 rocks, 0.06
 (4.4) none, 0.8 (59) merged 11 of the 19 small rocks.
@@ -115,9 +122,12 @@ into flat "rocks" (1% fines is not believable); joining flank pieces changed not
 var s = pointSpacing(pts);   // in the columns' units; NaN for fewer than 9 points
 ```
 
-A sample of up to 10,000 points (every ⌈n / 10,000⌉th), each one's distance r₈ to its 8th
-nearest (`kdNearest`, no distance cap); spacing = median r₈ × √(π / 8): the spacing of a
-surface whose density puts 8 points within r₈. Orientation-free (walls and drawpoints too), and
+A sample of up to 10,000 points (stepping through them by the golden ratio, so the sample
+cannot fall in step with a scan's rows), each one's distance r₃₂ to its 32nd nearest
+(`kdNearest`, no distance cap); spacing = median r₃₂ × √(π / 32): the spacing of a surface
+whose density puts 32 points within r₃₂. (Built 2026-10-26: r₈, as first written, reads a
+regular grid 11% low, as its 8th nearest is the diagonal one; r₃₂ reads grids and random
+points within 1%.) Orientation-free (walls and drawpoints too), and
 cheap enough to run before choosing `maxDistance`. Option `sample` (default 10,000).
 
 ### `findFragments(cols, options)`: changes
@@ -138,7 +148,7 @@ cheap enough to run before choosing `maxDistance`. Option `sample` (default 10,0
   - `method`;
   - `spacing`: `pointSpacing` of the run's points;
   - `floor`: 30 × `spacing` (constant `FLOOR_SPACINGS`);
-  - `resolution`: `"fine"` (spacing ≤ 0.015), `"coarse"` (≤ 0.035), `"oversize"` (≤ 0.05) or
+  - `resolution`: `"fine"` (spacing ≤ 0.017), `"coarse"` (≤ 0.035), `"oversize"` (≤ 0.05) or
     `"unresolved"` (above), in metres (§10);
   - `warnings`: `[{ code, message }]`, every one also in the demo (§6);
   - `cell` (watershed only).
@@ -320,8 +330,8 @@ no fragments (as 0.11.0 does for an empty cloud).
   area, volume and count; `finesSize` places the fines point; `upper` 0 and `lower` 0 give
   0.11.0's curve exactly (an array input with the 0.11.0 options, weight given).
 - **Fit:** only points between the limits are fitted.
-- **Real check** (private, by id): the ultra corner gives `resolution` fine, floor about 0.41, and
-  no warning; the watershed matches at least 37 of the first 60 drawn rocks and 31 of the next 58
+- **Real check** (private, by id): the ultra corner gives `resolution` fine, and
+  no warning (floor about 0.48 by `pointSpacing`); the watershed matches at least 37 of the first 60 drawn rocks and 31 of the next 58
   (the demo module at R 0.5, h 0.01: 39 and 33); the hybrid at the defaults matches at least 36 and
   37 with fines under 25% (the demo: 38 and 39, 21%); the 5.4 cm pile gives `UNRESOLVED` and
   `SHEETS`.

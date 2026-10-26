@@ -39,6 +39,7 @@ export { findFacets } from "./facets/findFacets.js";
 export { jointSets } from "./facets/jointSets.js";
 export { findFragments } from "./fragments/findFragments.js";
 export { sizeDistribution } from "./fragments/sizeDistribution.js";
+export { pointSpacing } from "./fragments/spacing.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";

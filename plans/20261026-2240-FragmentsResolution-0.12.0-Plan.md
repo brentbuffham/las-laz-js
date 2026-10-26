@@ -15,16 +15,16 @@
 - No dependencies in las-laz-js; no WASM. Never import trimesh-build-js or trimesh-boolean.
 - Code style as the repo: `var`, `function` declarations, tabs, a `// src/…` banner block at the top of each new file, JSDoc on every export, `/* prettier-ignore-file */` in tests.
 - Errors are `LasError` `ERROR_CODES.INVALID_ARGUMENT` with a message naming the argument.
-- Constants (spec §3): `FLOOR_SPACINGS` 30, `SHEET_CB` 0.15; resolution `"fine"` spacing ≤ 0.015, `"coarse"` ≤ 0.035, `"oversize"` ≤ 0.05, else `"unresolved"` (metres); `maxDistance` default 4 × spacing, `MAX_DISTANCE` warning outside 2.5–8 spacings; `SHEETS` when sheets hold over 30 % of the surface; `FLOOR` when one fragment's area is over 25 % of `surfaceArea`.
+- Constants (spec §3): `FLOOR_SPACINGS` 30, `SHEET_CB` 0.15; resolution `"fine"` spacing ≤ 0.017 (Task 1 ruling), `"coarse"` ≤ 0.035, `"oversize"` ≤ 0.05, else `"unresolved"` (metres); `maxDistance` default 4 × spacing, `MAX_DISTANCE` warning outside 2.5–8 spacings; `SHEETS` when sheets hold over 30 % of the surface; `FLOOR` when one fragment's area is over 25 % of `surfaceArea`.
 - Watershed defaults (spec §3, ruling 8): `cell` 1.5 × spacing, `reliefRadius` 1, `seedHeight` 0.005, `clipBelow` 0, Gaussian 1.5 cells, hole fill 10 passes needing 3 of 8 neighbours, outline cell 2 × `cell`. Areas count only the cells holding points.
-- `pointSpacing`: median r₈ × √(π / 8) over a sample of up to 10,000 points (every ⌈n / 10,000⌉th); NaN under 9 points.
+- `pointSpacing`: median r₃₂ × √(π / 32) over a golden-ratio sample of up to 10,000 points; NaN under 9 points (Task 1 ruling: r₈ reads grids 11 % low).
 - `sizeDistribution` default `weight` becomes `"area"`; everything else as 0.11.0 when given an array and none of the new options.
 - Warning messages are the spec §5 table's, with the numbers filled in; codes exact.
 - Every new public function is exported from `src/index.js` in the task that writes it: `pointSpacing` only (`watershedFragments`, `watershedThenFacets`, `resolution.js` stay internal).
 - Tests are oracles (rocks and sizes by construction, hand-computed curves), never snapshots. Synthetic piles in tests stay small (extent ≤ 6 m, or spacing ≥ 0.02) so `npm test` stays quick.
 - `npm test` passes after every task. Coverage after the last task: no metric below the figures `npm run test:coverage` gives at the start of Task 1 (ledger them).
 - Private samples and drawn-rock files named by id only, never by path; `npm run check:private` after staging, before every commit.
-- Commits on branch `fragments-0.12.0` (already holds the spec and the demo's experimental work), ending `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`; no push, tag or publish before Task 7 Step 7, and that step only after Brent confirms.
+- Commits straight on `main` (Brent, 2026-10-26: "main is fine to work on"), ending `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`; no push, tag or publish before Task 7 Step 7, and that step only after Brent confirms.
 
 ## Review Focus
 
@@ -74,7 +74,7 @@
 - Produces (public, `findFragments`): `maxDistance` optional; `method` option (`"facets"` only in this task; anything else `INVALID_ARGUMENT` naming `method`); new result fields `method`, `spacing`, `floor`, `resolution`, `warnings: [{ code, message }]`; `fragments[i].sheet: boolean`.
 
 - [ ] **Step 1: Write the failing tests:**
-  - `"resolution tiers"` — `resolutionOf` at 0.01, 0.015, 0.016, 0.035, 0.036, 0.05, 0.051 → fine, fine, coarse, coarse, oversize, oversize, unresolved.
+  - `"resolution tiers"` — `resolutionOf` at 0.01, 0.017, 0.018, 0.035, 0.036, 0.05, 0.051 → fine, fine, coarse, coarse, oversize, oversize, unresolved.
   - `"warnings by spacing"` — `rockPile` (extent 4, 20 boxes, seed 1) at spacing 0.02 → `resolution` "coarse", one `COARSE` warning whose message contains "0.020" and "0.60"; at 0.04 → `OVERSIZE_ONLY`; at 0.06 → `UNRESOLVED`; at 0.012 (extent 3) → "fine", no resolution warning. `floor` = 30 × `spacing` (1e-12) each time.
   - `"maxDistance from the spacing"` — on the 0.02 pile, omitted → the same `fragment` column as `maxDistance: 4 * fr.spacing` given; `maxDistance: 0.8` → a `MAX_DISTANCE` warning naming 0.8 and the spacing; 0.08 (4 spacings) → none.
   - `"too few points and no maxDistance"` — 5 points, no `maxDistance` → `/maxDistance is needed/`; with `maxDistance` given → no throw, empty `fragments`.
@@ -184,9 +184,9 @@
 - Modify: `_dev/benchFragments.mjs` (a `method` argument), `README.md`, `CHANGELOG.md`, `src/index.js` (VERSION 0.12.0), `package.json`, the library spec's roadmap
 
 - [ ] **Step 1: `_dev/scoreFragments.mjs <sample id | path> <drawings.json | rocks.dxf> [method] [options JSON]`**: match / split / merged / missed (spec §2's rules), fines share, P20–P90 by area; reads Kirra `.kap` drawings.json and R12 POLYLINE DXF.
-- [ ] **Step 2: Real check** (Brent's private ultra corner and both drawn sets, by id only): `resolution` fine, floor ~0.41, no warning; watershed ≥ 37 / 60 and ≥ 31 / 58; hybrid ≥ 36 / 60 and ≥ 37 / 58 with fines under 25 %; the 5.4 cm pile `UNRESOLVED` and `SHEETS`. Ledger the figures. A miss is a finding: stop and report it, do not tune to pass.
+- [ ] **Step 2: Real check** (Brent's private ultra corner and both drawn sets, by id only): `resolution` fine, floor ~0.48, no warning; watershed ≥ 37 / 60 and ≥ 31 / 58; hybrid ≥ 36 / 60 and ≥ 37 / 58 with fines under 25 %; the 5.4 cm pile `UNRESOLVED` and `SHEETS`. Ledger the figures. A miss is a finding: stop and report it, do not tune to pass.
 - [ ] **Step 3: README:** a "What a cloud can resolve" part (spec §2's tables, the tiers, the warnings, not a rock is fines), the three methods and when to use each, `pointSpacing`; CHANGELOG 0.12.0 (behaviour changes first: weight default area, `maxDistance` optional, the result's new fields); VERSION and package.json 0.12.0; the roadmap line.
 - [ ] **Step 4: Speed:** `node --expose-gc _dev/benchFragments.mjs <id> 0.06 1 <method>` for facets, watershed and hybrid on the ultra corner; ledger the times and bytes a point for the README (expected about 145 s, 6 s and 70 s on 10.9 M points).
 - [ ] **Step 5: Run** `npm run test:coverage` — Expected: no metric below Task 1's ledgered baseline; `npm run check:private` ok.
 - [ ] **Step 6: Commit** `release: 0.12.0 — what a cloud can resolve, the watershed and the hybrid, limits and fines`.
-- [ ] **Step 7: Publish (Brent asked for it, 2026-10-26) — STOP and confirm with Brent first**, then: merge `fragments-0.12.0` into `main` (fast-forward), `git push origin main`, tag `v0.12.0` and push the tag, `npm publish` (Brent may need to run it himself for npm's 2FA: `! npm publish`). 0.11.0 was never published, so 0.12.0 is the first npm release with fragments; the CHANGELOG keeps both entries. A failed or refused publish is reported, never retried with other credentials.
+- [ ] **Step 7: Publish (Brent asked for it, 2026-10-26) — STOP and confirm with Brent first**, then: `git push origin main`, move the tag `v0.12.0` (Brent set it early, on the spec commit 0199b4a) to the release commit and push it, `npm publish` (Brent may need to run it himself for npm's 2FA: `! npm publish`). 0.11.0 was never published, so 0.12.0 is the first npm release with fragments; the CHANGELOG keeps both entries. A failed or refused publish is reported, never retried with other credentials.
