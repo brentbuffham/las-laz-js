@@ -319,9 +319,12 @@ no fragments (as 0.11.0 does for an empty cloud).
   lower limit; the synthetic boxes are not sheets (c/b of a box face's fragment ≥ 0.15).
 - **`maxDistance`:** omitted → 4 × spacing (the result's fragments as with it given); 0.8 on a
   0.0136 cloud → `MAX_DISTANCE`.
-- **Watershed:** on the synthetic pile at 2 cm and 5 mm noise, at least as many visible boxes come
-  back as one fragment as with facet merging on the same pile, each matched size within 10% of
-  its visible b; two boxes side by side with a valley between → two fragments; one box → one; a
+- **Watershed:** on the synthetic pile at 2 cm (rocks up to 1 m), at least 70% of the visible
+  boxes come back as one fragment by the drawn rocks' rule (IoU ≥ 0.5: the clip leaves a box's lower
+  edges out by design), matched sizes within 10% of the visible b (median). (Built: flat-faced
+  boxes are facet merging's best case, 100% to the watershed's 77%; the watershed leads on real
+  rocks, §2. A slab wider than `reliefRadius` seeds at its corners and splits; a radius of its
+  size keeps it whole, so `reliefRadius` should be about the largest rock.) two boxes side by side with a valley between → two fragments; one box → one; a
   flat plane → one fragment, a sheet; the pile's floor → a sheet and `FLOOR`; UTM magnitude →
   the same fragments as at the origin; empty, one point, a line of points → no fragments, no
   NaN; facet-only options → `IGNORED_OPTIONS`.

@@ -51,8 +51,9 @@ export function resolutionOf(spacing) {
  * `sheet` on each fragment. In place.
  * @param {object} fr - the result (fragments, surfaceArea, unassignedArea).
  * @param {number} spacing - pointSpacing of the run's points (NaN: too few).
- * @param {{maxDistance?: number, ignored?: string[]}} given - what the caller set: maxDistance (given, not
- *   defaulted) for its warning; ignored, options the method does not use.
+ * @param {{maxDistance?: number, ignored?: string[], sideOn?: boolean}} given - what the caller set: maxDistance
+ *   (given, not defaulted) for its warning; ignored, options the method does not use; sideOn, the watershed's
+ *   side-on test.
  * @returns {object} fr.
  */
 export function resultFields(fr, spacing, given) {
@@ -73,6 +74,7 @@ export function resultFields(fr, spacing, given) {
 	}
 	if (area > 0 && sheetArea > SHEET_SHARE * area) warnings.push({ code: "SHEETS", message: Math.round(100 * sheetArea / area) + "% of the surface is flat patches, counted under the lower limit." });
 	if (big && fr.surfaceArea > 0 && big.area > FLOOR_SHARE * fr.surfaceArea) warnings.push({ code: "FLOOR", message: "Fragment " + big.id + " covers " + Math.round(100 * big.area / fr.surfaceArea) + "% of the surface: the floor or a wall? Draw the polygon round the pile (or delete it) and run again." });
+	if (g.sideOn) warnings.push({ code: "SIDE_ON", message: "This cloud is seen side-on; the watershed sees from above: use method facets." });
 	if (g.ignored && g.ignored.length) warnings.push({ code: "IGNORED_OPTIONS", message: "The watershed does not use " + g.ignored.join(", ") + "." });
 	fr.spacing = spacing; fr.floor = floor; fr.resolution = res; fr.warnings = warnings;
 	return fr;

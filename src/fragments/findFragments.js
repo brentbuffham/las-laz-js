@@ -39,9 +39,31 @@ import { pileNormals } from "./pileNormals.js";
 import { fragmentAxes } from "./axes.js";
 import { pointSpacing } from "./spacing.js";
 import { resultFields } from "./resolution.js";
+import { watershedFragments } from "./watershed.js";
 
 var D = Math.PI / 180, EDGE_ON = 0.1, MIN_PAIRS = 3, SPACING_SAMPLE = 4096, MD_SPACINGS = 4;
-var METHODS = { facets: 1 };
+var METHODS = { facets: 1, watershed: 1 };
+var FACET_ONLY = ["maxDistance", "k", "normals", "facetOptions", "concaveAngle", "surfaceDistance", "viewpoint", "fill", "fillDistance"];
+var WS_DEFAULTS = { cellSpacings: 1.5, reliefRadius: 1, seedHeight: 0.005, clipBelow: 0, minPoints: 50 };
+
+// the watershed's options, checked, with their defaults; cell from the spacing when not given
+function watershedOptions(opts, spacing) {
+	var o = { onProgress: opts.onProgress, keepLabels: opts.keepLabels };
+	var cell = opts.cell === undefined ? WS_DEFAULTS.cellSpacings * spacing : opts.cell;
+	if (opts.cell !== undefined && !(finite(cell) && cell > 0)) throw bad("cell must be a positive distance, not " + JSON.stringify(opts.cell));
+	o.cell = cell;
+	o.reliefRadius = opts.reliefRadius === undefined ? WS_DEFAULTS.reliefRadius : opts.reliefRadius;
+	if (!finite(o.reliefRadius) || !(o.reliefRadius > 0)) throw bad("reliefRadius must be a positive distance, not " + JSON.stringify(opts.reliefRadius));
+	if (cell > 0 && o.reliefRadius < 2 * cell) throw bad("reliefRadius must be at least 2 cells (" + 2 * cell + "), not " + o.reliefRadius);
+	o.seedHeight = opts.seedHeight === undefined ? WS_DEFAULTS.seedHeight : opts.seedHeight;
+	if (!finite(o.seedHeight) || !(o.seedHeight > 0)) throw bad("seedHeight must be a positive height, not " + JSON.stringify(opts.seedHeight));
+	o.clipBelow = opts.clipBelow === undefined ? WS_DEFAULTS.clipBelow : opts.clipBelow;
+	if (!finite(o.clipBelow) || o.clipBelow > 0) throw bad("clipBelow must be a height at most 0, not " + JSON.stringify(opts.clipBelow));
+	o.minPoints = opts.minPoints === undefined ? WS_DEFAULTS.minPoints : opts.minPoints;
+	if (!Number.isInteger(o.minPoints) || o.minPoints < 3) throw bad("minPoints must be a whole number >= 3, not " + JSON.stringify(opts.minPoints));
+	if (opts.onProgress !== undefined && typeof opts.onProgress !== "function") throw bad("onProgress must be a function");
+	return o;
+}
 var FACE_DEFAULTS = { maxAngle: 20, minArea: 0, minPoints: 10 };
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
@@ -113,8 +135,9 @@ function groupBy(label, m) {
 export function findFragments(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFragments needs options: { maxDistance?, method?, … }");
 	var method = opts.method === undefined ? "facets" : opts.method;
-	if (!METHODS[method]) throw bad("method must be \"facets\", not " + JSON.stringify(method));
+	if (!METHODS[method]) throw bad("method must be \"facets\" or \"watershed\", not " + JSON.stringify(method));
 	if (cols && cols.count) coordsOf(cols, "findFragments");
+	if (method === "watershed") return watershedRun(cols, opts);
 	if (opts.maxDistance !== undefined) options(cols, opts);   // a bad option is refused before the spacing is measured
 	var spacing = pointSpacing(cols), given = {}, o = opts;
 	if (opts.maxDistance === undefined) {
@@ -124,6 +147,18 @@ export function findFragments(cols, opts) {
 	var fr = facetFragments(cols, o);
 	fr.method = "facets";
 	return resultFields(fr, spacing, given);
+}
+
+// method "watershed": a muckpile seen from above (watershed.js)
+function watershedRun(cols, opts) {
+	if (opts.cell !== undefined || opts.reliefRadius !== undefined) watershedOptions(opts, NaN);   // a bad option is refused before the spacing is measured
+	var spacing = pointSpacing(cols), o = watershedOptions(opts, spacing);
+	var ignored = FACET_ONLY.filter(function (key) { return opts[key] !== undefined; });
+	var fr = o.cell > 0 ? watershedFragments(cols, o, spacing) : { fragment: new Uint32Array(cols.count), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: NaN, sideOn: false };
+	var sideOn = fr.sideOn;
+	delete fr.sideOn;
+	fr.method = "watershed"; fr.facets = null; fr.planeDistance = NaN;
+	return resultFields(fr, spacing, { ignored: ignored, sideOn: sideOn });
 }
 
 /**
