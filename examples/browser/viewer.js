@@ -75,6 +75,7 @@ export function createViewer(container) {
 		cameraListeners.forEach(function (fn) { fn(); });
 	}
 	window.addEventListener("resize", resize);
+	if (typeof ResizeObserver === "function") new ResizeObserver(resize).observe(container);   // the side panel dragged or hidden
 	resize();
 
 	// keep each marker's label on its point

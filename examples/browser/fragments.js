@@ -1,6 +1,7 @@
 // examples/browser/fragments.js
 //==========================================================
-// The demo's Fragments tab: findFragments on the selection (a polygon
+// The demo's Fragments tab: findFragments (or, experimental, the
+// watershed of watershed.js, same result shape) on the selection (a polygon
 // round the muckpile) or the whole cloud; the camera's position is the
 // viewpoint only when asked (a camera below the pile would turn every
 // face inside out). Colours by fragment (the Colour tab's list), outlines on
@@ -15,16 +16,24 @@
 
 import { findFragments, sizeDistribution } from "../../src/index.js";
 import { writeDxf } from "./facets.js";
+import { watershedFragments, watershedThenFacets } from "./watershed.js";
 import { drawSizeChart } from "./sizeChart.js";
 
-var NONE_RGB = [90, 90, 90], FLOOR_SHARE = 0.25;
+var NONE_RGB = [90, 90, 90], OUTSIDE_RGB = [38, 40, 44], FLOOR_SHARE = 0.25;   // outside: points not in the run (a selection's outside), not counted
 
-// A fragment's colour: hues spread by the golden angle, offset from the facet colours
-function fragmentRgb(id) {
-	var h = (id * 137.508 + 200) % 360, s = 0.7, l = 0.55, a = s * Math.min(l, 1 - l);
+// HSL (hue in degrees, s and l in [0, 1]) to 0-255 RGB
+function hslRgb(h, s, l) {
+	var a = s * Math.min(l, 1 - l);
 	function f(k) { var t = (k + h / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(t - 3, 9 - t, 1)))); }
 	return [f(0), f(8), f(4)];
 }
+
+// A size range's colour: t in [0, 1] from violet-blue (small) through cyan, green, yellow and
+// orange to red (large), fully saturated so every bin stands out on the dark view
+function rampRgb(t) { return hslRgb(250 * (1 - Math.max(0, Math.min(1, t))), 1, 0.5); }
+
+// A fragment's colour: vivid hues spread by the golden angle, offset from the facet colours
+function fragmentRgb(id) { return hslRgb((id * 137.508 + 200) % 360, 1, 0.5); }
 
 /**
  * @param {object} ctx - $, viewer, setStatus, fmt, since, setSelection(sel, name), clearSelection(), recolour(), keepPoints,
@@ -45,30 +54,39 @@ export function initFragments(ctx) {
 		if (!cloud) return;
 		var sel = ctx.selection, cols = { count: cloud.count, x: cloud.x, y: cloud.y, z: cloud.z }, idx = null;
 		if (sel && sel.length) { cols = ctx.keepPoints(cols, sel); idx = sel; }
-		var opts = { maxDistance: num("fraMaxDist", 0.15), concaveAngle: num("fraConcave", 10), minPoints: num("fraMinPoints", 50), fill: $("fraFill").checked };
-		if ($("fraCamera").checked) opts.viewpoint = ctx.viewer.cameraPosition();
+		var method = $("fraMethod").value, watershed = method !== "facets";
+		var wsOpts = { cell: num("fraWsCell", undefined), reliefRadius: num("fraWsRadius", 1), seedHeight: num("fraWsSeed", 0.005), clipBelow: num("fraWsClip", 0), minPoints: num("fraMinPoints", 50) };
+		var facetOpts = { maxDistance: num("fraMaxDist", 0.15), concaveAngle: num("fraConcave", 10), minPoints: num("fraMinPoints", 50), fill: $("fraFill").checked };
+		if ($("fraCamera").checked) facetOpts.viewpoint = ctx.viewer.cameraPosition();
 		var pd = num("fraPlaneDist", undefined);
-		if (pd !== undefined) opts.facetOptions = { planeDistance: pd };
-		status("finding fragments in " + fmt(cols.count) + " points" + (idx ? " (the selection)" : "") + "…");
+		if (pd !== undefined) facetOpts.facetOptions = { planeDistance: pd };
+		var opts = method === "facets" ? facetOpts : wsOpts;
+		status("finding fragments" + (method === "watershed" ? " (watershed)" : method === "hybrid" ? " (watershed, then facets on the rest)" : "") + " in " + fmt(cols.count) + " points" + (idx ? " (the selection)" : "") + "…");
 		$("progress").value = 0;
 		opts.onProgress = function (d, t) { $("progress").value = t ? d / t : 1; };
 		requestAnimationFrame(function () { setTimeout(function () {
 			var t0 = performance.now(), fr;
-			try { fr = findFragments(cols, opts); } catch (err) { status(err.message, true); return; }
+			try { fr = method === "hybrid" ? watershedThenFacets(cols, wsOpts, facetOpts) : watershed ? watershedFragments(cols, opts) : findFragments(cols, opts); } catch (err) { status(err.message, true); return; }
+			if (watershed) $("fraWsCell").placeholder = "auto (" + fr.cell.toFixed(3) + ")";
 			var fragment = new Uint32Array(cloud.count), inFragments = 0;
 			for (var i = 0; i < fr.fragment.length; i++) { var c = idx ? idx[i] : i; fragment[c] = fr.fragment[i]; if (fr.fragment[i]) inFragments++; }
-			res = { fr: fr, idx: idx, fragment: fragment };
+			var inRun = null;
+			if (idx) { inRun = new Uint8Array(cloud.count); for (i = 0; i < idx.length; i++) inRun[idx[i]] = 1; }
+			res = { fr: fr, idx: idx, fragment: fragment, inRun: inRun };
 			hovered = 0;
 			showOutlines();
-			$("colourBy").value = "fragment";
+			$("colourBy").value = $("fraColour").value;
 			ctx.recolour();   // first: it writes its own status line
 			var share = fr.surfaceArea ? fr.unassignedArea / fr.surfaceArea : 0;
 			var text = fr.fragments.length + " fragments holding " + fmt(inFragments) + " of " + fmt(cols.count) + " points; " +
-				fr.unassignedArea.toFixed(1) + " m² of " + fr.surfaceArea.toFixed(1) + " m² in none (" + (100 * share).toFixed(0) + " %), in " + ctx.since(t0) + " ms";
+				fr.unassignedArea.toFixed(1) + " m² of " + fr.surfaceArea.toFixed(1) + " m² in none (" + (100 * share).toFixed(0) + " %), in " + ctx.since(t0) + " ms" +
+				(watershed ? "; point spacing " + fr.spacing.toFixed(4) + " m, cell " + fr.cell.toFixed(3) + " m" : "") +
+				(method === "hybrid" ? "; " + fmt(fr.fromWatershed) + " from the watershed, " + fmt(fr.fromFacets) + " from facets on the rest" : "");
 			var big = floorWarning();
 			$("fraInfo").textContent = big;
 			$("fraInfo").classList.toggle("error", !!big);
-			$("fraFinesHint").textContent = "Area in no fragment: " + (100 * share).toFixed(0) + " % of the surface — a start for Fines, if those parts are fines (it is not applied by itself: a scan cannot see their depth).";
+			$("fraFines").value = Math.min(99, Math.round(100 * share));
+			$("fraFinesHint").textContent = "Fines (not a rock): " + (100 * share).toFixed(0) + " % of the " + (idx ? "selection's " : "") + "surface (anything outside the selection is not counted), applied as Fines %; type over it to change it. It follows the run's settings (the watershed's Clip below most of all).";
 			curve();
 			status(text + (big ? " · " + big : ""));
 			if (ctx.onResult) ctx.onResult();
@@ -96,7 +114,8 @@ export function initFragments(ctx) {
 		var tr = t.insertRow();
 		tr.insertCell().textContent = "size (m)";
 		[10, 20, 50, 80, 90].forEach(function (P) {
-			var q = psd.p[P], c = tr.insertCell();
+			var q = psd.p[P], c = tr.insertCell(), fines = num("fraFines", 0);
+			if (fines > 0 && P <= fines) { c.textContent = "fines"; c.title = "Within the fines share (" + fines + " %): not a rock"; return; }
 			c.textContent = q.size > 0 ? m(q.size) + (q.extrapolated ? " *" : "") : "—";
 			if (q.extrapolated) c.title = "From the fit, below the measured curve";
 		});
@@ -139,14 +158,55 @@ export function initFragments(ctx) {
 		if (!res || !$("fraOutlines").checked) { ctx.viewer.clearOutlines(); return; }
 		ctx.viewer.setOutlines(res.fr.fragments.map(function (f) { return Float32Array.from(f.outline); }), true);
 	}
-	/** Colours for the drawn points by fragment. */
-	function colours(drawn, drawnIdx) {
-		var n = drawn.count, out = new Uint8Array(n * 3);
+	/** Colours for the drawn points by fragment, or (by "fragmentSize") by the fragment's size range. */
+	function colours(drawn, drawnIdx, by) {
+		var n = drawn.count, out = new Uint8Array(n * 3), bins = by === "fragmentSize" && res ? sizeBins() : null;
 		for (var j = 0; j < n; j++) {
-			var i = drawnIdx ? drawnIdx[j] : j, c = res && res.fragment[i] ? fragmentRgb(res.fragment[i]) : NONE_RGB;
+			var i = drawnIdx ? drawnIdx[j] : j, f = res ? res.fragment[i] : 0;
+			var c = res && res.inRun && !res.inRun[i] ? OUTSIDE_RGB : !f ? NONE_RGB : bins ? bins.rgb[bins.of[f]] : fragmentRgb(f);
 			out[j * 3] = c[0]; out[j * 3 + 1] = c[1]; out[j * 3 + 2] = c[2];
 		}
+		showSizeLegend(bins);
 		return out;
+	}
+	// Bins log-spaced from the smallest fragment's size to the largest (edges to 2 significant
+	// figures), each with its colour, fragment count and share of the surface (the fragments share
+	// what the fines, the area in no fragment, leave)
+	function sizeBins() {
+		var nb = Math.max(2, Math.min(64, Math.round(num("fraBins", 10)))), fs = res.fr.fragments;
+		if (res.bins && res.bins.n === nb) return res.bins;
+		var lo = Infinity, hi = 0, total = 0;
+		fs.forEach(function (f) { if (f.size > 0) { lo = Math.min(lo, f.size); hi = Math.max(hi, f.size); } total += f.area; });
+		var edges = [];
+		for (var k = 0; k <= nb; k++) edges.push(lo < hi ? Number((lo * Math.pow(hi / lo, k / nb)).toPrecision(2)) : lo);
+		var of = new Uint8Array(fs.length + 1), count = new Array(nb).fill(0), area = new Array(nb).fill(0);
+		fs.forEach(function (f) {
+			for (var b = 0; b < nb - 1 && f.size >= edges[b + 1]; b++);
+			of[f.id] = b; count[b]++; area[b] += f.area;
+		});
+		var rgb = [];
+		for (k = 0; k < nb; k++) rgb.push(rampRgb(nb > 1 ? k / (nb - 1) : 0));
+		var fines = res.fr.surfaceArea ? res.fr.unassignedArea / res.fr.surfaceArea : 0;
+		res.bins = { n: nb, edges: edges, of: of, rgb: rgb, count: count, area: area, total: total, fines: fines };
+		return res.bins;
+	}
+	function showSizeLegend(bins) {
+		var el = $("fraLegend");
+		if (!bins) { el.classList.add("hidden"); return; }
+		el.innerHTML = "";
+		function row(rgb, text, count, share, title) {
+			var line = document.createElement("div"), sw = document.createElement("span"), label = document.createElement("span"), cnt = document.createElement("span");
+			sw.className = "swatch"; sw.style.background = "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")";
+			label.textContent = text;
+			cnt.className = "count"; cnt.textContent = (count === null ? "" : fmt(count) + " · ") + (share === null ? "" : (100 * share).toFixed(0) + " %");
+			cnt.title = title;
+			line.append(sw, label, cnt);
+			el.appendChild(line);
+		}
+		for (var b = bins.n - 1; b >= 0; b--) row(bins.rgb[b], bins.edges[b] + "–" + bins.edges[b + 1] + " m", bins.count[b], bins.total ? (1 - bins.fines) * bins.area[b] / bins.total : 0, "Fragments in this range, and their share of the surface");
+		row(NONE_RGB, "Fines (not a rock)", null, bins.fines, "The surface in no fragment, and its share");
+		if (res.inRun) row(OUTSIDE_RGB, "Outside the selection", null, null, "Not in the run: not counted");
+		el.classList.remove("hidden");
 	}
 
 	// --- CSV and DXF ----------------------------------------------------------------
@@ -190,6 +250,11 @@ export function initFragments(ctx) {
 		if (ctx.onResult) ctx.onResult();
 	}
 	$("fraRun").addEventListener("click", function () { showScope(); run(); });
+	$("fraMethod").addEventListener("change", function () {
+		var m = $("fraMethod").value;
+		$("fraFacetOpts").classList.toggle("hidden", m === "watershed");
+		$("fraWatershedOpts").classList.toggle("hidden", m === "facets");
+	});
 	$("fraClear").addEventListener("click", function () {
 		if (!res) return;
 		clear();
@@ -200,6 +265,8 @@ export function initFragments(ctx) {
 	$("fraClearSel").addEventListener("click", function () { ctx.clearSelection(); showScope(); });
 	document.querySelector('.tab[data-tab="fragments"]').addEventListener("click", showScope);
 	$("fraOutlines").addEventListener("change", showOutlines);
+	$("fraColour").addEventListener("change", function () { if (!res) return; $("colourBy").value = $("fraColour").value; ctx.recolour(); });
+	$("fraBins").addEventListener("change", function () { if (!res) return; res.bins = null; if ($("colourBy").value === "fragmentSize") ctx.recolour(); });
 	$("fraSelectOne").addEventListener("click", selectHovered);
 	$("fraSelectBig").addEventListener("click", selectOversize);
 	$("fraCsv").addEventListener("click", function () { if (res) download("fragments.csv", fragmentsCsv()); });

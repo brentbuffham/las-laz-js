@@ -263,7 +263,8 @@ function display(refit) {
 function colours() {
 	if ($("colourBy").value === "rgb" && !cloud.red) $("colourBy").value = "elevation";   // this format holds no colour
 	var by = $("colourBy").value;
-	var c = by === "roughness" ? roughColours() : by === "facet" || by === "set" ? facets.colours(drawn, drawnIdx, by) : by === "fragment" ? fragments.colours(drawn, drawnIdx) : colourize(drawn, colourOpts());
+	var c = by === "roughness" ? roughColours() : by === "facet" || by === "set" ? facets.colours(drawn, drawnIdx, by) : by === "fragment" || by === "fragmentSize" ? fragments.colours(drawn, drawnIdx, by) : colourize(drawn, colourOpts());
+	if (by !== "fragmentSize") $("fraLegend").classList.add("hidden");
 	for (var j = 0; j < drawn.count; j++) {
 		var i = drawnIdx ? drawnIdx[j] : j;
 		if (splitAt >= 0 && i >= splitAt) for (var d = j * 3; d < j * 3 + 3; d++) c[d] = 70 + c[d] * 0.2;
@@ -844,6 +845,33 @@ document.querySelectorAll(".tab").forEach(function (tab) {
 	});
 });
 $("togglePanel").addEventListener("click", function () { $("panel").classList.toggle("hidden"); });
+// the side panel's width: drag its left edge (kept for next time, where storage allows); double-click for the default
+(function () {
+	var bar = $("panelResizer"), layout = document.querySelector(".layout"), KEY = "lasDemo.panelWidth";
+	function setWidth(px) {
+		if (px) layout.style.setProperty("--panel-width", Math.round(Math.max(280, Math.min(window.innerWidth - 300, px))) + "px");
+		else layout.style.removeProperty("--panel-width");
+	}
+	try { setWidth(Number(localStorage.getItem(KEY)) || 0); } catch (e) { /* no storage: the default width */ }
+	bar.addEventListener("pointerdown", function (e) {
+		e.preventDefault();
+		bar.setPointerCapture(e.pointerId);
+		bar.classList.add("dragging");
+		function move(ev) { setWidth(layout.getBoundingClientRect().right - ev.clientX); }
+		function up() {
+			bar.classList.remove("dragging");
+			bar.removeEventListener("pointermove", move);
+			bar.removeEventListener("pointerup", up);
+			try { localStorage.setItem(KEY, String($("panel").getBoundingClientRect().width)); } catch (e2) { /* not kept */ }
+		}
+		bar.addEventListener("pointermove", move);
+		bar.addEventListener("pointerup", up);
+	});
+	bar.addEventListener("dblclick", function () {
+		setWidth(0);
+		try { localStorage.removeItem(KEY); } catch (e) { /* nothing kept */ }
+	});
+})();
 $("fileInput").addEventListener("change", function (e) { if (e.target.files[0]) openFile(e.target.files[0]); });
 $("readButton").addEventListener("click", function () { read(); });
 $("abortButton").addEventListener("click", stop);

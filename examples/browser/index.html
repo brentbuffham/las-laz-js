@@ -33,8 +33,10 @@
 			</div>
 			<div class="viewer-hud" id="hud"></div>
 			<div class="viewer-legend hidden" id="classLegend"></div>
+			<div class="viewer-legend hidden" id="fraLegend"></div>
 		</section>
 
+		<div class="panel-resizer" id="panelResizer" title="Drag to change the panel's width; double-click for the default" role="separator" aria-orientation="vertical"></div>
 		<aside class="panel" id="panel">
 			<nav class="tabs" role="tablist">
 				<button class="tab active" data-tab="header" role="tab">Header</button>
@@ -273,13 +275,33 @@
 				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragments</code>: facets that meet at a ridge are one rock, a valley keeps two apart. <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; a flat floor or fines flat at this scale come out as fragments too, so keep the run to the pile. The pile faces up; for a drawpoint or a steep face, look at it from the open side and tick Camera as viewpoint. The page pauses while it runs.</p>
 				<h3>Fragments</h3>
 				<div class="form-grid">
-					<label>Max distance (m) <input type="number" id="fraMaxDist" value="0.15" min="0.01" step="0.01" title="Rock-face scale: the k nearest within this distance, a few point spacings"></label>
-					<label>Concave angle (°) <input type="number" id="fraConcave" value="10" min="1" max="89" step="1" title="Two facets this close in angle, on one plane, are one face"></label>
+					<label>Method
+						<select id="fraMethod" title="Facets: findFragments, facets merged across ridges (any orientation). Watershed (experimental): a height grid flooded from the rock tops, for a muckpile seen from above. Watershed + facets on the rest: the watershed, then Facets on what it leaves grey; the rock-shaped ones found there are rocks too, the rest fines (uses both sets of settings)">
+							<option value="facets">Facets</option>
+							<option value="watershed">Watershed (experimental)</option>
+							<option value="hybrid">Watershed + facets on the rest (experimental)</option>
+						</select>
+					</label>
 					<label>Min points <input type="number" id="fraMinPoints" value="50" min="3" step="10" title="Smaller fragments go back to none"></label>
-					<label>Plane distance (m) <input type="number" id="fraPlaneDist" placeholder="measured" min="0" step="0.005" title="The facets' plane distance; blank = 3 x the measured noise"></label>
 				</div>
-				<label class="small">Fill <input type="checkbox" id="fraFill" checked title="A point in no facet joins the nearest fragment within max distance (one hop: fines stay out)"></label>
-				<label class="small">Camera as viewpoint <input type="checkbox" id="fraCamera" title="For a drawpoint or a steep face: the camera stands on the open side. Off: the pile faces up. A camera below the pile turns every face inside out"></label>
+				<div id="fraFacetOpts">
+					<div class="form-grid">
+						<label>Max distance (m) <input type="number" id="fraMaxDist" value="0.15" min="0.01" step="0.01" title="Rock-face scale: the k nearest within this distance, a few point spacings"></label>
+						<label>Concave angle (°) <input type="number" id="fraConcave" value="10" min="1" max="89" step="1" title="Two facets this close in angle, on one plane, are one face"></label>
+						<label>Plane distance (m) <input type="number" id="fraPlaneDist" placeholder="measured" min="0" step="0.005" title="The facets' plane distance; blank = 3 x the measured noise"></label>
+					</div>
+					<label class="small">Fill <input type="checkbox" id="fraFill" checked title="A point in no facet joins the nearest fragment within max distance (one hop: fines stay out)"></label>
+					<label class="small">Camera as viewpoint <input type="checkbox" id="fraCamera" title="For a drawpoint or a steep face: the camera stands on the open side. Off: the pile faces up. A camera below the pile turns every face inside out"></label>
+				</div>
+				<div id="fraWatershedOpts" class="hidden">
+					<p class="muted small">A grid of the highest point per cell; relief is the height above the local mean surface. Each relief peak standing at least <em>Seed height</em> proud seeds a rock and floods down to where it meets its neighbours; the gaps under the mean surface stay in no fragment. Seen from above only: for a drawpoint or a steep face use Facets.</p>
+					<div class="form-grid">
+						<label>Cell (m) <input type="number" id="fraWsCell" placeholder="auto" min="0.002" step="0.005" title="The grid's cell; blank = 1.5 x the point spacing"></label>
+						<label>Relief radius (m) <input type="number" id="fraWsRadius" value="1" min="0.05" step="0.05" title="The local mean surface: a box of this radius. About the size of the larger rocks"></label>
+						<label>Seed height (m) <input type="number" id="fraWsSeed" value="0.005" min="0.001" step="0.005" title="How far a peak must stand above its surroundings to seed a rock; higher merges more"></label>
+						<label>Clip below (m) <input type="number" id="fraWsClip" value="0" max="0" step="0.005" title="Cells this far under the local mean surface, or lower, are gaps in no fragment. 0 matched the drawn rocks best; -0.02 keeps more of each rock (grey 53 % to 38 % on the ultra corner) for about one rock less in 60"></label>
+					</div>
+				</div>
 				<div class="row wrap">
 					<span class="muted small" id="fraScope">Runs on the whole cloud</span>
 					<button class="button small hidden" id="fraClearSel" title="Run on the whole cloud again">Clear selection</button>
@@ -288,6 +310,15 @@
 					<button class="button" id="fraRun">Find fragments</button>
 					<button class="button" id="fraClear" title="Remove the fragments, their colours and outlines">Clear fragments</button>
 					<label class="small">Show outlines <input type="checkbox" id="fraOutlines" checked></label>
+				</div>
+				<div class="row wrap">
+					<label class="small">Colour
+						<select id="fraColour" title="Each fragment its own colour, or by size range">
+							<option value="fragment">Each fragment</option>
+							<option value="fragmentSize">Size range</option>
+						</select>
+					</label>
+					<label class="small">Bins <input type="number" id="fraBins" value="10" min="2" max="64" step="1" style="width: 4em" title="How many size ranges (2 to 64), log-spaced from the smallest fragment to the largest; one colour each"></label>
 				</div>
 				<p class="small" id="fraInfo"></p>
 				<div class="row wrap">
@@ -301,7 +332,7 @@
 					<label>Model <select id="fraModel"><option value="swebrec">Swebrec</option><option value="rosin-rammler">Rosin–Rammler</option></select></label>
 					<label>Weight <select id="fraWeight" title="Volume: (π/6) a b², an ellipsoid with the unseen depth taken as b"><option value="volume">Volume</option><option value="count">Count</option><option value="area">Area</option></select></label>
 					<label>Fit from (%) <input type="number" id="fraFitFrom" value="60" min="0" max="99" step="5"></label>
-					<label>Fines (%) <input type="number" id="fraFines" value="0" min="0" max="99" step="1" title="The share of the mass below the smallest fragment, added under the curve"></label>
+					<label>Fines (%) <input type="number" id="fraFines" value="0" min="0" max="99" step="1" title="Fines (not a rock): filled in from the run as the share of the surface in no fragment, added under the curve; type over it to change it"></label>
 				</div>
 				<p class="muted small" id="fraFinesHint"></p>
 				<div class="row"><button class="button" id="fraCurve">Recompute curve</button></div>
@@ -352,6 +383,7 @@
 						<option value="facet" title="Each facet its own colour (Facets tab); points in no facet grey">Facet</option>
 						<option value="set" title="Each joint set its colour (Facets tab); points in no set grey">Joint set</option>
 						<option value="fragment" title="Each fragment its own colour (Fragments tab); points in none grey">Fragment</option>
+						<option value="fragmentSize" title="Fragments coloured by size range (the Fragments tab&#39;s Bins); points in none grey">Fragment size</option>
 						<option value="roughness" title="Each point's RMS distance from its fitted plane (Edit tab's k and max distance)">Roughness</option>
 					</select>
 				</label>
