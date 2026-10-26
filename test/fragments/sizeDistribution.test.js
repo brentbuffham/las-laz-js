@@ -247,3 +247,21 @@ test("bad limits", function () {
 	assert.throws(function () { sizeDistribution(HAND, { finesSize: 0 }); }, /finesSize/);
 	assert.throws(function () { sizeDistribution({ fragments: "x" }); }, /fragments/);
 });
+
+test("limits: edge paths", function () {
+	// a result too small to have a floor: no lower limit
+	var r = result(); r.floor = NaN;
+	assert.equal(sizeDistribution(r).lower, 0);
+	// an upper limit nothing exceeds: no over share, the curve ends at 100 at the largest
+	var d = sizeDistribution(result(), { upper: 10 });
+	assert.equal(d.over, 0);
+	assert.equal(d.passing[d.passing.length - 1], 100);
+	assert.equal(d.size[d.size.length - 1], 4);
+	// volume and Rosin-Rammler on a result, with limits
+	var v = sizeDistribution(result(), { weight: "volume", model: "rosin-rammler", upper: 3 });
+	near(v.finesShare, 50, 1e-9, "the fines share is by area whatever the weight");
+	assert.ok(v.over > 0 && v.over < 50);
+	// a sheet in an array needs areas
+	assert.throws(function () { sizeDistribution([{ size: 1, axes: [1, 1, 0.1], sheet: true }], { weight: "count" }); }, /area/);
+	assert.equal(lib.resolutionOf, undefined);   // internal
+});

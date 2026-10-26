@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.12.0 (2026-10-27)
+
+What a cloud can resolve, the watershed and the hybrid, limits and fines.
+
+Behaviour changes:
+- `sizeDistribution` weighs by **area** by default (was volume): on real piles volume let a few
+  large fragments carry the curve.
+- `findFragments`' `maxDistance` is optional: 4 point spacings by default.
+- `sizeDistribution` given `findFragments`' whole result (not just its `fragments`) starts the
+  curve at the fines: the surface in no fragment, sheets and fragments under the lower limit (by
+  default the cloud's floor). An array without the new options and without sheets gives 0.11.0's
+  curve.
+
+New:
+- `pointSpacing(cols)`: the spacing of a surface from each point's 32 nearest, orientation-free.
+- Every `findFragments` result says what the cloud can resolve: `spacing`, `floor` (30 spacings,
+  the smallest rock measured), `resolution` ("fine" ≤ 0.017 m, "coarse" ≤ 0.035, "oversize"
+  ≤ 0.05, else "unresolved"), `warnings` (`COARSE`, `OVERSIZE_ONLY`, `UNRESOLVED`,
+  `MAX_DISTANCE`, `SHEETS`, `FLOOR`, `SIDE_ON`, `IGNORED_OPTIONS`), `method`, and `sheet` on
+  each fragment (c / b under 0.15: surface, not rock). A coarse cloud is warned of, never refused.
+- `findFragments({ method: "watershed" })`: a muckpile seen from above, by a marker-controlled
+  watershed on a height grid (relief above the local mean surface, seeds at the relief peaks,
+  gaps clipped). `cell`, `reliefRadius` (about the largest rock), `seedHeight`, `clipBelow`.
+- `findFragments({ method: "hybrid" })`: the watershed, then facet merging on what it left; the
+  rock-shaped fragments found there are rocks too (`from` on each), the rest fines.
+- `sizeDistribution`: `lower` and `upper` limits (everything over `upper` one share, the crusher
+  gap say), `finesShare`, `over`, `p[P].below` / `.above`, `finesSize` to place the unseen fines,
+  `warnings` (`LOWER_UNDER_FLOOR`).
+- Demo: the method choice, the warnings line (a thinned read named too), a "What a cloud can
+  resolve" table, lower / upper limit and fines size fields, colour by size range (bins between
+  the limits, an "over" bin, fines grey), not a rock is fines, only the selection counted, vivid
+  colours, a draggable side panel.
+- `_dev/scoreFragments.mjs`: score a method against rock outlines drawn by hand (Kirra
+  drawings.json or DXF).
+
 ## 0.11.0 (2026-10-26)
 
 Fragments and size distribution.

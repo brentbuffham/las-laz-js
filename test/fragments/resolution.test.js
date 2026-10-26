@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findFragments } from "../../src/fragments/findFragments.js";
-import { resolutionOf } from "../../src/fragments/resolution.js";
+import { resolutionOf, resultFields } from "../../src/fragments/resolution.js";
 import { rockPile } from "../helpers/rocks.js";
 
 var cache = {};
@@ -96,4 +96,14 @@ test("method", function () {
 	var a = findFragments(cols, { maxDistance: 0.08, method: "facets" }), b = findFragments(cols, { maxDistance: 0.08 });
 	assert.deepEqual(a.fragment, b.fragment);
 	assert.equal(a.method, "facets"); assert.equal(b.method, "facets");
+});
+
+test("resultFields edges", function () {
+	// a fragment with no measurable b is a sheet; no spacing, no resolution and no resolution warning
+	var fr = resultFields({ fragments: [{ id: 1, axes: [1, 0, 0], area: 1 }, { id: 2, axes: [1, 0.8, 0.5], area: 1 }], surfaceArea: 0, unassignedArea: 0 }, NaN, {});
+	assert.equal(fr.fragments[0].sheet, true); assert.equal(fr.fragments[1].sheet, false);
+	assert.equal(fr.resolution, null); assert.equal(resolutionOf(NaN), null);
+	assert.deepEqual(fr.warnings.map(function (w) { return w.code; }), ["SHEETS"]);
+	// maxDistance given with no spacing to judge it by: no warning
+	assert.equal(resultFields({ fragments: [], surfaceArea: 0, unassignedArea: 0 }, NaN, { maxDistance: 9 }).warnings.length, 0);
 });

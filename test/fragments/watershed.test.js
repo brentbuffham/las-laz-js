@@ -141,6 +141,11 @@ test("bad options", function () {
 	assert.throws(function () { ws(c, { seedHeight: 0 }); }, /seedHeight/);
 	assert.throws(function () { ws(c, { clipBelow: 0.01 }); }, /clipBelow/);
 	assert.throws(function () { ws(c, { minPoints: 2 }); }, /minPoints/);
+	[["cell", "x"], ["reliefRadius", "x"], ["seedHeight", NaN], ["clipBelow", "x"], ["minPoints", 2.5], ["onProgress", "x"]].forEach(function (e) {
+		var o = {}; o[e[0]] = e[1];
+		assert.throws(function () { ws(c, o); }, new RegExp(e[0]));
+		assert.throws(function () { hy(c, o); }, new RegExp(e[0]));
+	});
 });
 
 // --- method "hybrid": the watershed, then facets on what it left ---------------------------------
@@ -187,4 +192,30 @@ test("hybrid: the same run twice", function () {
 	var p = pile(), a = hy(p.cols), b = hy(p.cols);
 	assert.deepEqual(a.fragment, b.fragment);
 	assert.deepEqual(a.fragments.map(function (f) { return [f.id, f.count, f.from]; }), b.fragments.map(function (f) { return [f.id, f.count, f.from]; }));
+});
+
+test("hybrid and watershed: hard inputs, progress, positions columns", function () {
+	var line = [];
+	for (var i = 0; i < 50; i++) line.push([i * 0.02, 0, 0]);
+	[cloud([]), cloud([[1, 2, 3]]), cloud(line)].forEach(function (c) {
+		var fr = hy(c);
+		assert.equal(fr.fragments.length, 0);
+		assert.equal(fr.fromWatershed + fr.fromFacets, 0);
+		assert.ok(!Number.isNaN(fr.surfaceArea));
+	});
+	var p = pile(), seen = { ws: [], hy: [] };
+	ws(p.cols, { onProgress: function (d, t) { seen.ws.push(d / t); } });
+	hy(p.cols, { onProgress: function (d, t) { seen.hy.push(d / t); } });
+	["ws", "hy"].forEach(function (k) {
+		assert.ok(seen[k].length > 2, k + " reports progress");
+		assert.ok(seen[k].every(function (v, j) { return j === 0 || v >= seen[k][j - 1] - 1e-12; }), k + " never goes back");
+		assert.ok(Math.abs(seen[k][seen[k].length - 1] - 1) < 1e-12, k + " ends at 1");
+	});
+	// a k = 3 positions column gives the same fragments as x / y / z
+	var n = p.cols.count, pos = new Float32Array(3 * n);
+	for (i = 0; i < n; i++) { pos[3 * i] = p.cols.x[i]; pos[3 * i + 1] = p.cols.y[i]; pos[3 * i + 2] = p.cols.z[i]; }
+	var xyz = { count: n, x: Float32Array.from(p.cols.x), y: Float32Array.from(p.cols.y), z: Float32Array.from(p.cols.z) };
+	assert.deepEqual(hy({ count: n, positions: pos }).fragment, hy(xyz).fragment);
+	// a facet maxDistance given to the hybrid is used, and warned of when far off
+	assert.ok(codes(hy(p.cols, { maxDistance: 0.8 })).indexOf("MAX_DISTANCE") >= 0);
 });

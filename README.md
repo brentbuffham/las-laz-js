@@ -22,6 +22,9 @@ runs in the browser and in Node — and built for files far larger than memory.
 - Big files: a 1.1 GB, 34-million-point LAS reads in under a second in Node, and a 10-million-point
   LAZ decodes on every core (a 10-million-point file in about 0.6 s); neither is held in memory
   whole (see LAZ below for the one exception).
+- Rock fragmentation: `findFragments` splits a muckpile scan into rocks (facets, a watershed, or
+  both) and says what the cloud can resolve; `sizeDistribution` gives the % passing curve, with
+  fines and oversize limits. See Fragments.
 - Tiles and level of detail: `buildTiles` splits a cloud of any size into an octree of tiles in
   memory, OPFS or a Node folder; `selectTiles` picks the tiles a camera needs within a point
   budget; tiles load as columns, are edited in place and written back to LAS / LAZ. See Tiles.
@@ -515,74 +518,137 @@ a layer per set, world coordinates: the facets as surfaces for CAD or Kirra).
 
 Split a muckpile scan into **fragments**, the rocks, and turn them into a **size distribution**:
 % passing by size, P-values and a fitted Swebrec or Rosin–Rammler curve, with no dependencies.
+Every result also says what the cloud can resolve, so a coarse cloud never hands back a confident
+curve.
 
 ```js
-import { findFragments, sizeDistribution } from "las-laz-js";
+import { findFragments, sizeDistribution, pointSpacing } from "las-laz-js";
 
-var fr = findFragments(pts, { maxDistance: 0.06 });   // the pile's points (a selection), any frame
+var fr = findFragments(pts, { method: "hybrid" });   // the pile's points (a selection), any frame
 fr.fragment;        // Uint32Array per point: its fragment (1 … n, largest first), 0 = none
-fr.fragments;       // [{ id, count, centroid, normal, axes: [a, b, c], size, area, outline, facets }]
+fr.fragments;       // [{ id, count, centroid, normal, axes: [a, b, c], size, area, outline, sheet, from }]
+fr.spacing;         // the point spacing: 0.016 on an ODM ultra cloud
+fr.floor;           // the smallest rock it measures, 30 spacings: 0.48
+fr.resolution;      // "fine", "coarse", "oversize" or "unresolved"
+fr.warnings;        // [{ code, message }]: COARSE, UNRESOLVED, SHEETS, FLOOR, …
 fr.surfaceArea;     // the scan's area
 fr.unassignedArea;  // the part in no fragment
 
-var psd = sizeDistribution(fr.fragments);              // by volume, Swebrec fitted from 60 % passing
-psd.size, psd.passing;   // the measured curve, sizes ascending
-psd.sizeAt(80);          // P80
-psd.p;                   // { 10, 20, 50, 80, 90: { size, extrapolated } }
-psd.fit;                 // { model, x50, xmax, b, rmse, from, range, passing(x), sizeAt(P) } or null
+var psd = sizeDistribution(fr, { upper: 1.2 });   // by area; fines under the floor; over 1.2 m one share
+psd.finesShare;     // % of the surface that is not a rock
+psd.over;           // % over the upper limit
+psd.p;              // { 10, 20, 50, 80, 90: { size, extrapolated, below, above } }
+psd.size, psd.passing, psd.sizeAt(80), psd.fit;
 ```
 
-**`findFragments`** runs `findFacets` at rock-face settings (`maxAngle` 20, `minArea` 0,
-`minPoints` 10; override with `facetOptions`), so each face of a rock is a facet, then joins the
-facets of one rock. Where two facets touch, each boundary pair of points votes: a ridge (convex)
-says one rock, a valley (concave) says two. Two facets within `concaveAngle` (default 10°) of each
-other on one plane are one face; parallel but offset is a step, a rock on a rock. Merges go
-strongest first and only while the fragment stays convex, so rough ground does not chain into
-one huge fragment. Each facet's outward side comes from the pile's own direction, a coarse grid
-of `surfaceDistance` (default a quarter of the cloud's longest side; a pile one cell wide takes
-up, or the viewpoint, square to its length); give `viewpoint` (the scanner, or any point on the
-open side) for a drawpoint or a steep face. A viewpoint on the wrong side (below a pile) turns
-every face inside out, so the demo uses the camera only when asked. A point in no facet
-joins the nearest fragment within `fillDistance` (default `maxDistance`), one hop only, so fines
-between rocks stay out. Fragments under `minPoints` (50) are dropped. `axes` are the 2nd–98th
-percentile spans along the fragment's principal axes, longest first; `size` is b, the
-intermediate one, the sieve-size estimate.
+### What a cloud can resolve
 
-**`sizeDistribution`** weighs each fragment by `volume` ((π/6)·a·b², the unseen depth taken as b;
-the default), `area` or `count`. The fit uses only the coarse part, from `fitFrom` (default 60 %)
-up, where a scan's sizes hold; P-values below the measured curve come from the fit and are
-marked `extrapolated`. `fines` (a share of the whole mass) adds a bin under the smallest fragment;
-`unassignedArea / surfaceArea` is a start for it, not applied by itself, as a scan cannot see how
-deep fines go. `model: "rosin-rammler"` fits Rosin–Rammler instead.
+Whether a cloud can size rocks comes down to its point spacing. `pointSpacing(cols)` measures it
+from each point's 32 nearest, so a wall reads as a floor does. Scored on one shot (S4_250_403)
+against 118 rocks drawn by hand in Kirra:
+
+| Point spacing | Resolution | What you get |
+|---|---|---|
+| ≤ 0.017 m | fine | Rocks down to about 0.5 m come out whole, and a size curve from the floor up. ODM `--pc-quality ultra` at full image scale gave 0.016 m: use it for photogrammetry. |
+| ≤ 0.035 m | coarse | Rocks over about 0.7–1 m only (ODM's default quality gave 0.028–0.031 m). P-values under the floor are not sizes. |
+| ≤ 0.05 m | oversize | Rocks over about 1–1.5 m only: oversize, not a size curve. |
+| coarser | unresolved | No rocks, only patches of surface. An 8 cm survey (0.086 m) found none. |
+
+The **floor**, the smallest rock measured, is 30 point spacings: the clouds scored lost most of
+their rocks under 25–28. Fragments under it count as fines. A coarse cloud is warned of, never
+refused, by `COARSE`, `OVERSIZE_ONLY` or `UNRESOLVED`, each with its spacing and floor. Also
+`MAX_DISTANCE` (a facet `maxDistance` outside 2.5–8 spacings), `SHEETS` (over 30 % of the surface
+is flat patches), `FLOOR` (one fragment over a quarter of the surface: a bench floor or a wall in
+the run), `SIDE_ON` (the watershed on a wall or drawpoint) and `IGNORED_OPTIONS`.
+
+Two traps. A read thinned to a point budget is coarser than the file: half the points, 1.4 times
+the spacing. And photogrammetry at a reduced image scale loses the small rocks first.
+
+### Methods
+
+- **`"facets"`** (the default) merges facets across convex edges. It works at any orientation:
+  faces, walls, drawpoints.
+- **`"watershed"`** is for a muckpile seen from above. It floods a height grid from the rock tops
+  and leaves the gaps between rocks out.
+- **`"hybrid"`** runs the watershed, then facets on what the watershed left. The rock-shaped
+  pieces found there are rocks too (`from: "facets"`), the rest is fines.
+
+On the ultra corner, against the drawn rocks (a match is one fragment covering a drawn rock with
+IoU ≥ 0.5):
+
+| Method | First 60 drawn | Next 58 drawn | Surface in no fragment | 10.9 M points, Node |
+|---|---|---|---|---|
+| facets | 30 | 24 | 3 % | 121 s |
+| watershed | 38 | 37 | 54 % | 6 s |
+| hybrid | 38 | 38 | 19 % | 64 s |
+
+Matched rocks measure 1.05–1.08 × the drawn b. The facets' tiling leaves nothing grey, but its
+outlines wander across rock edges and it splits rocks along creases (20 of 60). The watershed
+splits fewer and leaves the gaps grey; the hybrid finds rocks in that grey. On flat-faced synthetic
+boxes, facet merging's best case, it is the other way round: facets find all of them, the
+watershed 77 %. So: the watershed or the hybrid for muckpiles from a drone, facets for faces.
+
+**Facets.** `findFacets` at rock-face settings (`maxAngle` 20, `minArea` 0, `minPoints` 10;
+override with `facetOptions`), so each face of a rock is a facet, then the facets of one rock are
+joined. Where two facets touch, each boundary pair of points votes: a ridge (convex) says one rock,
+a valley (concave) says two. Two facets within `concaveAngle` (default 10°) of each other on one
+plane are one face; parallel but offset is a step, a rock on a rock. Merges go strongest first and
+only while the fragment stays convex, so rough ground does not chain into one huge fragment. Each
+facet's outward side comes from the pile's own direction, a coarse grid of `surfaceDistance`
+(default a quarter of the cloud's longest side); give `viewpoint` (the scanner, or any point on
+the open side) for a drawpoint or a steep face. A point in no facet joins the nearest fragment
+within `fillDistance`, one hop only. `maxDistance` defaults to 4 point spacings.
+
+**Watershed.** Each grid cell (`cell`, default 1.5 spacings) holds its highest point. Relief is the
+height above the mean surface within `reliefRadius` (default 1 m), so the pile's slope is out.
+Each relief peak standing `seedHeight` (default 0.005 m) proud seeds a rock, and the seeds flood
+down to where they meet. Cells under the mean surface by more than `-clipBelow` (default 0) are
+gaps, in no fragment; without that clip every rock takes its fines and reads about 30 % large.
+Set `reliefRadius` to about the largest rock: a slab wider than it gets a seed at each corner and
+splits. A grid over 6 × 10⁷ cells is refused (give a larger `cell` or crop).
+
+`axes` are the 2nd–98th percentile spans along a fragment's principal axes, longest first; `size`
+is b, the intermediate one, the sieve-size estimate. A fragment with c / b under 0.15 is a
+`sheet`: surface, not rock.
+
+### Size distribution
+
+`sizeDistribution` takes the whole `findFragments` result (or, as in 0.11.0, an array of
+fragments). **Not a rock is fines**: the surface in no fragment, the sheets and the fragments under
+the lower limit, by area whatever the weight, and the curve starts there. `lower` defaults to the
+cloud's floor; `upper` (0 = none) makes everything larger one share, the crusher gap say. A
+P-value in the fines reads `below` (its size the lower limit), one over the upper limit `above`.
+Fragments are weighed by `area` (the default; on real piles volume let a few big fragments carry
+the curve), `volume` ((π/6)·a·b², the unseen depth taken as b) or `count`. The fit uses the
+measured part between the limits, from `fitFrom` (default 60 %) up. `fines` adds fines the scan
+cannot see (under the rocks) on top, under the smallest size or at `finesSize` (e.g. 0.115).
+`model: "rosin-rammler"` fits Rosin–Rammler instead; the model changes the fit, not the measured
+P-values.
+
+The fines share follows the floor. On the ultra corner, rocks under the 0.48 m floor are 47 % of
+the surface, so by default P20 and P50 read "fines"; with `lower: 0` the hybrid gives P20 0.17,
+P50 0.41 and P80 0.64.
 
 **What a scan can and cannot see.** Only the visible surface is measured: c is the depth of the
 shell the scan saw, not the rock's, which is why `size` is b. b is measured on what was seen, so a
-rock showing its top and a side reads larger than its true b (the side tilts the axes): on the
-synthetic pile the visible b ran a median 13 % (up to 33 %) above the boxes' true b. The accuracy
-figures below are against the visible b, not the true one; read P50 and P80 with that in mind. Fragments under a few point spacings
-are not resolved. Anything flat at the facets' scale is a facet like a rock face: a bench floor or
-a wall in the run comes back as one big fragment and swamps a volume-weighted curve (keep the run
-to the pile; the demo warns when one fragment covers a quarter of the surface), and pebbly fines
-come back as pebble-sized fragments at the fine end. Two rocks pressed flush whose tops form one
-convex surface merge, as they would for any method without a crack to go on.
+rock showing its top and a side reads larger than its true b; on the synthetic pile the visible b
+ran a median 13 % above the boxes' true b. Two rocks pressed flush whose tops form one convex
+surface merge, as they would for any method without a crack to go on.
 
-On a synthetic pile (boxes of known size on pebbly fines, 5 mm noise at 2 cm spacing) 93 % of the
-boxes come back as one fragment each with `size` within 10 % of their visible b, and P50 and P80
-within 3 % and 7 % of the visible boxes'. At SLAM-like noise (2 cm at 4 cm spacing) that falls to about 70 % of boxes:
-faces split more. No real muckpile scan has been checked yet.
-
-**Speed:** about 6–11 s a million points in Node (`findFacets` most of it), and about 80–110
-bytes a point beyond the columns.
+**Speed** (Node, 10.9 M points): facets about 11 s a million points (`findFacets` most of it), the watershed about 0.5 s, the hybrid about 6 s (its facet pass on the rest).
 
 ### In the demo
 
-The Fragments tab runs on the selection (a polygon round the pile) or the whole cloud (the
-camera as the viewpoint when ticked): colour by fragment, outlines on the cloud, a hover readout
-(fragment, size, axes), **Select fragment** (the one last hovered) and **Select oversize** (the
-fragments above a size become the selection, to delete or Classify), the floor warning, the size
-curve (model, weight, fit from, fines) with its P-values, and downloads: fragments CSV, curve CSV
-and **Fragments DXF** (each outline a closed 3D polyline). Save with facet / set / fragment
-writes the `fragment` extra-bytes field.
+The Fragments tab runs on the selection (a polygon round the pile) or the whole cloud, by
+method, and shows what the cloud can resolve and every warning on the line under the run (a read
+thinned by Max points is named there, with the spacing every point would give). "What a cloud
+can resolve" holds the table above. Colour by fragment or by size range (bins from the lower to
+the upper limit, an "over" bin, fines grey), outlines on the cloud, a hover readout (fragment,
+size, axes, sheet), **Select fragment** and **Select oversize**, the size curve (model, weight,
+fit from, lower and upper limit, fines and fines size) with its P-values, and downloads:
+fragments CSV, curve CSV and **Fragments DXF** (each outline a closed 3D polyline). Only the
+selection counts; the rest is drawn dark. Save with facet / set / fragment writes the `fragment`
+extra-bytes field.
 
 ## LAZ
 

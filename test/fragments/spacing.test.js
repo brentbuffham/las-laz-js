@@ -59,3 +59,10 @@ test("sample", function () {
 test("exports", function () {
 	assert.equal(lib.pointSpacing, pointSpacing);
 });
+
+test("small clouds", function () {
+	// under the sample size every point is measured; under 32 points the farthest found is scaled to 32
+	near(pointSpacing(grid(50, 0.02)), 0.02, 0.05, "2,500 points");
+	var s = pointSpacing(grid(5, 0.02));   // 25 points
+	assert.ok(s > 0 && Number.isFinite(s), "25 points: " + s);
+});

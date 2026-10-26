@@ -34,9 +34,8 @@ export function pointSpacing(cols, opts) {
 	var tree = buildKdTree(cols, "pointSpacing"), m0 = Math.min(n, sample), P = new Uint32Array(K), D2 = new Float64Array(K), r = [];
 	for (var j = 0; j < m0; j++) {
 		var i = m0 === n ? j : Math.floor(((j * GOLDEN) % 1) * n), o = i * st, m = kdNearest(tree, X[o], Y[o], Z[o], K, Infinity, i, P, D2);
-		if (m) r.push(D2[m - 1] * K / m);   // fewer than K in all (a small cloud): the m-th, scaled to K
+		r.push(D2[m - 1] * K / m);   // fewer than K in all (a small cloud): the m-th, scaled to K; with 9 points or more m >= 8
 	}
-	if (!r.length) return NaN;
 	r.sort(function (a, b) { return a - b; });
 	return Math.sqrt(r[Math.floor((r.length - 1) / 2)]) * Math.sqrt(Math.PI / K);
 }

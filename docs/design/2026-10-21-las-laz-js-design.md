@@ -191,6 +191,12 @@ Roadmap revised 2026-10-23 (Brent): categorise first (small), registration befor
   Brent, 2026-10-25): `findFragments` merges facets across convex edges into rock fragments
   (a muckpile's rocks), with axes and a sieve-size estimate; `sizeDistribution` gives the
   % passing curve, P-values and a Swebrec / Rosin–Rammler fit. Kirra's side later.
+- **0.12.0 — what a cloud can resolve, the watershed and the hybrid** (spec
+  `2026-10-26-fragments-resolution-0.12.0-design.md`; Brent, 2026-10-26): `pointSpacing`; every
+  fragments result gives spacing, floor, resolution and warnings (a coarse cloud warned of, never
+  refused); `findFragments` methods `"watershed"` and `"hybrid"`; `sizeDistribution` lower and
+  upper limits, not a rock is fines, area by default. Kuz-Ram belongs with the blast design in
+  Kirra.
 
 ## 7. Out of scope
 
