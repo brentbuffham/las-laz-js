@@ -1,25 +1,28 @@
 // examples/browser/fragments.js
 //==========================================================
-// The demo's Fragments tab: findFragments (or, experimental, the
-// watershed of watershed.js, same result shape) on the selection (a polygon
-// round the muckpile) or the whole cloud; the camera's position is the
-// viewpoint only when asked (a camera below the pile would turn every
-// face inside out). Colours by fragment (the Colour tab's list), outlines on
-// the cloud, a hover line, Select fragment (the one last hovered) and
-// Select oversize (the points of fragments above a size: the selection,
-// to delete, Classify or crop), a warning when one fragment covers a
-// quarter of the surface (the floor or a wall in the run), the size curve
-// (sizeDistribution: model, weight, fit from, fines; sizeChart.js) with
-// its P-values, Fragments and Curve CSV, and a DXF of the outlines. Results are in the cloud's local frame;
+// The demo's Fragments tab: findFragments on the selection (a polygon
+// round the muckpile) or the whole cloud, by method: facets (any
+// orientation; the camera's position is the viewpoint only when asked,
+// as a camera below the pile would turn every face inside out), the
+// watershed (a muckpile seen from above) or the hybrid (the watershed,
+// then facets on what it left). What the cloud can resolve (spacing,
+// floor, resolution) and every warning show on a line under the run;
+// a thinned read (Max points) is named there too. Colours by fragment or
+// by size range (bins from the lower to the upper limit, sheets grey as
+// fines), outlines on the cloud, a hover line, Select fragment (the one
+// last hovered) and Select oversize. The size curve (sizeDistribution on
+// the result: model, weight, fit from, lower and upper limits, fines
+// size and the unseen fines %; sizeChart.js) with its P-values ("fines"
+// under the lower limit, "> upper" over the upper), Fragments and Curve
+// CSV, and a DXF of the outlines. Results are in the cloud's local frame;
 // CSV centroids are world coordinates.
 //==========================================================
 
 import { findFragments, sizeDistribution } from "../../src/index.js";
 import { writeDxf } from "./facets.js";
-import { watershedFragments, watershedThenFacets } from "./watershed.js";
 import { drawSizeChart } from "./sizeChart.js";
 
-var NONE_RGB = [90, 90, 90], OUTSIDE_RGB = [38, 40, 44], FLOOR_SHARE = 0.25;   // outside: points not in the run (a selection's outside), not counted
+var NONE_RGB = [90, 90, 90], OUTSIDE_RGB = [38, 40, 44], OVER_RGB = [255, 255, 255];   // fines (not a rock); outside the run, not counted; over the upper limit
 
 // HSL (hue in degrees, s and l in [0, 1]) to 0-255 RGB
 function hslRgb(h, s, l) {
@@ -37,16 +40,17 @@ function fragmentRgb(id) { return hslRgb((id * 137.508 + 200) % 360, 1, 0.5); }
 
 /**
  * @param {object} ctx - $, viewer, setStatus, fmt, since, setSelection(sel, name), clearSelection(), recolour(), keepPoints,
- *   onResult(), and getters cloud, origin, selection.
+ *   onResult(), and getters cloud, origin, selection, thinned ({ total, loaded } when Max points thinned the read, else null).
  */
 export function initFragments(ctx) {
 	var $ = ctx.$, fmt = ctx.fmt;
-	var res = null;   // { fr (findFragments on the run's points), idx (run point -> cloud point, or null), fragment (per cloud point), psd }
+	var res = null;   // { fr (findFragments on the run's points), idx (run point -> cloud point, or null), fragment (per cloud point), inRun, psd, bins, note }
 	var hovered = 0;   // the fragment under the pointer last (Select fragment)
 
 	function status(t, err) { ctx.setStatus("Fragments: " + t, err); }
 	function num(id, def) { var v = $(id).value.trim(); return v === "" ? def : Number(v); }
 	function m(v) { return v.toFixed(v < 1 ? 3 : 2); }
+	function sp(v) { return String(Number(v.toPrecision(3))); }
 
 	// --- run ------------------------------------------------------------------
 	function run() {
@@ -54,73 +58,98 @@ export function initFragments(ctx) {
 		if (!cloud) return;
 		var sel = ctx.selection, cols = { count: cloud.count, x: cloud.x, y: cloud.y, z: cloud.z }, idx = null;
 		if (sel && sel.length) { cols = ctx.keepPoints(cols, sel); idx = sel; }
-		var method = $("fraMethod").value, watershed = method !== "facets";
-		var wsOpts = { cell: num("fraWsCell", undefined), reliefRadius: num("fraWsRadius", 1), seedHeight: num("fraWsSeed", 0.005), clipBelow: num("fraWsClip", 0), minPoints: num("fraMinPoints", 50) };
-		var facetOpts = { maxDistance: num("fraMaxDist", 0.15), concaveAngle: num("fraConcave", 10), minPoints: num("fraMinPoints", 50), fill: $("fraFill").checked };
-		if ($("fraCamera").checked) facetOpts.viewpoint = ctx.viewer.cameraPosition();
-		var pd = num("fraPlaneDist", undefined);
-		if (pd !== undefined) facetOpts.facetOptions = { planeDistance: pd };
-		var opts = method === "facets" ? facetOpts : wsOpts;
-		status("finding fragments" + (method === "watershed" ? " (watershed)" : method === "hybrid" ? " (watershed, then facets on the rest)" : "") + " in " + fmt(cols.count) + " points" + (idx ? " (the selection)" : "") + "…");
+		var method = $("fraMethod").value, opts = { method: method, minPoints: num("fraMinPoints", 50) };
+		if (method !== "watershed") {
+			var md = num("fraMaxDist", undefined), pd = num("fraPlaneDist", undefined);
+			if (md !== undefined) opts.maxDistance = md;
+			opts.concaveAngle = num("fraConcave", 10);
+			opts.fill = $("fraFill").checked;
+			if ($("fraCamera").checked) opts.viewpoint = ctx.viewer.cameraPosition();
+			if (pd !== undefined) opts.facetOptions = { planeDistance: pd };
+		}
+		if (method !== "facets") {
+			var cell = num("fraWsCell", undefined);
+			if (cell !== undefined) opts.cell = cell;
+			opts.reliefRadius = num("fraWsRadius", 1); opts.seedHeight = num("fraWsSeed", 0.005); opts.clipBelow = num("fraWsClip", 0);
+		}
+		status("finding fragments (" + $("fraMethod").selectedOptions[0].textContent + ") in " + fmt(cols.count) + " points" + (idx ? " (the selection)" : "") + "…");
 		$("progress").value = 0;
 		opts.onProgress = function (d, t) { $("progress").value = t ? d / t : 1; };
 		requestAnimationFrame(function () { setTimeout(function () {
 			var t0 = performance.now(), fr;
-			try { fr = method === "hybrid" ? watershedThenFacets(cols, wsOpts, facetOpts) : watershed ? watershedFragments(cols, opts) : findFragments(cols, opts); } catch (err) { status(err.message, true); return; }
-			if (watershed) $("fraWsCell").placeholder = "auto (" + fr.cell.toFixed(3) + ")";
+			try { fr = findFragments(cols, opts); } catch (err) { status(err.message, true); return; }
+			if (fr.spacing > 0) {
+				if (method !== "watershed") $("fraMaxDist").placeholder = "auto (" + sp(4 * fr.spacing) + ")";
+				if (method !== "facets") $("fraWsCell").placeholder = "auto (" + sp(fr.cell) + ")";
+			}
 			var fragment = new Uint32Array(cloud.count), inFragments = 0;
 			for (var i = 0; i < fr.fragment.length; i++) { var c = idx ? idx[i] : i; fragment[c] = fr.fragment[i]; if (fr.fragment[i]) inFragments++; }
 			var inRun = null;
 			if (idx) { inRun = new Uint8Array(cloud.count); for (i = 0; i < idx.length; i++) inRun[idx[i]] = 1; }
-			res = { fr: fr, idx: idx, fragment: fragment, inRun: inRun };
+			res = { fr: fr, idx: idx, fragment: fragment, inRun: inRun, note: thinnedNote(fr) };
 			hovered = 0;
 			showOutlines();
 			$("colourBy").value = $("fraColour").value;
-			ctx.recolour();   // first: it writes its own status line
+			curve();   // before the colours: the bins follow the curve's limits
+			ctx.recolour();   // it writes its own status line
 			var share = fr.surfaceArea ? fr.unassignedArea / fr.surfaceArea : 0;
 			var text = fr.fragments.length + " fragments holding " + fmt(inFragments) + " of " + fmt(cols.count) + " points; " +
 				fr.unassignedArea.toFixed(1) + " m² of " + fr.surfaceArea.toFixed(1) + " m² in none (" + (100 * share).toFixed(0) + " %), in " + ctx.since(t0) + " ms" +
-				(watershed ? "; point spacing " + fr.spacing.toFixed(4) + " m, cell " + fr.cell.toFixed(3) + " m" : "") +
+				(fr.spacing > 0 ? "; point spacing " + sp(fr.spacing) + " m, floor " + fr.floor.toFixed(2) + " m, resolution " + fr.resolution : "") +
 				(method === "hybrid" ? "; " + fmt(fr.fromWatershed) + " from the watershed, " + fmt(fr.fromFacets) + " from facets on the rest" : "");
-			var big = floorWarning();
-			$("fraInfo").textContent = big;
-			$("fraInfo").classList.toggle("error", !!big);
-			$("fraFines").value = Math.min(99, Math.round(100 * share));
-			$("fraFinesHint").textContent = "Fines (not a rock): " + (100 * share).toFixed(0) + " % of the " + (idx ? "selection's " : "") + "surface (anything outside the selection is not counted), applied as Fines %; type over it to change it. It follows the run's settings (the watershed's Clip below most of all).";
-			curve();
-			status(text + (big ? " · " + big : ""));
+			showWarnings();
+			status(text);
 			if (ctx.onResult) ctx.onResult();
 		}, 0); });
 	}
-	// One fragment over a quarter of the surface: the bench floor or a wall, not a rock
-	function floorWarning() {
-		var fr = res && res.fr, big = null;
-		if (!fr || !fr.surfaceArea) return "";
-		fr.fragments.forEach(function (f) { if (!big || f.area > big.area) big = f; });
-		if (!big || big.area <= FLOOR_SHARE * fr.surfaceArea) return "";
-		return "Fragment " + big.id + " covers " + (100 * big.area / fr.surfaceArea).toFixed(0) + " % of the surface — the floor or a wall? Hover it, Select fragment and delete it, then find fragments again.";
+	// Max points thinned the read: fragments are density-bound, so say what the spacing would be with every point
+	function thinnedNote(fr) {
+		var t = ctx.thinned;
+		if (!t || !(t.loaded > 0) || !(fr.spacing > 0)) return "";
+		var every = t.total / t.loaded, nth = Math.round(every);
+		return "The read was thinned to Max points (about every " + (nth === 2 ? "2nd" : nth === 3 ? "3rd" : nth + "th") + " point): spacing " + sp(fr.spacing) + " instead of about " + sp(fr.spacing / Math.sqrt(every)) + ". Set Max points to 0 and read again for every point.";
+	}
+	// the run's warnings, the curve's, and a thinned read, on one line under the run
+	function showWarnings() {
+		var lines = [];
+		if (res) {
+			if (res.note) lines.push(res.note);
+			res.fr.warnings.forEach(function (w) { lines.push(w.message); });
+			if (res.psd) res.psd.warnings.forEach(function (w) { lines.push(w.message); });
+		}
+		$("fraInfo").textContent = lines.join(" · ");
+		$("fraInfo").classList.toggle("error", lines.length > 0);
 	}
 
 	// --- the size curve ---------------------------------------------------------------
 	function curve() {
-		if (!res) { drawSizeChart($("sizeChart"), null); $("fraPTable").innerHTML = ""; $("fraFitInfo").textContent = ""; return; }
-		try {
-			res.psd = sizeDistribution(res.fr.fragments, { model: $("fraModel").value, weight: $("fraWeight").value, fitFrom: num("fraFitFrom", 60), fines: num("fraFines", 0) / 100 });
-		} catch (err) { status(err.message, true); return; }
+		if (!res) { drawSizeChart($("sizeChart"), null); $("fraPTable").innerHTML = ""; $("fraFitInfo").textContent = ""; $("fraFinesHint").textContent = ""; $("fraLowerHint").textContent = ""; return; }
+		var fr = res.fr, lower = num("fraLower", 0), o = { model: $("fraModel").value, weight: $("fraWeight").value, fitFrom: num("fraFitFrom", 60), fines: num("fraFines", 0) / 100, upper: num("fraUpper", 0) };
+		if (lower > 0) o.lower = lower;
+		var fsz = num("fraFinesSize", undefined);
+		if (fsz !== undefined) o.finesSize = fsz;
+		try { res.psd = sizeDistribution(fr, o); } catch (err) { status(err.message, true); return; }
 		var psd = res.psd, fit = psd.fit;
+		res.bins = null;
+		$("fraLowerHint").textContent = fr.floor > 0 ? "0 = the floor, " + fr.floor.toFixed(2) + " m" : "";
 		drawSizeChart($("sizeChart"), psd);
 		var t = $("fraPTable");
 		t.innerHTML = "<tr><th></th><th>P10</th><th>P20</th><th>P50</th><th>P80</th><th>P90</th></tr>";
 		var tr = t.insertRow();
 		tr.insertCell().textContent = "size (m)";
 		[10, 20, 50, 80, 90].forEach(function (P) {
-			var q = psd.p[P], c = tr.insertCell(), fines = num("fraFines", 0);
-			if (fines > 0 && P <= fines) { c.textContent = "fines"; c.title = "Within the fines share (" + fines + " %): not a rock"; return; }
+			var q = psd.p[P], c = tr.insertCell();
+			if (q.below) { c.textContent = "fines"; c.title = "In the fines: under " + m(q.size) + " m, not a rock"; return; }
+			if (q.above) { c.textContent = "> " + m(q.size); c.title = "Over the upper limit"; return; }
 			c.textContent = q.size > 0 ? m(q.size) + (q.extrapolated ? " *" : "") : "—";
 			if (q.extrapolated) c.title = "From the fit, below the measured curve";
 		});
 		$("fraFitInfo").textContent = fit ? (fit.model === "swebrec" ? "Swebrec: x50 " + m(fit.x50) + " m, xmax " + m(fit.xmax) + " m, b " + fit.b.toFixed(2) : "Rosin–Rammler: x50 " + m(fit.x50) + " m, n " + fit.n.toFixed(2)) +
 			", RMSE " + fit.rmse.toFixed(2) + " % over " + m(fit.range[0]) + "–" + m(fit.range[1]) + " m · * extrapolated" : "No fit: fewer than 3 measured points from Fit from up.";
+		$("fraFinesHint").textContent = "Fines (not a rock): " + psd.finesShare.toFixed(0) + " % of the " + (res.idx ? "selection's " : "") + "surface" + (psd.lower > 0 ? ", under " + m(psd.lower) + " m (gaps, flat patches, rocks under the lower limit)" : "") +
+			"; anything outside the selection is not counted." + (psd.over > 0 ? " Over " + m(psd.upper) + " m: " + psd.over.toFixed(0) + " %." : "") + " Fines % adds fines the scan cannot see on top (0 by default).";
+		showWarnings();
+		if ($("colourBy").value === "fragmentSize") ctx.recolour();
 	}
 	function curveCsv() {
 		var psd = res.psd, fit = psd.fit, rows = [];
@@ -158,53 +187,59 @@ export function initFragments(ctx) {
 		if (!res || !$("fraOutlines").checked) { ctx.viewer.clearOutlines(); return; }
 		ctx.viewer.setOutlines(res.fr.fragments.map(function (f) { return Float32Array.from(f.outline); }), true);
 	}
-	/** Colours for the drawn points by fragment, or (by "fragmentSize") by the fragment's size range. */
+	/** Colours for the drawn points by fragment, or (by "fragmentSize") by the fragment's size range; sheets grey as fines. */
 	function colours(drawn, drawnIdx, by) {
-		var n = drawn.count, out = new Uint8Array(n * 3), bins = by === "fragmentSize" && res ? sizeBins() : null;
+		var n = drawn.count, out = new Uint8Array(n * 3), bins = by === "fragmentSize" && res ? sizeBins() : null, fs = res ? res.fr.fragments : null;
 		for (var j = 0; j < n; j++) {
 			var i = drawnIdx ? drawnIdx[j] : j, f = res ? res.fragment[i] : 0;
-			var c = res && res.inRun && !res.inRun[i] ? OUTSIDE_RGB : !f ? NONE_RGB : bins ? bins.rgb[bins.of[f]] : fragmentRgb(f);
+			var c = res && res.inRun && !res.inRun[i] ? OUTSIDE_RGB : !f || fs[f - 1].sheet ? NONE_RGB : bins ? bins.rgbOf(f) : fragmentRgb(f);
 			out[j * 3] = c[0]; out[j * 3 + 1] = c[1]; out[j * 3 + 2] = c[2];
 		}
 		showSizeLegend(bins);
 		return out;
 	}
-	// Bins log-spaced from the smallest fragment's size to the largest (edges to 2 significant
-	// figures), each with its colour, fragment count and share of the surface (the fragments share
-	// what the fines, the area in no fragment, leave)
+	// Bins log-spaced from the lower limit (or the smallest rock) to the upper limit (or the largest), edges to 2
+	// significant figures, one colour each; fragments under the lower limit are fines (grey), over the upper one
+	// "over" (white); shares are of the surface, by area
 	function sizeBins() {
-		var nb = Math.max(2, Math.min(64, Math.round(num("fraBins", 10)))), fs = res.fr.fragments;
+		var nb = Math.max(2, Math.min(64, Math.round(num("fraBins", 10)))), fs = res.fr.fragments, psd = res.psd;
 		if (res.bins && res.bins.n === nb) return res.bins;
-		var lo = Infinity, hi = 0, total = 0;
-		fs.forEach(function (f) { if (f.size > 0) { lo = Math.min(lo, f.size); hi = Math.max(hi, f.size); } total += f.area; });
+		var lowerLim = psd ? psd.lower : 0, upperLim = psd ? psd.upper : 0, lo = Infinity, hi = 0, total = res.fr.unassignedArea;
+		fs.forEach(function (f) { total += f.area; if (f.sheet || !(f.size > 0) || f.size < lowerLim || (upperLim > 0 && f.size > upperLim)) return; lo = Math.min(lo, f.size); hi = Math.max(hi, f.size); });
+		if (lowerLim > 0) lo = lowerLim;
+		if (upperLim > 0) hi = upperLim;
 		var edges = [];
 		for (var k = 0; k <= nb; k++) edges.push(lo < hi ? Number((lo * Math.pow(hi / lo, k / nb)).toPrecision(2)) : lo);
-		var of = new Uint8Array(fs.length + 1), count = new Array(nb).fill(0), area = new Array(nb).fill(0);
+		var of = new Int16Array(fs.length + 1), count = new Array(nb).fill(0), area = new Array(nb).fill(0), overCount = 0, overArea = 0;
 		fs.forEach(function (f) {
+			if (f.sheet || !(f.size > 0) || f.size < lowerLim) { of[f.id] = -1; return; }
+			if (upperLim > 0 && f.size > upperLim) { of[f.id] = -2; overCount++; overArea += f.area; return; }
 			for (var b = 0; b < nb - 1 && f.size >= edges[b + 1]; b++);
 			of[f.id] = b; count[b]++; area[b] += f.area;
 		});
 		var rgb = [];
 		for (k = 0; k < nb; k++) rgb.push(rampRgb(nb > 1 ? k / (nb - 1) : 0));
-		var fines = res.fr.surfaceArea ? res.fr.unassignedArea / res.fr.surfaceArea : 0;
-		res.bins = { n: nb, edges: edges, of: of, rgb: rgb, count: count, area: area, total: total, fines: fines };
+		res.bins = { n: nb, edges: edges, rgb: rgb, count: count, area: area, total: total, overCount: overCount, overArea: overArea, upper: upperLim,
+			fines: psd ? psd.finesShare / 100 : (total ? res.fr.unassignedArea / total : 0),
+			rgbOf: function (id) { var b = of[id]; return b === -1 ? NONE_RGB : b === -2 ? OVER_RGB : rgb[b]; } };
 		return res.bins;
 	}
 	function showSizeLegend(bins) {
 		var el = $("fraLegend");
 		if (!bins) { el.classList.add("hidden"); return; }
 		el.innerHTML = "";
-		function row(rgb, text, count, share, title) {
+		function row(c, text, count, share, title) {
 			var line = document.createElement("div"), sw = document.createElement("span"), label = document.createElement("span"), cnt = document.createElement("span");
-			sw.className = "swatch"; sw.style.background = "rgb(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + ")";
+			sw.className = "swatch"; sw.style.background = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
 			label.textContent = text;
 			cnt.className = "count"; cnt.textContent = (count === null ? "" : fmt(count) + " · ") + (share === null ? "" : (100 * share).toFixed(0) + " %");
 			cnt.title = title;
 			line.append(sw, label, cnt);
 			el.appendChild(line);
 		}
-		for (var b = bins.n - 1; b >= 0; b--) row(bins.rgb[b], bins.edges[b] + "–" + bins.edges[b + 1] + " m", bins.count[b], bins.total ? (1 - bins.fines) * bins.area[b] / bins.total : 0, "Fragments in this range, and their share of the surface");
-		row(NONE_RGB, "Fines (not a rock)", null, bins.fines, "The surface in no fragment, and its share");
+		if (bins.overCount) row(OVER_RGB, "over " + bins.upper + " m", bins.overCount, bins.total ? bins.overArea / bins.total : 0, "Fragments over the upper limit, and their share of the surface");
+		for (var b = bins.n - 1; b >= 0; b--) row(bins.rgb[b], bins.edges[b] + "–" + bins.edges[b + 1] + " m", bins.count[b], bins.total ? bins.area[b] / bins.total : 0, "Fragments in this range, and their share of the surface");
+		row(NONE_RGB, "Fines (not a rock)", null, bins.fines, "The surface in no fragment, flat patches and rocks under the lower limit, and its share");
 		if (res.inRun) row(OUTSIDE_RGB, "Outside the selection", null, null, "Not in the run: not counted");
 		el.classList.remove("hidden");
 	}
@@ -219,8 +254,8 @@ export function initFragments(ctx) {
 	}
 	function fragmentsCsv() {
 		var o = ctx.origin;
-		return "id,x,y,z,a,b,c,size,area,points\n" + res.fr.fragments.map(function (f) {
-			return [f.id, (f.centroid[0] + o.x).toFixed(3), (f.centroid[1] + o.y).toFixed(3), (f.centroid[2] + o.z).toFixed(3), f.axes[0].toFixed(3), f.axes[1].toFixed(3), f.axes[2].toFixed(3), f.size.toFixed(3), f.area.toFixed(3), f.count].join(",");
+		return "id,x,y,z,a,b,c,size,area,points,sheet\n" + res.fr.fragments.map(function (f) {
+			return [f.id, (f.centroid[0] + o.x).toFixed(3), (f.centroid[1] + o.y).toFixed(3), (f.centroid[2] + o.z).toFixed(3), f.axes[0].toFixed(3), f.axes[1].toFixed(3), f.axes[2].toFixed(3), f.size.toFixed(3), f.area.toFixed(3), f.count, f.sheet ? 1 : 0].join(",");
 		}).join("\n") + "\n";
 	}
 	// each fragment's outline a closed 3D polyline on layer FRAGMENTS, world coordinates
@@ -243,22 +278,21 @@ export function initFragments(ctx) {
 		if (!res) return;
 		res = null; hovered = 0;
 		ctx.viewer.clearOutlines();
-		$("fraInfo").textContent = "";
-		$("fraFinesHint").textContent = "";
+		showWarnings();
 		curve();
 		if (why) status(why);
 		if (ctx.onResult) ctx.onResult();
 	}
 	$("fraRun").addEventListener("click", function () { showScope(); run(); });
 	$("fraMethod").addEventListener("change", function () {
-		var m = $("fraMethod").value;
-		$("fraFacetOpts").classList.toggle("hidden", m === "watershed");
-		$("fraWatershedOpts").classList.toggle("hidden", m === "facets");
+		var mt = $("fraMethod").value;
+		$("fraFacetOpts").classList.toggle("hidden", mt === "watershed");
+		$("fraWatershedOpts").classList.toggle("hidden", mt === "facets");
 	});
 	$("fraClear").addEventListener("click", function () {
 		if (!res) return;
 		clear();
-		if ($("colourBy").value === "fragment") $("colourBy").value = "elevation";
+		if (/^fragment/.test($("colourBy").value)) $("colourBy").value = "elevation";
 		ctx.recolour();
 		status("cleared");
 	});
@@ -282,7 +316,7 @@ export function initFragments(ctx) {
 			if (!res || !res.fragment[i]) return null;
 			var f = res.fr.fragments[res.fragment[i] - 1];
 			hovered = f.id;
-			return { id: f.id, size: f.size, axes: f.axes };
+			return { id: f.id, size: f.size, axes: f.axes, sheet: !!f.sheet };
 		},
 		/** A new read or Reset: the fragments belonged to the last points. */
 		onRead: function () { clear(); showScope(); },

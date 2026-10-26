@@ -272,21 +272,32 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-fragments">
-				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragments</code>: facets that meet at a ridge are one rock, a valley keeps two apart. <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; a flat floor or fines flat at this scale come out as fragments too, so keep the run to the pile. The pile faces up; for a drawpoint or a steep face, look at it from the open side and tick Camera as viewpoint. The page pauses while it runs.</p>
+				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragments</code>. <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; what is not a rock (gaps, flat patches, rocks under the floor) is fines. The line under Find fragments says what the cloud can resolve. The page pauses while it runs.</p>
+				<details class="small">
+					<summary>What a cloud can resolve</summary>
+					<table class="grid-table">
+						<tr><th>Point spacing</th><th>Resolution</th><th>What you get</th></tr>
+						<tr><td>≤ 0.017 m</td><td>fine</td><td>Rocks down to about 0.5 m come out whole; a size curve from the floor up. Photogrammetry: ODM <code>--pc-quality ultra</code> at full image scale (0.016 m, about 1.5 cm).</td></tr>
+						<tr><td>≤ 0.035 m</td><td>coarse</td><td>Rocks over about 0.7–1 m only (ODM default, 0.028 m); P-values under the floor are not sizes.</td></tr>
+						<tr><td>≤ 0.05 m</td><td>oversize</td><td>Rocks over about 1–1.5 m only: oversize, not a size curve.</td></tr>
+						<tr><td>coarser</td><td>unresolved</td><td>No rocks: patches of surface (an 8 cm survey found none at all).</td></tr>
+					</table>
+					<p class="muted">The floor, the smallest rock measured, is 30 point spacings. Measured on S4_250_403 against 118 hand-drawn rocks. A read thinned by Max points is coarser than the file: set Max points to 0.</p>
+				</details>
 				<h3>Fragments</h3>
 				<div class="form-grid">
 					<label>Method
-						<select id="fraMethod" title="Facets: findFragments, facets merged across ridges (any orientation). Watershed (experimental): a height grid flooded from the rock tops, for a muckpile seen from above. Watershed + facets on the rest: the watershed, then Facets on what it leaves grey; the rock-shaped ones found there are rocks too, the rest fines (uses both sets of settings)">
+						<select id="fraMethod" title="Facets: facets merged across ridges, any orientation (faces, walls, drawpoints). Watershed: a height grid flooded from the rock tops, for a muckpile seen from above. Watershed + facets on the rest: the watershed, then Facets on what it leaves grey; the rock-shaped ones found there are rocks too, the rest fines (uses both sets of settings)">
 							<option value="facets">Facets</option>
-							<option value="watershed">Watershed (experimental)</option>
-							<option value="hybrid">Watershed + facets on the rest (experimental)</option>
+							<option value="watershed">Watershed</option>
+							<option value="hybrid">Watershed + facets on the rest</option>
 						</select>
 					</label>
 					<label>Min points <input type="number" id="fraMinPoints" value="50" min="3" step="10" title="Smaller fragments go back to none"></label>
 				</div>
 				<div id="fraFacetOpts">
 					<div class="form-grid">
-						<label>Max distance (m) <input type="number" id="fraMaxDist" value="0.15" min="0.01" step="0.01" title="Rock-face scale: the k nearest within this distance, a few point spacings"></label>
+						<label>Max distance (m) <input type="number" id="fraMaxDist" placeholder="auto" min="0.005" step="0.01" title="Rock-face scale: the k nearest within this distance; blank = 4 point spacings"></label>
 						<label>Concave angle (°) <input type="number" id="fraConcave" value="10" min="1" max="89" step="1" title="Two facets this close in angle, on one plane, are one face"></label>
 						<label>Plane distance (m) <input type="number" id="fraPlaneDist" placeholder="measured" min="0" step="0.005" title="The facets' plane distance; blank = 3 x the measured noise"></label>
 					</div>
@@ -297,7 +308,7 @@
 					<p class="muted small">A grid of the highest point per cell; relief is the height above the local mean surface. Each relief peak standing at least <em>Seed height</em> proud seeds a rock and floods down to where it meets its neighbours; the gaps under the mean surface stay in no fragment. Seen from above only: for a drawpoint or a steep face use Facets.</p>
 					<div class="form-grid">
 						<label>Cell (m) <input type="number" id="fraWsCell" placeholder="auto" min="0.002" step="0.005" title="The grid's cell; blank = 1.5 x the point spacing"></label>
-						<label>Relief radius (m) <input type="number" id="fraWsRadius" value="1" min="0.05" step="0.05" title="The local mean surface: a box of this radius. About the size of the larger rocks"></label>
+						<label>Relief radius (m) <input type="number" id="fraWsRadius" value="1" min="0.05" step="0.05" title="The local mean surface: a box of this radius. About the size of the largest rocks: a slab wider than it splits at its corners"></label>
 						<label>Seed height (m) <input type="number" id="fraWsSeed" value="0.005" min="0.001" step="0.005" title="How far a peak must stand above its surroundings to seed a rock; higher merges more"></label>
 						<label>Clip below (m) <input type="number" id="fraWsClip" value="0" max="0" step="0.005" title="Cells this far under the local mean surface, or lower, are gaps in no fragment. 0 matched the drawn rocks best; -0.02 keeps more of each rock (grey 53 % to 38 % on the ultra corner) for about one rock less in 60"></label>
 					</div>
@@ -330,9 +341,12 @@
 				<p class="muted small"><code>sizeDistribution</code>: % passing by size b. The fit uses the coarse part only (from <em>Fit from</em> up), where a scan's sizes hold; below the measured curve it is dashed: extrapolated, not measured.</p>
 				<div class="form-grid">
 					<label>Model <select id="fraModel"><option value="swebrec">Swebrec</option><option value="rosin-rammler">Rosin–Rammler</option></select></label>
-					<label>Weight <select id="fraWeight" title="Volume: (π/6) a b², an ellipsoid with the unseen depth taken as b"><option value="volume">Volume</option><option value="count">Count</option><option value="area">Area</option></select></label>
+					<label>Weight <select id="fraWeight" title="Area: the visible surface (the default; it works on real piles). Volume: (π/6) a b², an ellipsoid with the unseen depth taken as b"><option value="area">Area</option><option value="volume">Volume</option><option value="count">Count</option></select></label>
 					<label>Fit from (%) <input type="number" id="fraFitFrom" value="60" min="0" max="99" step="5"></label>
-					<label>Fines (%) <input type="number" id="fraFines" value="0" min="0" max="99" step="1" title="Fines (not a rock): filled in from the run as the share of the surface in no fragment, added under the curve; type over it to change it"></label>
+					<label>Lower limit (m) <input type="number" id="fraLower" value="0" min="0" step="0.05" title="Everything under it is fines; 0 = the cloud's floor"> <span class="muted small" id="fraLowerHint"></span></label>
+					<label>Upper limit (m) <input type="number" id="fraUpper" value="0" min="0" step="0.1" title="Everything over it is one share, not sizes (the crusher gap, say); 0 = no limit"></label>
+					<label>Fines (%) <input type="number" id="fraFines" value="0" min="0" max="99" step="1" title="Fines the scan cannot see (under the rocks), added on top of the not-a-rock share; 0 = none"></label>
+					<label>Fines size (m) <input type="number" id="fraFinesSize" placeholder="under the smallest" min="0.001" step="0.005" title="Where Fines % sits on the curve (e.g. 0.115); blank = under the smallest size"></label>
 				</div>
 				<p class="muted small" id="fraFinesHint"></p>
 				<div class="row"><button class="button" id="fraCurve">Recompute curve</button></div>

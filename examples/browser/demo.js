@@ -833,7 +833,7 @@ $("viewer").addEventListener("mousemove", function (e) {
 			"  · class " + c.classification[i] + "  · intensity " + c.intensity[i] + "  · return " + c.returnNumber[i] +
 			(c.index ? "  · record " + c.index[i] : "") + extraText(c, i) +
 			(function () { var f = facets.facetOf(i); return f ? "  · facet " + f.id + " " + f.dip.toFixed(0) + "/" + ("00" + f.dipDirection.toFixed(0)).slice(-3) + (f.set ? " set " + f.set : "") : ""; })() +
-			(function () { var g = fragments.fragmentOf(i); return g ? "  · fragment " + g.id + " size " + g.size.toFixed(2) + " · " + g.axes.map(function (v) { return v.toFixed(2); }).join(" / ") : ""; })();
+			(function () { var g = fragments.fragmentOf(i); return g ? "  · fragment " + g.id + " size " + g.size.toFixed(2) + " · " + g.axes.map(function (v) { return v.toFixed(2); }).join(" / ") + (g.sheet ? " · sheet (fines)" : "") : ""; })();
 	});
 });
 
@@ -961,7 +961,8 @@ var fragments = initFragments({
 		showSelection();
 		setStatus(name);
 	},
-	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; }
+	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; },
+	get thinned() { return readThinned && cloud && info ? { total: info.header.pointCount, loaded: cloud.count } : null; }
 });
 // The Tiles tab: builds and edits go through the Worker; selectTiles runs here
 var tiles = initTiles({

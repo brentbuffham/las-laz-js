@@ -5,7 +5,9 @@
 // The measured curve solid (the accent colour); the fitted curve a thin
 // line, dashed below the measured curve's lowest point (extrapolated:
 // what the scan could not resolve); P20, P50 and P80 marked with their
-// sizes, a hollow mark where the size came from the fit.
+// sizes, a hollow mark where the size came from the fit. With limits, the
+// fines step under the lower limit and the share over the upper limit are
+// drawn flat and labelled; a P-value in either is not marked.
 //==========================================================
 
 var NS = "http://www.w3.org/2000/svg", W = 400, H = 250, L = 40, RM = 12, T = 12, B = 34;
@@ -75,9 +77,16 @@ export function drawSizeChart(svg, psd) {
 	for (var j = 0; j < m; j++) dm += (j ? " L " : "M ") + X(psd.size[j]).toFixed(1) + " " + Y(psd.passing[j]).toFixed(1);
 	el("path", { d: dm, fill: "none", class: "size-measured", "stroke-width": 2 }, svg);
 	// P20 / P50 / P80
+	// the fines step and the share over the upper limit
+	if (psd.lower > 0 && psd.finesShare > 0) {
+		var yf = Y(psd.passingAt(psd.lower));
+		el("path", { d: "M " + L + " " + yf.toFixed(1) + " H " + X(psd.lower).toFixed(1), fill: "none", class: "size-measured", "stroke-width": 2, "stroke-dasharray": "5 3", opacity: 0.7 }, svg);
+		label(svg, L + 4, yf - 4, psd.finesShare.toFixed(0) + "% fines under " + sizeText(psd.lower) + " m", "start");
+	}
+	if (psd.upper > 0 && psd.over > 0) label(svg, X(psd.upper) - 4, Y(100 - psd.over) + 12, psd.over.toFixed(0) + "% over " + sizeText(psd.upper) + " m", "end");
 	[20, 50, 80].forEach(function (P) {
 		var q = psd.p[P], s = q ? q.size : psd.sizeAt(P);
-		if (!(s > 0)) return;
+		if (!(s > 0) || (q && (q.below || q.above))) return;
 		var cx = X(s), cy = Y(P);
 		el("path", { d: "M " + L + " " + cy.toFixed(1) + " H " + cx.toFixed(1) + " V " + (H - B), fill: "none", stroke: "currentColor", "stroke-width": 0.6, "stroke-dasharray": "1 2", opacity: 0.7 }, svg);
 		el("circle", { cx: cx.toFixed(1), cy: cy.toFixed(1), r: 3, class: q && q.extrapolated ? "size-mark-fit" : "size-mark" }, svg);
