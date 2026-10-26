@@ -219,3 +219,21 @@ test("hybrid and watershed: hard inputs, progress, positions columns", function 
 	// a facet maxDistance given to the hybrid is used, and warned of when far off
 	assert.ok(codes(hy(p.cols, { maxDistance: 0.8 })).indexOf("MAX_DISTANCE") >= 0);
 });
+
+test("side-on is not fooled by a small cell", function () {
+	// a cell under the spacing gives most points a cell of their own; the pile is still flat
+	var p = pile(), fr = ws(p.cols, { cell: 0.4 * 0.02, reliefRadius: 1 });
+	assert.ok(codes(fr).indexOf("SIDE_ON") < 0, codes(fr).join());
+});
+
+test("a coarse cloud runs at the defaults", function () {
+	// 0.4 m spacing: 1.5 spacings is a 0.6 m cell, over half the default relief radius; warn, never refuse
+	var pts = [];
+	for (var i = 0; i < 30; i++) for (var j = 0; j < 30; j++) pts.push([i * 0.4, j * 0.4, 0.05 * Math.sin(i) * Math.cos(j)]);
+	[ws, hy].forEach(function (run) {
+		var fr = run(cloud(pts));
+		assert.ok(codes(fr).indexOf("UNRESOLVED") >= 0, codes(fr).join());
+	});
+	// a relief radius the caller set under two cells is still refused
+	assert.throws(function () { ws(cloud(pts), { cell: 0.6, reliefRadius: 1 }); }, /reliefRadius/);
+});

@@ -265,3 +265,18 @@ test("limits: edge paths", function () {
 	assert.throws(function () { sizeDistribution([{ size: 1, axes: [1, 1, 0.1], sheet: true }], { weight: "count" }); }, /area/);
 	assert.equal(lib.resolutionOf, undefined);   // internal
 });
+
+test("finesSize must sit under the smallest size measured", function () {
+	var f = [{ size: 0.05, area: 1 }, { size: 0.5, area: 2 }, { size: 1, area: 3 }];
+	assert.throws(function () { sizeDistribution(f, { fines: 0.2, finesSize: 0.115 }); }, /finesSize/);
+	var ok = sizeDistribution(f, { fines: 0.2, finesSize: 0.02 });
+	for (var i = 1; i < ok.size.length; i++) assert.ok(ok.size[i] > ok.size[i - 1] && ok.passing[i] >= ok.passing[i - 1]);
+});
+
+test("the fines share is of surfaceArea", function () {
+	// fragment outline areas need not add up to the plan surface: the unassigned part is its own share of
+	// surfaceArea, and the fragments share the rest by their areas. Here 2 of 20 m² unassigned, and the
+	// fragments' 9 m² of outline stand for the other 18: fines = (2 + 18 x (1 + 3) / 9) / 20 = 50 %
+	var r = result(); r.surfaceArea = 20; r.unassignedArea = 2;
+	near(sizeDistribution(r).finesShare, 50, 1e-9, "finesShare");
+});

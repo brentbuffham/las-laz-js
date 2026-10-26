@@ -164,7 +164,10 @@ cheap enough to run before choosing `maxDistance`. Option `sample` (default 10,0
   in 0.11.0, except for the new options.
 - `lower` (default: the result's `floor`, or 0 for an array; 0 = no lower limit). The **fines**,
   the share under the lower limit, is by area: fragments with `size` < `lower`, sheets, and the
-  unassigned area, over the whole surface (Σ fragment `area` + `unassignedArea`). It is a share
+  unassigned area, as a share of `surfaceArea`: the unassigned part as it is, the fragments sharing
+  the rest by their areas (built 2026-10-27, after review: fragment outline areas overshoot the plan
+  surface, so dividing by Σ `area` + `unassignedArea` gave the hybrid more fines than the watershed
+  on the same cloud). For a plain array, Σ `area` as before. It is a share
   of the surface whatever the weight (a scan has no volume or count for unassigned surface).
   The fragments at or above `lower` that are not sheets make the measured curve, by the chosen
   weight, scaled into the rest.

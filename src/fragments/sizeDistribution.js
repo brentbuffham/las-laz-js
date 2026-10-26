@@ -59,7 +59,7 @@ function options(input, opts) {
 	});
 	var warnings = [];
 	if (isResult && o.lower !== undefined && floor > 0 && lower < floor) warnings.push({ code: "LOWER_UNDER_FLOOR", message: "Lower limit " + lower + " is under this cloud's floor (" + floor.toFixed(2) + "): the curve between them is not measured." });
-	return { fragments: fragments, unassigned: isResult && finite(input.unassignedArea) ? input.unassignedArea : 0, needArea: needArea, lower: lower, upper: upper, finesSize: finesSize,
+	return { fragments: fragments, unassigned: isResult && finite(input.unassignedArea) ? input.unassignedArea : 0, surface: isResult && finite(input.surfaceArea) ? input.surfaceArea : 0, needArea: needArea, lower: lower, upper: upper, finesSize: finesSize,
 		warnings: warnings, weight: weight, model: model, fitFrom: fitFrom, fines: fines, percents: percents };
 }
 
@@ -165,16 +165,21 @@ function fitCurve(xs, ps, model, fitFrom, largest) {
  */
 export function sizeDistribution(input, opts) {
 	var o = options(input, opts), lower = o.lower, upper = o.upper, eps = o.fines, i;
-	// fines by area: the unassigned surface, the sheets, the fragments under the lower limit; the rest is measured
-	var finesArea = o.unassigned, totalArea = o.unassigned, kept = [];
+	// fines by area: the unassigned surface, the sheets, the fragments under the lower limit; the rest is measured.
+	// Given a result, the share is of surfaceArea: the unassigned part as it is, the fragments sharing the rest
+	// by their areas (outline areas need not add up to the plan surface)
+	var fragFines = 0, fragArea = 0, kept = [];
 	o.fragments.forEach(function (f) {
 		if (!(f.size > 0)) return;
-		if (o.needArea) totalArea += f.area;
-		if (f.sheet === true || f.size < lower) { finesArea += f.area; return; }
+		if (o.needArea) fragArea += f.area;
+		if (f.sheet === true || f.size < lower) { fragFines += f.area; return; }
 		kept.push({ size: f.size, w: weightOf(f, o.weight) });
 	});
-	var phi = o.needArea && totalArea > 0 ? finesArea / totalArea : 0;
+	var phi = 0, U = o.unassigned, S = o.surface;
+	if (o.needArea && S > 0) phi = fragArea > 0 ? Math.max(0, 1 - Math.max(0, S - U) / S * (fragArea - fragFines) / fragArea) : 1;   // 1 - the measured share: exactly 1 when nothing is measured
+	else if (o.needArea && U + fragArea > 0) phi = (U + fragFines) / (U + fragArea);
 	kept.sort(function (a, b) { return a.size - b.size; });
+	if (o.finesSize !== undefined && kept.length && !(o.finesSize < kept[0].size)) throw bad("finesSize must be under the smallest size measured (" + kept[0].size + "), not " + o.finesSize);
 	var wTotal = 0, wOver = 0;
 	kept.forEach(function (k) { wTotal += k.w; if (upper > 0 && k.size > upper) wOver += k.w; });
 	var overShare = wTotal > 0 ? (1 - phi) * wOver / wTotal : 0;

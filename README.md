@@ -625,9 +625,10 @@ cannot see (under the rocks) on top, under the smallest size or at `finesSize` (
 `model: "rosin-rammler"` fits Rosin–Rammler instead; the model changes the fit, not the measured
 P-values.
 
-The fines share follows the floor. On the ultra corner, rocks under the 0.48 m floor are 47 % of
-the surface, so by default P20 and P50 read "fines"; with `lower: 0` the hybrid gives P20 0.17,
-P50 0.41 and P80 0.64.
+The fines share follows the floor. On the ultra corner, rocks under the 0.48 m floor are about
+43 % of the surface, so by default the hybrid reads 64 % fines and P20 and P50 read "fines"; with
+`lower: 0` it reads 21 % fines, P20 0.21, P50 0.39 and P80 0.63. The share is of `surfaceArea`:
+the part in no fragment as it is, the fragments sharing the rest by their areas.
 
 **What a scan can and cannot see.** Only the visible surface is measured: c is the depth of the
 shell the scan saw, not the rock's, which is why `size` is b. b is measured on what was seen, so a

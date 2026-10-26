@@ -53,9 +53,10 @@ function watershedOptions(opts, spacing) {
 	var cell = opts.cell === undefined ? WS_DEFAULTS.cellSpacings * spacing : opts.cell;
 	if (opts.cell !== undefined && !(finite(cell) && cell > 0)) throw bad("cell must be a positive distance, not " + JSON.stringify(opts.cell));
 	o.cell = cell;
-	o.reliefRadius = opts.reliefRadius === undefined ? WS_DEFAULTS.reliefRadius : opts.reliefRadius;
+	// a defaulted radius grows to two cells on a coarse cloud (warn, never refuse); one the caller set is checked
+	o.reliefRadius = opts.reliefRadius === undefined ? (cell > 0 ? Math.max(WS_DEFAULTS.reliefRadius, 2 * cell) : WS_DEFAULTS.reliefRadius) : opts.reliefRadius;
 	if (!finite(o.reliefRadius) || !(o.reliefRadius > 0)) throw bad("reliefRadius must be a positive distance, not " + JSON.stringify(opts.reliefRadius));
-	if (cell > 0 && o.reliefRadius < 2 * cell) throw bad("reliefRadius must be at least 2 cells (" + 2 * cell + "), not " + o.reliefRadius);
+	if (opts.reliefRadius !== undefined && cell > 0 && o.reliefRadius < 2 * cell) throw bad("reliefRadius must be at least 2 cells (" + 2 * cell + "), not " + o.reliefRadius);
 	o.seedHeight = opts.seedHeight === undefined ? WS_DEFAULTS.seedHeight : opts.seedHeight;
 	if (!finite(o.seedHeight) || !(o.seedHeight > 0)) throw bad("seedHeight must be a positive height, not " + JSON.stringify(opts.seedHeight));
 	o.clipBelow = opts.clipBelow === undefined ? WS_DEFAULTS.clipBelow : opts.clipBelow;

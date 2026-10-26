@@ -63,7 +63,14 @@ export function watershedFragments(cols, o, spacing) {
 		var zz = Z[oj] - z0;
 		if (!(hgt[k] >= zz)) hgt[k] = zz;
 	}
-	var sideOn = spacing > 0 && Math.sqrt(hits * px * px / n) < SIDE_ON * spacing;
+	// side-on: the plan spacing from buckets of whole cells at least two point spacings wide, so a working cell
+	// under the spacing (most points alone in their cell) does not read as a collapsed plan
+	var sideOn = false;
+	if (spacing > 0) {
+		var f = Math.max(1, Math.ceil(2 * spacing / px)), BW = Math.ceil(W / f), bucket = new Uint8Array(BW * Math.ceil(H / f)), occ = 0;
+		for (k = 0; k < N; k++) if (hit[k]) { var bk = Math.floor(Math.floor(k / W) / f) * BW + Math.floor((k % W) / f); if (!bucket[bk]) { bucket[bk] = 1; occ++; } }
+		sideOn = Math.sqrt(occ * (f * px) * (f * px) / n) < SIDE_ON * spacing;
+	}
 	var D8 = [-W - 1, -W, -W + 1, -1, 1, W - 1, W, W + 1], DX = [-1, 0, 1, -1, 1, -1, 0, 1], mask = new Uint8Array(N);
 	function inGrid(c, e) { var x2 = c % W + DX[e], q = c + D8[e]; return x2 >= 0 && x2 < W && q >= 0 && q < N; }
 	for (var pass = 0; pass < FILL_PASSES; pass++) {
