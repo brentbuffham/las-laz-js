@@ -22,7 +22,10 @@
 // its PCA spans (axes.js), its size the intermediate one. surfaceArea is
 // the scan's area per coarse cell on the cell's plane; unassignedArea each
 // cell's share of it held by points at 0.
-// Fragment ids are 1 ... n by size, largest first; 0 is none.
+// Fragment ids are 1 ... n by size, largest first; 0 is none. Every
+// result also says what the cloud resolves (resolution.js): its point
+// spacing, floor, resolution tier, warnings, and which fragments are
+// sheets; maxDistance defaults to 4 point spacings.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -34,8 +37,11 @@ import { facetOutline } from "../facets/outline.js";
 import { poleOf } from "../facets/orientation.js";
 import { pileNormals } from "./pileNormals.js";
 import { fragmentAxes } from "./axes.js";
+import { pointSpacing } from "./spacing.js";
+import { resultFields } from "./resolution.js";
 
-var D = Math.PI / 180, EDGE_ON = 0.1, MIN_PAIRS = 3, SPACING_SAMPLE = 4096;
+var D = Math.PI / 180, EDGE_ON = 0.1, MIN_PAIRS = 3, SPACING_SAMPLE = 4096, MD_SPACINGS = 4;
+var METHODS = { facets: 1 };
 var FACE_DEFAULTS = { maxAngle: 20, minArea: 0, minPoints: 10 };
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
@@ -94,7 +100,35 @@ function groupBy(label, m) {
 }
 
 /**
- * Split a muckpile scan into fragments (rocks): facets merged across convex edges.
+ * Split a muckpile scan into fragments (rocks), and say what the cloud can resolve.
+ * @param {object} cols - point columns (x / y / z or a k = 3 positions column), in any frame.
+ * @param {object} options - method "facets" (default); maxDistance (default 4 x the point spacing); the rest as
+ *   facetFragments.
+ * @returns {object} facetFragments' result plus method, spacing, floor (30 spacings), resolution ("fine",
+ *   "coarse", "oversize", "unresolved"; null with too few points), warnings [{ code, message }], and sheet on
+ *   each fragment.
+ * @throws {LasError} INVALID_ARGUMENT naming the bad option; "maxDistance is needed" when it is not given and
+ *   the cloud has too few points to measure the spacing.
+ */
+export function findFragments(cols, opts) {
+	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFragments needs options: { maxDistance?, method?, … }");
+	var method = opts.method === undefined ? "facets" : opts.method;
+	if (!METHODS[method]) throw bad("method must be \"facets\", not " + JSON.stringify(method));
+	if (cols && cols.count) coordsOf(cols, "findFragments");
+	if (opts.maxDistance !== undefined) options(cols, opts);   // a bad option is refused before the spacing is measured
+	var spacing = pointSpacing(cols), given = {}, o = opts;
+	if (opts.maxDistance === undefined) {
+		if (!(spacing > 0)) throw bad("maxDistance is needed: too few points to measure the spacing");
+		o = Object.assign({}, opts, { maxDistance: MD_SPACINGS * spacing });
+	} else given.maxDistance = opts.maxDistance;
+	var fr = facetFragments(cols, o);
+	fr.method = "facets";
+	return resultFields(fr, spacing, given);
+}
+
+/**
+ * Split a muckpile scan into fragments (rocks): facets merged across convex edges. Internal: findFragments'
+ * facet method, without the resolution fields.
  * @param {object} cols - point columns (x / y / z or a k = 3 positions column), in any frame; every result
  *   is in the columns' frame.
  * @param {{maxDistance: number, k?: number, normals?: object, onProgress?: function(number, number),
@@ -108,7 +142,7 @@ function groupBy(label, m) {
  *   surfaceArea: number, unassignedArea: number, planeDistance: number}}
  * @throws {LasError} INVALID_ARGUMENT naming the bad option.
  */
-export function findFragments(cols, opts) {
+export function facetFragments(cols, opts) {
 	var o = options(cols, opts), n = cols.count;
 	var total = (o.normals ? 0 : n) + 2 * n, last = -1;
 	function tick(done) { if (o.onProgress && done > last && (done === total || done - last >= Math.max(1, total / 100))) { last = done; o.onProgress(done, total); } }

@@ -342,7 +342,8 @@ test("speed", { skip: COVERAGE }, function () {
 test("bad options are refused, naming them", function () {
 	var p = rockPile({ boxes: [{ centre: [1, 1], size: [1, 1, 0.6], yaw: 0, tilt: 0 }], extent: 2, spacing: 0.05, noise: 0, seed: 1 }), c = p.cols;
 	assert.throws(function () { findFragments(c); }, /options/);
-	assert.throws(function () { findFragments(c, {}); }, /maxDistance is required/);
+	// 0.12.0: maxDistance defaults to 4 point spacings (resolution.test.js); a bad one is still refused
+	assert.throws(function () { findFragments(c, { maxDistance: 0 }); }, /maxDistance/);
 	var called = false;
 	assert.throws(function () { findFragments(c, { maxDistance: MD, facetOptions: { maxAngle: 0 }, onProgress: function () { called = true; } }); }, /maxAngle/);
 	assert.equal(called, false, "refused before any work");
