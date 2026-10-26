@@ -142,3 +142,49 @@ test("bad options", function () {
 	assert.throws(function () { ws(c, { clipBelow: 0.01 }); }, /clipBelow/);
 	assert.throws(function () { ws(c, { minPoints: 2 }); }, /minPoints/);
 });
+
+// --- method "hybrid": the watershed, then facets on what it left ---------------------------------
+function hy(cols, extra) { return findFragments(cols, Object.assign({ method: "hybrid" }, extra || {})); }
+
+test("hybrid: the rest finds rocks the watershed left", function () {
+	// a high seed height leaves some boxes unseeded, in the rest
+	var p = pile(), alone = whole(p, ws(p.cols, { seedHeight: 0.05 })), both = whole(p, hy(p.cols, { seedHeight: 0.05 }));
+	assert.ok(both.good.length > alone.good.length, "hybrid " + both.good.length + " against the watershed's " + alone.good.length);
+});
+
+test("hybrid: only rock-shaped pieces of the rest count", function () {
+	var fr = hy(pile().cols, { seedHeight: 0.05 }), fromFacets = fr.fragments.filter(function (f) { return f.from === "facets"; });
+	assert.ok(fromFacets.length > 0);
+	fromFacets.forEach(function (f) { assert.ok(f.axes[2] / f.axes[1] >= 0.15, "fragment " + f.id + " c/b " + (f.axes[2] / f.axes[1])); });
+});
+
+test("hybrid: the bookkeeping adds up", function () {
+	var p = pile(), fr = hy(p.cols), alone = ws(p.cols), n = p.cols.count;
+	assert.equal(fr.method, "hybrid");
+	assert.equal(fr.fromWatershed + fr.fromFacets, fr.fragments.length);
+	assert.equal(fr.fromWatershed, alone.fragments.length);
+	fr.fragments.forEach(function (f, i) { assert.equal(f.id, i + 1); if (i) assert.ok(fr.fragments[i - 1].size >= f.size); assert.ok(f.from === "watershed" || f.from === "facets"); });
+	var count = new Map();
+	for (var i = 0; i < n; i++) if (fr.fragment[i]) count.set(fr.fragment[i], (count.get(fr.fragment[i]) || 0) + 1);
+	fr.fragments.forEach(function (f) { assert.equal(count.get(f.id), f.count, "fragment " + f.id + " count"); });
+	// a watershed fragment of the hybrid is the same points as in the watershed alone
+	var pair = new Map();
+	for (i = 0; i < n; i++) {
+		var h = fr.fragment[i], a = alone.fragment[i];
+		if (h && fr.fragments[h - 1].from === "watershed") { if (!pair.has(h)) pair.set(h, a); assert.equal(pair.get(h), a, "point " + i); }
+		if (a) assert.ok(h && fr.fragments[h - 1].from === "watershed", "point " + i + " of the watershed's fragment " + a);
+	}
+});
+
+test("hybrid: areas count only the cloud", function () {
+	var pts = [];
+	for (var i = 0; i < 200; i++) for (var j = 0; j < 200; j++) { var x = i * 0.02, y = j * 0.02; if (x < 2 || y < 2) pts.push([x, y, 0.001 * ((i * 7 + j * 3) % 5)]); }
+	var fr = hy(cloud(pts));
+	assert.ok(Math.abs(fr.surfaceArea - 12) <= 0.05 * 12, "surfaceArea " + fr.surfaceArea);
+});
+
+test("hybrid: the same run twice", function () {
+	var p = pile(), a = hy(p.cols), b = hy(p.cols);
+	assert.deepEqual(a.fragment, b.fragment);
+	assert.deepEqual(a.fragments.map(function (f) { return [f.id, f.count, f.from]; }), b.fragments.map(function (f) { return [f.id, f.count, f.from]; }));
+});

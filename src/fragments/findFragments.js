@@ -38,11 +38,12 @@ import { poleOf } from "../facets/orientation.js";
 import { pileNormals } from "./pileNormals.js";
 import { fragmentAxes } from "./axes.js";
 import { pointSpacing } from "./spacing.js";
-import { resultFields } from "./resolution.js";
+import { resultFields, SHEET_CB } from "./resolution.js";
 import { watershedFragments } from "./watershed.js";
 
 var D = Math.PI / 180, EDGE_ON = 0.1, MIN_PAIRS = 3, SPACING_SAMPLE = 4096, MD_SPACINGS = 4;
-var METHODS = { facets: 1, watershed: 1 };
+var METHODS = { facets: 1, watershed: 1, hybrid: 1 };
+var WS_ONLY = ["cell", "reliefRadius", "seedHeight", "clipBelow"];
 var FACET_ONLY = ["maxDistance", "k", "normals", "facetOptions", "concaveAngle", "surfaceDistance", "viewpoint", "fill", "fillDistance"];
 var WS_DEFAULTS = { cellSpacings: 1.5, reliefRadius: 1, seedHeight: 0.005, clipBelow: 0, minPoints: 50 };
 
@@ -124,20 +125,25 @@ function groupBy(label, m) {
 /**
  * Split a muckpile scan into fragments (rocks), and say what the cloud can resolve.
  * @param {object} cols - point columns (x / y / z or a k = 3 positions column), in any frame.
- * @param {object} options - method "facets" (default); maxDistance (default 4 x the point spacing); the rest as
- *   facetFragments.
- * @returns {object} facetFragments' result plus method, spacing, floor (30 spacings), resolution ("fine",
- *   "coarse", "oversize", "unresolved"; null with too few points), warnings [{ code, message }], and sheet on
- *   each fragment.
+ * @param {object} options - method: "facets" (default: facets merged across convex edges, any orientation;
+ *   maxDistance defaults to 4 x the point spacing, the rest as facetFragments), "watershed" (a muckpile seen from
+ *   above: cell 1.5 spacings, reliefRadius 1 (about the largest rock), seedHeight 0.005, clipBelow 0, minPoints 50;
+ *   watershed.js) or "hybrid" (the watershed, then the facet options on what it left; its rock-shaped fragments
+ *   are rocks too).
+ * @returns {object} the method's result (fragment, fragments, surfaceArea, unassignedArea; facets and planeDistance,
+ *   null and NaN for the watershed; cell for the grid methods; from on each fragment and fromWatershed /
+ *   fromFacets for the hybrid) plus method, spacing, floor (30 spacings), resolution ("fine", "coarse",
+ *   "oversize", "unresolved"; null with too few points), warnings [{ code, message }], and sheet on each fragment.
  * @throws {LasError} INVALID_ARGUMENT naming the bad option; "maxDistance is needed" when it is not given and
  *   the cloud has too few points to measure the spacing.
  */
 export function findFragments(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFragments needs options: { maxDistance?, method?, … }");
 	var method = opts.method === undefined ? "facets" : opts.method;
-	if (!METHODS[method]) throw bad("method must be \"facets\" or \"watershed\", not " + JSON.stringify(method));
+	if (!METHODS[method]) throw bad("method must be \"facets\", \"watershed\" or \"hybrid\", not " + JSON.stringify(method));
 	if (cols && cols.count) coordsOf(cols, "findFragments");
 	if (method === "watershed") return watershedRun(cols, opts);
+	if (method === "hybrid") return hybridRun(cols, opts);
 	if (opts.maxDistance !== undefined) options(cols, opts);   // a bad option is refused before the spacing is measured
 	var spacing = pointSpacing(cols), given = {}, o = opts;
 	if (opts.maxDistance === undefined) {
@@ -159,6 +165,54 @@ function watershedRun(cols, opts) {
 	delete fr.sideOn;
 	fr.method = "watershed"; fr.facets = null; fr.planeDistance = NaN;
 	return resultFields(fr, spacing, { ignored: ignored, sideOn: sideOn });
+}
+
+// method "hybrid": the watershed, then facet merging on what it left in no fragment (the rest); the
+// rock-shaped fragments of the rest (c / b at least SHEET_CB) are rocks too, the rest stays fines. Ids by
+// size over both, each with from; plan areas as the watershed's
+function hybridRun(cols, opts) {
+	if (opts.cell !== undefined || opts.reliefRadius !== undefined) watershedOptions(opts, NaN);
+	var spacing = pointSpacing(cols), wo = watershedOptions(opts, spacing), n = cols.count, given = {}, i, j, k;
+	var prog = opts.onProgress;
+	wo.keepLabels = true;
+	wo.onProgress = prog ? function (d, t) { prog(0.15 * d / t, 1); } : undefined;
+	var w = wo.cell > 0 ? watershedFragments(cols, wo, spacing) : null;
+	if (!w || !w.labels) {
+		var empty = { fragment: new Uint32Array(n), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: w ? w.cell : NaN, method: "hybrid", facets: null, planeDistance: NaN, fromWatershed: 0, fromFacets: 0 };
+		return resultFields(empty, spacing, {});
+	}
+	// the rest: the points the watershed left in no fragment, as x / y / z columns
+	var co = coordsOf(cols, "findFragments"), st = co.stride, rest = [];
+	for (i = 0; i < n; i++) if (!w.fragment[i]) rest.push(i);
+	var Arr = co.x instanceof Float32Array ? Float32Array : Float64Array, m = rest.length;
+	var rc = { count: m, x: new Arr(m), y: new Arr(m), z: new Arr(m) };
+	for (j = 0; j < m; j++) { var o = rest[j] * st; rc.x[j] = co.x[o]; rc.y[j] = co.y[o]; rc.z[j] = co.z[o]; }
+	var fo = {};
+	Object.keys(opts).forEach(function (key) { if (key !== "method" && key !== "onProgress" && WS_ONLY.indexOf(key) < 0) fo[key] = opts[key]; });
+	if (fo.maxDistance === undefined) fo.maxDistance = MD_SPACINGS * spacing; else given.maxDistance = fo.maxDistance;
+	if (prog) fo.onProgress = function (d, t) { prog(0.15 + 0.85 * (t ? d / t : 1), 1); };
+	var fr = facetFragments(rc, fo);
+	var kept = fr.fragments.filter(function (f) { return f.axes[1] > 0 && f.axes[2] / f.axes[1] >= SHEET_CB; });
+	var all = w.fragments.map(function (f) { return { f: f, ws: true }; }).concat(kept.map(function (f) { return { f: f, ws: false }; }));
+	all.sort(function (a, b) { return b.f.size - a.f.size || b.f.count - a.f.count || (a.ws === b.ws ? a.f.id - b.f.id : a.ws ? -1 : 1); });
+	var wsNew = new Uint32Array(w.fragments.length + 1), facNew = new Uint32Array(fr.fragments.length + 1), fragments = [];
+	all.forEach(function (e, q) {
+		var g = Object.assign({}, e.f, { id: q + 1, from: e.ws ? "watershed" : "facets" });
+		fragments.push(g);
+		if (e.ws) wsNew[e.f.id] = q + 1; else facNew[e.f.id] = q + 1;
+	});
+	var fragment = new Uint32Array(n);
+	for (i = 0; i < n; i++) if (w.fragment[i]) fragment[i] = wsNew[w.fragment[i]];
+	for (j = 0; j < m; j++) if (fr.fragment[j]) fragment[rest[j]] = facNew[fr.fragment[j]];
+	// plan areas: the cells holding points; fines, those whose points are all in no fragment
+	var N = w.labels.N, cellOf = w.labels.cellOf, hit = new Uint8Array(N), held = new Uint8Array(N), cells = 0, none = 0;
+	for (i = 0; i < n; i++) { k = cellOf[i]; hit[k] = 1; if (fragment[i]) held[k] = 1; }
+	for (k = 0; k < N; k++) if (hit[k]) { cells++; if (!held[k]) none++; }
+	var a2 = w.cell * w.cell;
+	if (prog) prog(1, 1);
+	var out = { fragment: fragment, fragments: fragments, surfaceArea: cells * a2, unassignedArea: none * a2, cell: w.cell, method: "hybrid",
+		facets: fr.facets, planeDistance: fr.planeDistance, fromWatershed: w.fragments.length, fromFacets: kept.length };
+	return resultFields(out, spacing, Object.assign(given, { sideOn: w.sideOn }));
 }
 
 /**
