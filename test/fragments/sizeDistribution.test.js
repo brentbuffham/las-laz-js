@@ -33,13 +33,13 @@ var SWEBREC = quantiles(2000, swebrecInverse(0.4, 2.0, 2.2));
 
 test("the measured curve by hand", function () {
 	function curve(o) { return Array.from(sizeDistribution(HAND, o).passing); }
-	var v = curve();
+	var v = curve({ weight: "volume" });
 	[4, 28, 100].forEach(function (p, i) { near(v[i], p, 1e-9, "volume " + i); });
 	var c = curve({ weight: "count" });
 	[100 / 3, 200 / 3, 100].forEach(function (p, i) { near(c[i], p, 1e-9, "count " + i); });
 	var a = curve({ weight: "area" });
 	[25, 50, 100].forEach(function (p, i) { near(a[i], p, 1e-9, "area " + i); });
-	var f = curve({ fines: 0.2 });
+	var f = curve({ weight: "volume", fines: 0.2 });
 	[23.2, 42.4, 100].forEach(function (p, i) { near(f[i], p, 1e-9, "fines " + i); });
 	assert.deepEqual(Array.from(sizeDistribution(HAND).size), [1, 2, 3]);
 	var merged = sizeDistribution([HAND[0], HAND[0], HAND[1]], { weight: "count" });
@@ -121,7 +121,8 @@ test("too little to fit", function () {
 test("bad options are refused, naming them", function () {
 	assert.throws(function () { sizeDistribution("x"); }, /fragments/);
 	assert.throws(function () { sizeDistribution([{ size: NaN, axes: [1, 1, 1], area: 1 }]); }, /fragments/);
-	assert.throws(function () { sizeDistribution([{ size: 1 }]); }, /fragments/);   // volume needs axes
+	assert.throws(function () { sizeDistribution([{ size: 1 }], { weight: "volume" }); }, /fragments/);   // volume needs axes
+	assert.throws(function () { sizeDistribution([{ size: 1 }]); }, /fragments/);   // area (the default) needs area
 	assert.throws(function () { sizeDistribution([{ size: 1, axes: [1, 1, 1] }], { weight: "area" }); }, /fragments/);
 	assert.throws(function () { sizeDistribution(HAND, { model: "kuz-ram" }); }, /model/);
 	assert.throws(function () { sizeDistribution(HAND, { weight: "mass" }); }, /weight/);
@@ -139,7 +140,7 @@ test("exports", function () {
 test("edge paths", function () {
 	assert.throws(function () { sizeDistribution(HAND, null); }, /options/);
 	assert.throws(function () { sizeDistribution([null]); }, /fragments\[0\]/);
-	assert.throws(function () { sizeDistribution([{ size: 1, axes: [1, 1] }]); }, /axes/);
+	assert.throws(function () { sizeDistribution([{ size: 1, axes: [1, 1] }], { weight: "volume" }); }, /axes/);
 	var d = sizeDistribution(SWEBREC, { weight: "count" }), r = sizeDistribution(quantiles(500, rosinInverse(0.4, 1.3)), { weight: "count", model: "rosin-rammler" });
 	assert.ok(Number.isNaN(d.sizeAt(NaN)) && Number.isNaN(d.passingAt(NaN)));
 	// below the measured curve, the fit
@@ -171,4 +172,78 @@ test("Swebrec's xmax is never below the largest fragment measured", function () 
 		assert.ok(d.fit.xmax > 3.5, w + ": xmax " + d.fit.xmax);
 		assert.ok(d.fit.passing(3.0) < 100, w + ": passing(3.0) " + d.fit.passing(3.0));
 	});
+});
+
+// --- 0.12.0: limits, not a rock is fines, area by default ----------------------------------------
+// sizes 0.2, 0.5, 1 (a sheet), 2, 4 with areas 1, 2, 3, 2, 1, and 1 m² in no fragment: 10 m² in all
+function result() {
+	var f = [[0.2, 1], [0.5, 2], [1, 3, true], [2, 2], [4, 1]].map(function (e, i) { return { id: i + 1, size: e[0], axes: e[2] ? [1.2, 1, 0.1] : [e[0] * 1.5, e[0], e[0] * 0.6], area: e[1], sheet: !!e[2] }; });
+	return { fragments: f, floor: 0.4, surfaceArea: 10, unassignedArea: 1 };
+}
+
+test("fines and limits by hand", function () {
+	var d = sizeDistribution(result(), { upper: 3 });
+	// fines: the 0.2 under the floor (1), the sheet (3) and the unassigned (1) of 10
+	near(d.finesShare, 50, 1e-9, "finesShare");
+	near(d.over, 10, 1e-9, "over");   // the 4 (area 1) of the 5 measured, in the other half
+	assert.equal(d.lower, 0.4); assert.equal(d.upper, 3);
+	var at = function (x) { for (var i = 0; i < d.size.length; i++) if (Math.abs(d.size[i] - x) < 1e-12) return d.passing[i]; return NaN; };
+	near(at(0.4), 50, 1e-9, "at the lower limit");
+	near(at(0.5), 70, 1e-9, "0.5");
+	near(at(2), 90, 1e-9, "2");
+	near(at(3), 90, 1e-9, "at the upper limit");
+	near(d.passing[d.passing.length - 1], 100, 1e-12, "top");
+	assert.equal(d.p[50].below, true); assert.equal(d.p[50].size, 0.4);
+	var d95 = sizeDistribution(result(), { upper: 3, percents: [95] });
+	assert.equal(d95.p[95].above, true); assert.equal(d95.p[95].size, 3);
+	assert.equal(d.p[80].below, false); assert.equal(d.p[80].above, false);
+});
+
+test("an array keeps 0.11.0's curve", function () {
+	var a = sizeDistribution(HAND, { weight: "volume" });
+	[4, 28, 100].forEach(function (p, i) { near(a.passing[i], p, 1e-9, "volume " + i); });
+	assert.equal(a.finesShare, 0); assert.equal(a.over, 0); assert.equal(a.lower, 0); assert.equal(a.upper, 0);
+});
+
+test("weight defaults to area", function () {
+	var d = sizeDistribution(HAND);
+	[25, 50, 100].forEach(function (p, i) { near(d.passing[i], p, 1e-9, "area " + i); });
+});
+
+test("finesSize places the fines point", function () {
+	var d = sizeDistribution(HAND, { fines: 0.2, finesSize: 0.115 });
+	assert.equal(d.size[0], 0.115);
+	near(d.passing[0], 20, 1e-9, "the fines point");
+	near(d.passing[1], 20 + 0.8 * 25, 1e-9, "then the area curve");
+});
+
+test("the fit stays between the limits", function () {
+	var all = sizeDistribution(SWEBREC, { weight: "count" }), lo = all.sizeAt(30), hi = all.sizeAt(90);
+	var d = sizeDistribution(SWEBREC, { weight: "count", lower: lo, upper: hi, fitFrom: 0 });
+	assert.ok(d.fit, "a fit");
+	assert.ok(d.fit.range[0] >= lo - 1e-12 && d.fit.range[1] <= hi + 1e-12, d.fit.range.join(" … "));
+});
+
+test("a lower limit above everything", function () {
+	var d = sizeDistribution(result(), { lower: 10 });
+	assert.equal(d.finesShare, 100);
+	assert.equal(d.fit, null);
+	[10, 20, 50, 80, 90].forEach(function (P) { assert.equal(d.p[P].below, true); assert.ok(!Number.isNaN(d.p[P].size)); });
+	assert.ok(Array.from(d.passing).every(function (v) { return !Number.isNaN(v); }));
+});
+
+test("lower under the floor", function () {
+	var r = result(); r.floor = 0.41;
+	var d = sizeDistribution(r, { lower: 0.115 }), w = d.warnings.filter(function (x) { return x.code === "LOWER_UNDER_FLOOR"; });
+	assert.equal(w.length, 1);
+	assert.ok(/0\.115/.test(w[0].message) && /0\.41/.test(w[0].message), w[0].message);
+	assert.equal(sizeDistribution(r).warnings.length, 0);
+});
+
+test("bad limits", function () {
+	assert.throws(function () { sizeDistribution(HAND, { lower: -1 }); }, /lower/);
+	assert.throws(function () { sizeDistribution(HAND, { lower: 0.4, upper: 0.3 }); }, /upper/);
+	assert.throws(function () { sizeDistribution(HAND, { lower: 0.4, finesSize: 0.5 }); }, /finesSize/);
+	assert.throws(function () { sizeDistribution(HAND, { finesSize: 0 }); }, /finesSize/);
+	assert.throws(function () { sizeDistribution({ fragments: "x" }); }, /fragments/);
 });

@@ -92,7 +92,7 @@ test("P50 and P80 of the pile match its visible boxes", function () {
 	var r = run("pile", PILE), lists = {};
 	for (var i = 0; i < r.pile.truth.length; i++) if (r.pile.truth[i]) (lists[r.pile.truth[i]] = lists[r.pile.truth[i]] || []).push(i);
 	var seen = r.pile.boxes.map(function (b) { var ax = fragmentAxes(r.pile.cols.x, r.pile.cols.y, r.pile.cols.z, 1, Uint32Array.from(lists[b.id])); return { size: ax.axes[1], axes: ax.axes, area: 1 }; });
-	var truth = sizeDistribution(seen), measured = sizeDistribution(r.fr.fragments);
+	var truth = sizeDistribution(seen, { weight: "volume" }), measured = sizeDistribution(r.fr.fragments, { weight: "volume" });
 	[50, 80].forEach(function (P) {
 		var t = truth.sizeAt(P), m = measured.sizeAt(P);
 		assert.ok(Math.abs(m - t) <= 0.1 * t, "P" + P + ": " + m + " vs " + t);
