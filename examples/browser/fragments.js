@@ -35,7 +35,7 @@ function byIndex(fullIndex, labels, shownIndex) {
 import { writeDxf } from "./facets.js";
 import { drawSizeChart } from "./sizeChart.js";
 
-var NONE_RGB = [90, 90, 90], OUTSIDE_RGB = [38, 40, 44], OVER_RGB = [255, 255, 255];   // fines (not a rock); outside the run, not counted; over the upper limit
+var NONE_RGB = [90, 90, 90], FINES_RGB = [150, 130, 105], OUTSIDE_RGB = [38, 40, 44], OVER_RGB = [255, 255, 255];   // unresolved (in no fragment); fines (flat patches, under the lower limit); outside the run, not counted; over the upper limit
 
 // HSL (hue in degrees, s and l in [0, 1]) to 0-255 RGB
 function hslRgb(h, s, l) {
@@ -152,7 +152,7 @@ export function initFragments(ctx) {
 		try { res.psd = sizeDistribution(fr, o); } catch (err) { status(err.message, true); return; }
 		var psd = res.psd, fit = psd.fit;
 		res.bins = null;
-		$("fraLowerHint").textContent = fr.floor > 0 ? "0 = the floor, " + fr.floor.toFixed(2) + " m" : "";
+		$("fraLowerHint").textContent = "0 = none" + (fr.floor > 0 ? "; this cloud's floor is " + fr.floor.toFixed(2) + " m (rocks under it are measured, but small ones may merge)" : "");
 		drawSizeChart($("sizeChart"), psd);
 		var t = $("fraPTable");
 		t.innerHTML = "<tr><th></th><th>P10</th><th>P20</th><th>P50</th><th>P80</th><th>P90</th></tr>";
@@ -167,8 +167,8 @@ export function initFragments(ctx) {
 		});
 		$("fraFitInfo").textContent = fit ? (fit.model === "swebrec" ? "Swebrec: x50 " + m(fit.x50) + " m, xmax " + m(fit.xmax) + " m, b " + fit.b.toFixed(2) : "Rosin–Rammler: x50 " + m(fit.x50) + " m, n " + fit.n.toFixed(2)) +
 			", RMSE " + fit.rmse.toFixed(2) + " % over " + m(fit.range[0]) + "–" + m(fit.range[1]) + " m · * extrapolated" : "No fit: fewer than 3 measured points from Fit from up.";
-		$("fraFinesHint").textContent = "Fines (not a rock): " + psd.finesShare.toFixed(0) + " % of the " + (res.idx ? "selection's " : "") + "surface" + (psd.lower > 0 ? ", under " + m(psd.lower) + " m (gaps, flat patches, rocks under the lower limit)" : "") +
-			"; anything outside the selection is not counted." + (psd.over > 0 ? " Over " + m(psd.upper) + " m: " + psd.over.toFixed(0) + " %." : "") + " Fines % adds fines the scan cannot see on top (0 by default).";
+		$("fraFinesHint").textContent = "Fines: " + psd.finesShare.toFixed(0) + " % of the rock surface (flat patches" + (psd.lower > 0 ? " and rocks under " + m(psd.lower) + " m" : "") + "). Unresolved: " + psd.unresolved.toFixed(0) + " % of the " + (res.idx ? "selection's " : "") +
+			"surface is in no fragment (gaps, the toe, flat ground): reported on its own, not as fines; anything outside the selection is not counted." + (psd.over > 0 ? " Over " + m(psd.upper) + " m: " + psd.over.toFixed(0) + " %." : "") + " Fines % adds fines the scan cannot see on top (0 by default).";
 		showWarnings();
 		if ($("colourBy").value === "fragmentSize") ctx.recolour();
 	}
@@ -213,7 +213,7 @@ export function initFragments(ctx) {
 		var n = drawn.count, out = new Uint8Array(n * 3), bins = by === "fragmentSize" && res ? sizeBins() : null, fs = res ? res.fr.fragments : null;
 		for (var j = 0; j < n; j++) {
 			var i = drawnIdx ? drawnIdx[j] : j, f = res ? res.fragment[i] : 0;
-			var c = res && res.inRun && !res.inRun[i] ? OUTSIDE_RGB : !f || fs[f - 1].sheet ? NONE_RGB : bins ? bins.rgbOf(f) : fragmentRgb(f);
+			var c = res && res.inRun && !res.inRun[i] ? OUTSIDE_RGB : !f ? NONE_RGB : fs[f - 1].sheet ? FINES_RGB : bins ? bins.rgbOf(f) : fragmentRgb(f);
 			out[j * 3] = c[0]; out[j * 3 + 1] = c[1]; out[j * 3 + 2] = c[2];
 		}
 		showSizeLegend(bins);
@@ -221,11 +221,11 @@ export function initFragments(ctx) {
 	}
 	// Bins log-spaced from the lower limit (or the smallest rock) to the upper limit (or the largest), edges to 2
 	// significant figures, one colour each; fragments under the lower limit are fines (grey), over the upper one
-	// "over" (white); shares are of the surface, by area
+	// "over" (white); shares are of the rock surface (the fragments), by area; the unresolved is of the whole surface
 	function sizeBins() {
 		var nb = Math.max(2, Math.min(64, Math.round(num("fraBins", 10)))), fs = res.fr.fragments, psd = res.psd;
 		if (res.bins && res.bins.n === nb) return res.bins;
-		var lowerLim = psd ? psd.lower : 0, upperLim = psd ? psd.upper : 0, lo = Infinity, hi = 0, total = res.fr.unassignedArea;
+		var lowerLim = psd ? psd.lower : 0, upperLim = psd ? psd.upper : 0, lo = Infinity, hi = 0, total = 0;
 		fs.forEach(function (f) { total += f.area; if (f.sheet || !(f.size > 0) || f.size < lowerLim || (upperLim > 0 && f.size > upperLim)) return; lo = Math.min(lo, f.size); hi = Math.max(hi, f.size); });
 		if (lowerLim > 0) lo = lowerLim;
 		if (upperLim > 0) hi = upperLim;
@@ -241,8 +241,8 @@ export function initFragments(ctx) {
 		var rgb = [];
 		for (k = 0; k < nb; k++) rgb.push(rampRgb(nb > 1 ? k / (nb - 1) : 0));
 		res.bins = { n: nb, edges: edges, rgb: rgb, count: count, area: area, total: total, overCount: overCount, overArea: overArea, upper: upperLim,
-			fines: psd ? psd.finesShare / 100 : (total ? res.fr.unassignedArea / total : 0),
-			rgbOf: function (id) { var b = of[id]; return b === -1 ? NONE_RGB : b === -2 ? OVER_RGB : rgb[b]; } };
+			fines: psd ? psd.finesShare / 100 : 0, unresolved: psd ? psd.unresolved / 100 : (res.fr.surfaceArea ? res.fr.unassignedArea / res.fr.surfaceArea : 0),
+			rgbOf: function (id) { var b = of[id]; return b === -1 ? FINES_RGB : b === -2 ? OVER_RGB : rgb[b]; } };
 		return res.bins;
 	}
 	function showSizeLegend(bins) {
@@ -258,9 +258,10 @@ export function initFragments(ctx) {
 			line.append(sw, label, cnt);
 			el.appendChild(line);
 		}
-		if (bins.overCount) row(OVER_RGB, "over " + bins.upper + " m", bins.overCount, bins.total ? bins.overArea / bins.total : 0, "Fragments over the upper limit, and their share of the surface");
-		for (var b = bins.n - 1; b >= 0; b--) row(bins.rgb[b], bins.edges[b] + "–" + bins.edges[b + 1] + " m", bins.count[b], bins.total ? bins.area[b] / bins.total : 0, "Fragments in this range, and their share of the surface");
-		row(NONE_RGB, "Fines (not a rock)", null, bins.fines, "The surface in no fragment, flat patches and rocks under the lower limit, and its share");
+		if (bins.overCount) row(OVER_RGB, "over " + bins.upper + " m", bins.overCount, bins.total ? bins.overArea / bins.total : 0, "Fragments over the upper limit, and their share of the rock surface");
+		for (var b = bins.n - 1; b >= 0; b--) row(bins.rgb[b], bins.edges[b] + "–" + bins.edges[b + 1] + " m", bins.count[b], bins.total ? bins.area[b] / bins.total : 0, "Fragments in this range, and their share of the rock surface");
+		row(FINES_RGB, "Fines", null, bins.fines, "Flat patches and rocks under the lower limit: their share of the rock surface");
+		row(NONE_RGB, "Unresolved (no fragment)", null, bins.unresolved, "Gaps, the toe, flat ground: the share of the whole surface in no fragment, not counted as fines");
 		if (res.inRun) row(OUTSIDE_RGB, "Outside the selection", null, null, "Not in the run: not counted");
 		el.classList.remove("hidden");
 	}

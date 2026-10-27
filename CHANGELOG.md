@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Behaviour changes (`sizeDistribution`):
+- `lower` defaults to **0 (none)**, not the cloud's floor. The floor stays on the result as where
+  sizes stop being measured rock by rock; it never cuts the curve. Set the site's fines size
+  (`lower: 0.115`, say).
+- The surface in no fragment (gaps, the toe, flat ground) is **not fines** by default: new
+  `unresolved` (% of `surfaceArea`), and `finesShare` is now a share of the rock surface (sheets and
+  fragments under `lower`). `grey: "fines"` keeps 0.12.0's count. On the whole 59.7 M-point pile at
+  115 mm the old count read 30 % fines, 24 points of it the grey.
+- Demo: Lower limit 0 = none (the floor shown beside it); the legend and the line under the curve
+  give fines and unresolved apart, fines drawn tan and unresolved grey.
+
 ## 0.14.0 (2026-10-27)
 
 Every core, on tiles. (No 0.13.0.)

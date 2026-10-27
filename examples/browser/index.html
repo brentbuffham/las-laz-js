@@ -272,7 +272,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-fragments">
-				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragmentsParallel</code> (tiles of the cloud on every core). <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; what is not a rock (gaps, flat patches, rocks under the floor) is fines. The line under Find fragments says what the cloud can resolve. When the read was thinned by Max points, the run reads every point (inside the polygon) itself, so it measures the full density while the view stays light.</p>
+				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragmentsParallel</code> (tiles of the cloud on every core). <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; flat patches and rocks under the lower limit are fines, and the surface in no fragment (gaps, the toe, flat ground) is reported on its own as unresolved, not as fines. The line under Find fragments says what the cloud can resolve. When the read was thinned by Max points, the run reads every point (inside the polygon) itself, so it measures the full density while the view stays light.</p>
 				<details class="small">
 					<summary>What a cloud can resolve</summary>
 					<table class="grid-table">
@@ -343,9 +343,9 @@
 					<label>Model <select id="fraModel"><option value="swebrec">Swebrec</option><option value="rosin-rammler">Rosin–Rammler</option></select></label>
 					<label>Weight <select id="fraWeight" title="Area: the visible surface (the default; it works on real piles). Volume: (π/6) a b², an ellipsoid with the unseen depth taken as b"><option value="area">Area</option><option value="volume">Volume</option><option value="count">Count</option></select></label>
 					<label>Fit from (%) <input type="number" id="fraFitFrom" value="60" min="0" max="99" step="5"></label>
-					<label>Lower limit (m) <input type="number" id="fraLower" value="0" min="0" step="0.05" title="Everything under it is fines; 0 = the cloud's floor"> <span class="muted small" id="fraLowerHint"></span></label>
+					<label>Lower limit (m) <input type="number" id="fraLower" value="0" min="0" step="0.05" title="Rocks under it are fines (115 mm, say); 0 = none. The cloud's floor is shown beside it: rocks under the floor are measured, but small ones may merge"> <span class="muted small" id="fraLowerHint"></span></label>
 					<label>Upper limit (m) <input type="number" id="fraUpper" value="0" min="0" step="0.1" title="Everything over it is one share, not sizes (the crusher gap, say); 0 = no limit"></label>
-					<label>Fines (%) <input type="number" id="fraFines" value="0" min="0" max="99" step="1" title="Fines the scan cannot see (under the rocks), added on top of the not-a-rock share; 0 = none"></label>
+					<label>Fines (%) <input type="number" id="fraFines" value="0" min="0" max="99" step="1" title="Fines the scan cannot see (under the rocks), added on top; 0 = none"></label>
 					<label>Fines size (m) <input type="number" id="fraFinesSize" placeholder="under the smallest" min="0.001" step="0.005" title="Where Fines % sits on the curve (e.g. 0.115); blank = under the smallest size"></label>
 				</div>
 				<p class="muted small" id="fraFinesHint"></p>

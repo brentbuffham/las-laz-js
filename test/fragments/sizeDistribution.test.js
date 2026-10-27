@@ -182,7 +182,7 @@ function result() {
 }
 
 test("fines and limits by hand", function () {
-	var d = sizeDistribution(result(), { upper: 3 });
+	var d = sizeDistribution(result(), { upper: 3, lower: 0.4, grey: "fines" });
 	// fines: the 0.2 under the floor (1), the sheet (3) and the unassigned (1) of 10
 	near(d.finesShare, 50, 1e-9, "finesShare");
 	near(d.over, 10, 1e-9, "over");   // the 4 (area 1) of the 5 measured, in the other half
@@ -194,7 +194,7 @@ test("fines and limits by hand", function () {
 	near(at(3), 90, 1e-9, "at the upper limit");
 	near(d.passing[d.passing.length - 1], 100, 1e-12, "top");
 	assert.equal(d.p[50].below, true); assert.equal(d.p[50].size, 0.4);
-	var d95 = sizeDistribution(result(), { upper: 3, percents: [95] });
+	var d95 = sizeDistribution(result(), { upper: 3, lower: 0.4, grey: "fines", percents: [95] });
 	assert.equal(d95.p[95].above, true); assert.equal(d95.p[95].size, 3);
 	assert.equal(d.p[80].below, false); assert.equal(d.p[80].above, false);
 });
@@ -261,7 +261,7 @@ test("limits: edge paths", function () {
 	assert.equal(d.passing[d.passing.length - 1], 100);
 	assert.equal(d.size[d.size.length - 1], 4);
 	// volume and Rosin-Rammler on a result, with limits
-	var v = sizeDistribution(result(), { weight: "volume", model: "rosin-rammler", upper: 3 });
+	var v = sizeDistribution(result(), { weight: "volume", model: "rosin-rammler", upper: 3, lower: 0.4, grey: "fines" });
 	near(v.finesShare, 50, 1e-9, "the fines share is by area whatever the weight");
 	assert.ok(v.over > 0 && v.over < 50);
 	// a sheet in an array needs areas
@@ -281,5 +281,21 @@ test("the fines share is of surfaceArea", function () {
 	// surfaceArea, and the fragments share the rest by their areas. Here 2 of 20 m² unassigned, and the
 	// fragments' 9 m² of outline stand for the other 18: fines = (2 + 18 x (1 + 3) / 9) / 20 = 50 %
 	var r = result(); r.surfaceArea = 20; r.unassignedArea = 2;
-	near(sizeDistribution(r).finesShare, 50, 1e-9, "finesShare");
+	near(sizeDistribution(r, { lower: 0.4, grey: "fines" }).finesShare, 50, 1e-9, "finesShare");
+});
+
+test("the defaults: no lower limit, the grey on its own", function () {
+	// 0.14.0: the floor is not a lower limit, and the surface in no fragment is not fines
+	var d = sizeDistribution(result());
+	assert.equal(d.lower, 0);
+	near(d.finesShare, 100 / 3, 1e-9, "fines: the sheet (3) of the fragments' 9 m²");
+	near(d.unresolved, 10, 1e-9, "unresolved: 1 of 10 m² in no fragment");
+	[10, 20, 50, 80, 90].forEach(function (P) { assert.equal(d.p[P].below, false); });
+	var g = sizeDistribution(result(), { grey: "fines" });
+	near(g.finesShare, 40, 1e-9, "grey as fines: 1 - (9 / 10) x (6 / 9)");
+	near(g.unresolved, 10, 1e-9);
+	// fines under a lower limit of the rock surface: the 0.2 (1) and the sheet (3) of 9
+	near(sizeDistribution(result(), { lower: 0.4 }).finesShare, 400 / 9, 1e-9);
+	assert.equal(sizeDistribution(HAND).unresolved, 0);
+	assert.throws(function () { sizeDistribution(result(), { grey: "rocks" }); }, /grey/);
 });

@@ -534,8 +534,9 @@ fr.warnings;        // [{ code, message }]: COARSE, UNRESOLVED, SHEETS, FLOOR, �
 fr.surfaceArea;     // the scan's area
 fr.unassignedArea;  // the part in no fragment
 
-var psd = sizeDistribution(fr, { upper: 1.2 });   // by area; fines under the floor; over 1.2 m one share
-psd.finesShare;     // % of the surface that is not a rock
+var psd = sizeDistribution(fr, { lower: 0.115, upper: 1.2 });   // by area; fines under 115 mm; over 1.2 m one share
+psd.finesShare;     // % of the rock surface that is fines (flat patches, rocks under the lower limit)
+psd.unresolved;     // % of the surface in no fragment (gaps, the toe, flat ground): not fines
 psd.over;           // % over the upper limit
 psd.p;              // { 10, 20, 50, 80, 90: { size, extrapolated, below, above } }
 psd.size, psd.passing, psd.sizeAt(80), psd.fit;
@@ -555,7 +556,8 @@ against 118 rocks drawn by hand in Kirra:
 | coarser | unresolved | No rocks, only patches of surface. An 8 cm survey (0.086 m) found none. |
 
 The **floor**, the smallest rock measured, is 30 point spacings: the clouds scored lost most of
-their rocks under 25–28. Fragments under it count as fines. A coarse cloud is warned of, never
+their rocks under 25–28. The floor is not a limit on the curve: rocks under it are still measured,
+but small ones may merge, so sizes under it are indicative. A coarse cloud is warned of, never
 refused, by `COARSE`, `OVERSIZE_ONLY` or `UNRESOLVED`, each with its spacing and floor. Also
 `MAX_DISTANCE` (a facet `maxDistance` outside 2.5–8 spacings), `SHEETS` (over 30 % of the surface
 is flat patches), `FLOOR` (one fragment over a quarter of the surface: a bench floor or a wall in
@@ -614,9 +616,11 @@ is b, the intermediate one, the sieve-size estimate. A fragment with c / b under
 ### Size distribution
 
 `sizeDistribution` takes the whole `findFragments` result (or, as in 0.11.0, an array of
-fragments). **Not a rock is fines**: the surface in no fragment, the sheets and the fragments under
-the lower limit, by area whatever the weight, and the curve starts there. `lower` defaults to the
-cloud's floor; `upper` (0 = none) makes everything larger one share, the crusher gap say. A
+fragments). **Fines** are the sheets and the fragments under `lower` (default 0, none; set the size
+the site calls fines, 0.115 say), a share of the rock surface by area whatever the weight, and the
+curve starts there. The surface in no fragment (gaps between rocks, the toe, flat ground) is
+**unresolved**, reported on its own (`unresolved`, % of the surface), not as fines; `grey: "fines"`
+counts it as fines, as 0.12.0 did. `upper` (0 = none) makes everything larger one share, the crusher gap say. A
 P-value in the fines reads `below` (its size the lower limit), one over the upper limit `above`.
 Fragments are weighed by `area` (the default; on real piles volume let a few big fragments carry
 the curve), `volume` ((π/6)·a·b², the unseen depth taken as b) or `count`. The fit uses the
@@ -625,10 +629,10 @@ cannot see (under the rocks) on top, under the smallest size or at `finesSize` (
 `model: "rosin-rammler"` fits Rosin–Rammler instead; the model changes the fit, not the measured
 P-values.
 
-The fines share follows the floor. On the ultra corner, rocks under the 0.48 m floor are about
-43 % of the surface, so by default the hybrid reads 64 % fines and P20 and P50 read "fines"; with
-`lower: 0` it reads 21 % fines, P20 0.21, P50 0.39 and P80 0.63. The share is of `surfaceArea`:
-the part in no fragment as it is, the fragments sharing the rest by their areas.
+Why the floor is not the lower limit, and the grey not fines: in 0.12.0 both were, and on the ultra
+corner the hybrid read 64 % fines (rocks under the 0.48 m floor were 43 % of the surface). On the
+whole 59.7 M-point pile at 115 mm, 30 % of the surface read as fines, of which 24 points were the
+grey in no fragment and only about 6 rocks under 115 mm.
 
 **What a scan can and cannot see.** Only the visible surface is measured: c is the depth of the
 shell the scan saw, not the rock's, which is why `size` is b. b is measured on what was seen, so a

@@ -3,10 +3,13 @@
 // The size distribution of a list of fragments, or of a findFragments
 // result: % passing by size, weighted by area (the default), volume
 // ((pi / 6) a b^2: an ellipsoid with the unseen depth taken as b) or
-// count. Not a rock is fines: given the result, the share of the
-// surface in no fragment, in sheets and in fragments under the lower
-// limit (by default the cloud's floor) is the fines share, by area
-// whatever the weight, and the curve starts there; fragments over an
+// count. Fines are the sheets and the fragments under the lower limit
+// (none by default; the 115 mm a site calls fines, say), a share of the
+// rock surface by area whatever the weight, and the curve starts there.
+// The surface in no fragment (gaps, the toe, flat ground) is its own
+// share, unresolved, not fines (grey "fines" counts it as fines, as
+// 0.12.0 did). The floor is not a limit: it says where the sizes stop
+// being measured rock by rock (see resolution.js). Fragments over an
 // upper limit (the crusher gap, say) are one share, not sizes. An
 // optional fines share (mass the surface cannot show) is added on top,
 // under the smallest size or at finesSize. A Swebrec or Rosin-Rammler
@@ -45,7 +48,9 @@ function options(input, opts) {
 	if (!Array.isArray(percents) || !percents.every(function (p) { return finite(p) && p > 0 && p < 100; })) throw bad("percents must be numbers in (0, 100), not " + JSON.stringify(percents));
 	if (!Array.isArray(fragments)) throw bad("fragments must be an array of fragments, or findFragments' result (its fragments)");
 	var floor = isResult && finite(input.floor) ? input.floor : 0;
-	var lower = o.lower === undefined ? floor : o.lower;
+	var lower = o.lower === undefined ? 0 : o.lower;
+	var grey = o.grey === undefined ? "separate" : o.grey;
+	if (grey !== "separate" && grey !== "fines") throw bad("grey must be \"separate\" or \"fines\", not " + JSON.stringify(o.grey));
 	if (!finite(lower) || lower < 0) throw bad("lower must be a size >= 0 (0: no lower limit), not " + JSON.stringify(o.lower));
 	var upper = o.upper === undefined ? 0 : o.upper;
 	if (!finite(upper) || upper < 0 || (upper > 0 && !(upper > lower))) throw bad("upper must be 0 (no limit) or a size above lower (" + lower + "), not " + JSON.stringify(o.upper));
@@ -60,7 +65,7 @@ function options(input, opts) {
 	var warnings = [];
 	if (isResult && o.lower !== undefined && floor > 0 && lower < floor && input.resolution !== "fine") warnings.push({ code: "LOWER_UNDER_FLOOR", message: "Lower limit " + lower + " is under this cloud's floor (" + floor.toFixed(2) + "): the curve between them is not measured." });
 	return { fragments: fragments, unassigned: isResult && finite(input.unassignedArea) ? input.unassignedArea : 0, surface: isResult && finite(input.surfaceArea) ? input.surfaceArea : 0, needArea: needArea, lower: lower, upper: upper, finesSize: finesSize,
-		warnings: warnings, weight: weight, model: model, fitFrom: fitFrom, fines: fines, percents: percents };
+		warnings: warnings, weight: weight, model: model, fitFrom: fitFrom, fines: fines, percents: percents, grey: grey };
 }
 
 function weightOf(f, weight) {
@@ -150,16 +155,18 @@ function fitCurve(xs, ps, model, fitFrom, largest) {
  *   result (its fragments, floor, unassignedArea), or an array of fragments (0.11.0's form); fragments of size 0
  *   or less (no measurable size) are left out.
  * @param {{weight?: string, model?: string, fitFrom?: number, fines?: number, finesSize?: number, lower?: number,
- *   upper?: number, percents?: number[]}} [options] - weight "area" (default), "volume" ((pi / 6) a b^2) or
- *   "count"; model "swebrec" (default) or "rosin-rammler"; fitFrom 60 (% passing); lower: the result's floor, or 0
- *   for an array (0: none); upper 0 (none); fines 0 (unseen mass, a share of the whole, under the smallest size or
- *   at finesSize); percents [10, 20, 50, 80, 90].
+ *   upper?: number, percents?: number[], grey?: string}} [options] - weight "area" (default), "volume"
+ *   ((pi / 6) a b^2) or "count"; model "swebrec" (default) or "rosin-rammler"; fitFrom 60 (% passing); lower 0
+ *   (none); upper 0 (none); fines 0 (unseen mass, a share of the whole, under the smallest size or at finesSize);
+ *   percents [10, 20, 50, 80, 90]; grey "separate" (default: the surface in no fragment is unresolved, its own
+ *   share) or "fines" (counted as fines, of surfaceArea, as 0.12.0).
  * @returns {{size: Float64Array, passing: Float64Array, sizeAt: function(number): number,
  *   passingAt: function(number): number, fit: object|null, p: object, lower: number, upper: number,
- *   finesShare: number, over: number, warnings: Array<{code: string, message: string}>}} sizes ascending, % passing
+ *   finesShare: number, unresolved: number, over: number, warnings: Array<{code: string, message: string}>}} sizes ascending, % passing
  *   (0 ... 100), with the points at finesSize, lower and upper; fit { model, x50, xmax, b | n, rmse, from, range,
  *   passing(x), sizeAt(P) } or null (fewer than 3 measured points from fitFrom up and below 100); finesShare: % of
- *   the surface that is not a rock; over: % over upper; p[P] = { size, extrapolated, below, above } (below: in the
+ *   the rock surface that is fines (of the whole surface with grey "fines"); unresolved: % of surfaceArea in no
+ *   fragment (0 for an array); over: % over upper; p[P] = { size, extrapolated, below, above } (below: in the
  *   fines, size = lower; above: over upper, size = upper).
  * @throws {LasError} INVALID_ARGUMENT naming the bad argument.
  */
@@ -176,7 +183,8 @@ export function sizeDistribution(input, opts) {
 		kept.push({ size: f.size, w: weightOf(f, o.weight) });
 	});
 	var phi = 0, U = o.unassigned, S = o.surface;
-	if (o.needArea && S > 0) phi = fragArea > 0 ? Math.max(0, 1 - Math.max(0, S - U) / S * (fragArea - fragFines) / fragArea) : 1;   // 1 - the measured share: exactly 1 when nothing is measured
+	if (o.grey === "separate") phi = o.needArea && fragArea > 0 ? fragFines / fragArea : 0;   // of the rock surface; the grey is its own share
+	else if (o.needArea && S > 0) phi = fragArea > 0 ? Math.max(0, 1 - Math.max(0, S - U) / S * (fragArea - fragFines) / fragArea) : 1;   // 1 - the measured share: exactly 1 when nothing is measured
 	else if (o.needArea && U + fragArea > 0) phi = (U + fragFines) / (U + fragArea);
 	kept.sort(function (a, b) { return a.size - b.size; });
 	if (o.finesSize !== undefined && kept.length && !(o.finesSize < kept[0].size)) throw bad("finesSize must be under the smallest size measured (" + kept[0].size + "), not " + o.finesSize);
@@ -231,5 +239,5 @@ export function sizeDistribution(input, opts) {
 		else p[P] = { size: sizeAt(P), extrapolated: !(m && P >= passing[0]), below: false, above: false };
 	});
 	return { size: size, passing: passing, sizeAt: sizeAt, passingAt: passingAt, fit: fit, p: p, lower: lower, upper: upper,
-		finesShare: 100 * phi, over: overPct, warnings: o.warnings };
+		finesShare: 100 * phi, unresolved: S > 0 ? 100 * Math.min(1, U / S) : 0, over: overPct, warnings: o.warnings };
 }
