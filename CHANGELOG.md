@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.1 (2026-10-27)
 
 Behaviour changes (`sizeDistribution`):
 - `lower` defaults to **0 (none)**, not the cloud's floor. The floor stays on the result as where
