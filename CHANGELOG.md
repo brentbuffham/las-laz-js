@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.0 (2026-10-27)
 
 Whole-cloud edits on a tile store (no point limit: never the cloud in memory):
 - `alignStores(moving, fixed, opts)`: alignCloud on the stores' thinned top octree levels (moving 1 M,
