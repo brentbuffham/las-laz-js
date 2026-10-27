@@ -35,7 +35,7 @@ export { fitTransform } from "./register/fit.js";
 export { parseControlPoints, matchControlPoints } from "./register/controlPoints.js";
 export { alignCloud } from "./register/align.js";
 export { alignStores, storeSample } from "./tiles/align.js";
-export { dedupeStore } from "./tiles/storeOps.js";
+export { dedupeStore, smoothStore } from "./tiles/storeOps.js";
 export { mergeStores, splitStore } from "./tiles/merge.js";
 export { poleOf, orientationOf, poleFromOrientation } from "./facets/orientation.js";
 export { findFacets } from "./facets/findFacets.js";

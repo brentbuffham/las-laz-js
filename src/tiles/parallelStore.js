@@ -98,14 +98,14 @@ export async function runAll(store, L, opts, threads, op, task, apply) {
 	try {
 		if (pool) {
 			await Promise.all(L.tiles.map(function (t, i) {
-				return pool.region(op, Object.assign(task(t), { keys: L.nodes.keys }), where, run, function (f) { report(i, f); }).then(function (r) { apply(r, i); report(i, 1); });
+				return pool.region(op, Object.assign(task(t), { keys: L.nodes.keys }), where, run, function (f) { report(i, f); }).then(function (r) { return Promise.resolve(apply(r, i)).then(function () { report(i, 1); }); });
 			}));
 		} else {
 			for (var i = 0; i < L.tiles.length; i++) {
 				if (signal && signal.aborted) throw stopped();
 				var t = Object.assign(task(L.tiles[i]), { keys: L.nodes.keys }), k = i;
 				t.onProgress = function (d, n) { report(k, n ? d / n : 1); };
-				apply(await REGION_JOBS[op](store, t), i);
+				await apply(await REGION_JOBS[op](store, t), i);
 				report(i, 1);
 			}
 		}

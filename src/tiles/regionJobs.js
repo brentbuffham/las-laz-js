@@ -20,6 +20,7 @@ import { findFragments } from "../fragments/findFragments.js";
 import { findFacets } from "../facets/findFacets.js";
 import { facetOutline } from "../facets/outline.js";
 import { dedupeSelection } from "../filter/dedupe.js";
+import { denoisePoints } from "../ops/denoise.js";
 
 var AXES = ["x", "y", "z"];
 
@@ -97,8 +98,27 @@ export async function dedupeRegion(store, t) {
 	return { count: reg.count, node: node, index: index };
 }
 
+/**
+ * One tile of smoothStore: denoisePoints on the region (the overlap gives the core points their neighbours); the core
+ * points that moved, with their new positions (local).
+ * @param {object} store - an open TileStore.
+ * @param {{keys: string[], which: number[], axes: number[], box: number[], core: number[], origin: object, denoise: object}} t
+ * @returns {Promise<{count: number, node: Uint32Array, index: Uint32Array, x: Float64Array, y: Float64Array, z: Float64Array}>}
+ */
+export async function smoothRegion(store, t) {
+	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t), a = t.axes, j;
+	var none = { count: reg.count, node: new Uint32Array(0), index: new Uint32Array(0), x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0) };
+	if (reg.count < 3) return none;
+	var out = denoisePoints({ count: reg.count, x: reg.x, y: reg.y, z: reg.z }, Object.assign({}, t.denoise, t.onProgress ? { onProgress: t.onProgress } : {}));
+	var U = reg[AXES[a[0]]], V = reg[AXES[a[1]]], moved = [];
+	for (j = 0; j < reg.count; j++) if (inCore(L.core, U[j], V[j]) && (out.x[j] !== reg.x[j] || out.y[j] !== reg.y[j] || out.z[j] !== reg.z[j])) moved.push(j);
+	var m = moved.length, r = { count: reg.count, node: new Uint32Array(m), index: new Uint32Array(m), x: new Float64Array(m), y: new Float64Array(m), z: new Float64Array(m) };
+	moved.forEach(function (p, q) { r.node[q] = reg.node[p]; r.index[q] = reg.index[p]; r.x[q] = out.x[p]; r.y[q] = out.y[p]; r.z[q] = out.z[p]; });
+	return r;
+}
+
 /** The region jobs by name (the worker's op). */
-export var REGION_JOBS = { fragmentsRegion: fragmentsRegion, facetsRegion: facetsRegion, dedupeRegion: dedupeRegion };
+export var REGION_JOBS = { fragmentsRegion: fragmentsRegion, facetsRegion: facetsRegion, dedupeRegion: dedupeRegion, smoothRegion: smoothRegion };
 
 /**
  * One tile of findFacetsParallel on a store.

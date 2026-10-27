@@ -319,6 +319,57 @@ export function setColumn(store, sel, name, value) {
 	});
 }
 
+/**
+ * Move points: value { key: { index (ascending), x, y, z } } in world coordinates (after the store transform). The
+ * records take the store transform's inverse, then the scale and offset; each node's box is measured again.
+ */
+export function setPositions(store, value) {
+	return queued(store, function () {
+		var m = store.manifest;
+		if (!value || typeof value !== "object") throw bad("positions must be { key: { index, x, y, z } }");
+		var keys = Object.keys(value).sort(keyOrder), inv = m.transform ? invertTransform(m.transform) : null;
+		keys.forEach(function (k) {
+			var v = value[k], node = m.nodes[k];
+			if (!node) throw bad("the positions name tile " + k + ", which is not in the store");
+			if (!v || !v.index || !v.x || !v.y || !v.z || v.x.length !== v.index.length || v.y.length !== v.index.length || v.z.length !== v.index.length) throw bad("positions[" + k + "] must be { index, x, y, z } of one length");
+			for (var i = 0; i < v.index.length; i++) if (!(v.index[i] < node.count) || (i && v.index[i] <= v.index[i - 1])) throw bad("positions[" + k + "].index " + v.index[i] + " is not an ascending point of the tile (" + node.count + " points)");
+		});
+		return session(store, async function (put) {
+			for (var t = 0; t < keys.length; t++) {
+				var key = keys[t], n = await readNode(store, key);
+				await put(key, patchPositions(store, n.records, value[key], inv), n.t.columns, n.t.size, null);
+			}
+		}, null);
+	});
+}
+
+// { m, t } inverted: m^-1, -m^-1 t
+function invertTransform(T) {
+	var a = T.m, det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) + a[2] * (a[3] * a[7] - a[4] * a[6]);
+	var i = [(a[4] * a[8] - a[5] * a[7]) / det, (a[2] * a[7] - a[1] * a[8]) / det, (a[1] * a[5] - a[2] * a[4]) / det,
+		(a[5] * a[6] - a[3] * a[8]) / det, (a[0] * a[8] - a[2] * a[6]) / det, (a[2] * a[3] - a[0] * a[5]) / det,
+		(a[3] * a[7] - a[4] * a[6]) / det, (a[1] * a[6] - a[0] * a[7]) / det, (a[0] * a[4] - a[1] * a[3]) / det];
+	return { m: i, t: [0, 1, 2].map(function (r) { return -(i[3 * r] * T.t[0] + i[3 * r + 1] * T.t[1] + i[3 * r + 2] * T.t[2]); }) };
+}
+
+// a node's records with new positions (world, taken back through inv when the store is moved)
+function patchPositions(store, records, v, inv) {
+	var m = store.manifest, len = m.recordLength;
+	var cols = decodeRecords(records, store.header, { fields: recordFields(m.pointFormat) });
+	var so = { scale: m.scale, offset: m.offset };
+	for (var i = 0; i < v.index.length; i++) {
+		var p = v.index[i], x = v.x[i], y = v.y[i], z = v.z[i];
+		if (inv) { var q = inv.m; cols.x[p] = q[0] * x + q[1] * y + q[2] * z + inv.t[0]; cols.y[p] = q[3] * x + q[4] * y + q[5] * z + inv.t[1]; cols.z[p] = q[6] * x + q[7] * y + q[8] * z + inv.t[2]; }
+		else { cols.x[p] = x; cols.y[p] = y; cols.z[p] = z; }
+	}
+	// the X, Y, Z bytes only (12 of each record): every other field stays as stored
+	var out = new Uint8Array(len * cols.count);
+	encodeRecords(cols, m.pointFormat, len, so, null, new DataView(out.buffer), 0, { bounds: { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity }, byReturn: new Array(15).fill(0) }, 0, null);
+	var res = records.slice();
+	for (i = 0; i < v.index.length; i++) { var o = v.index[i] * len; res.set(out.subarray(o, o + 12), o); }
+	return res;
+}
+
 // Re-encode the node twice and copy only the bytes the new values change
 function patchField(store, records, name, idx, values, value) {
 	var m = store.manifest, len = m.recordLength, n = records.length / len;

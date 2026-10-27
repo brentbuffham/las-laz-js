@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Whole-cloud edits on a tile store (no point limit: never the cloud in memory):
+- `alignStores(moving, fixed, opts)`: alignCloud on the stores' thinned top octree levels (moving 1 M,
+  fixed 4 M points by default), local to each store's centre; `apply` composes the transform onto the
+  moving store. Either side may be columns. `storeSample(store, maxPoints)`.
+- `dedupeStore(store, tolerance, opts)`: dedupe's rule over the whole store on the work tiles; one
+  delete (`apply: false` to only find them). The same count as dedupe in memory.
+- `smoothStore(store, opts)`: denoisePoints over the whole store, each tile with an overlap, one sigma;
+  the moved points wait in scratch until every tile is read (an edit replaces node files, so none runs
+  while workers read), then setPositions writes them in batches (`batchPoints`, 10 M). Within 0.5 mm
+  of denoisePoints in memory, seams included; a stop before the writes leaves the store untouched.
+- `mergeStores(stores, { where })` and `splitStore(store, sel, { where, keep })`: new stores streamed
+  node by node in world coordinates (transforms applied) through a scratch LAS and buildTiles; the
+  format holds every source's fields, the finest scale; split deletes the selection from the source.
+- `store.setPositions({ key: { index, x, y, z } })`: move points in world coordinates (through the
+  store transform's inverse); node boxes measured again.
+- Already there, for crop, delete and move: `selectPolygon` / `keepPoints`, `deletePoints`, `transform`.
+
 ## 0.15.1 (2026-10-27)
 
 Faster (found from Kirra's 160 M / 177 M imports):

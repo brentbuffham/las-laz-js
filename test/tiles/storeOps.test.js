@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { openLas, writeLas, buildTiles, dedupeStore, dedupe, mergeStores, splitStore } from "../../src/index.js";
+import { openLas, writeLas, buildTiles, dedupeStore, dedupe, mergeStores, splitStore, smoothStore } from "../../src/index.js";
 
 var E = 478000, N = 6771000, H = 240;
 // a 12 x 12 m grid at 5 cm, every 7th point given a twin 4 mm away (and 2 cm up), at UTM scale
@@ -98,4 +98,40 @@ test("splitStore: a box of a store into a new store, deleted from the source", a
 	var keep = await s.selectBox({ minX: E + 6, maxX: E + 7, minY: N, maxY: N + 1 }), n2 = count(s);
 	await splitStore(s, keep, { where: { memory: true }, keep: true });
 	assert.equal(count(s), n2, "keep: the source keeps them");
+});
+
+test("smoothStore moves the points as denoisePoints does in memory, across the tiles' seams", async function () {
+	var { denoisePoints, estimateNoise } = await import("../../src/index.js");
+	// a noisy surface at UTM scale (noise 5 mm), local for the run in memory
+	var n = 0, xs = [], ys = [], zs = [], a = 7;
+	for (var x = 0; x < 10; x += 0.05) for (var y = 0; y < 10; y += 0.05) { a = (a * 16807) % 2147483647; xs.push(x); ys.push(y); zs.push(0.2 * Math.sin(x) + (a / 2147483647 - 0.5) * 0.01); n++; }
+	var loc = { count: n, x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float64Array.from(zs) };
+	var w = { count: n, x: loc.x.map(function (v) { return v + E; }), y: loc.y.map(function (v) { return v + N; }), z: loc.z.map(function (v) { return v + H; }) };
+	var dir = fs.mkdtempSync(path.join(os.tmpdir(), "lazops-")); dirs.push(dir);
+	var s = await buildTiles(await openLas(await writeLas(w, { scale: { x: 0.0001, y: 0.0001, z: 0.0001 } })), { where: { dir: dir }, tilePoints: 3000, replace: true });
+	var sigma = estimateNoise(loc, { k: 16, maxDistance: 0.2 }), o = { maxDistance: 0.2, iterations: 2, sigma: sigma };
+	var mem = denoisePoints(loc, o);
+	var res = await smoothStore(s, Object.assign({ threads: 2, tile: 3, batchPoints: 5000 }, o));
+	assert.ok(res.tiles >= 9 && res.batches > 1 && res.moved > 0.9 * n, JSON.stringify(res));
+	// every stored point where denoisePoints put it (to the store's 0.1 mm), seams included
+	var worst = 0, at = new Map();
+	for (var i = 0; i < n; i++) at.set(Math.round(loc.x[i] * 100) + "," + Math.round(loc.y[i] * 100), i);
+	for (var k of Object.keys(s.manifest.nodes)) {
+		if (!s.manifest.nodes[k].count) continue;
+		var p = await s.readTile(k, { fields: ["x", "y", "z"] });
+		for (var j = 0; j < p.count; j++) {
+			var q = at.get(Math.round((p.x[j] - E) * 100) + "," + Math.round((p.y[j] - N) * 100));
+			worst = Math.max(worst, Math.abs(p.z[j] - H - mem.z[q]), Math.abs(p.x[j] - E - mem.x[q]));
+		}
+	}
+	assert.ok(worst < 0.0005, "worst " + worst);
+	await assert.rejects(smoothStore(s, {}), /maxDistance/);
+});
+
+test("a smoothing run stopped mid-way leaves the store untouched", async function () {
+	var s = await store(), key = Object.keys(s.manifest.nodes).filter(function (k) { return s.manifest.nodes[k].count; })[0];
+	var before = await s.readTile(key, { fields: ["z"] }), c = new AbortController();
+	await assert.rejects(smoothStore(s, { maxDistance: 0.2, threads: 2, tile: 3, signal: c.signal, onProgress: function (d) { if (d > 0) c.abort(); } }), /stopped/);
+	assert.deepEqual(Array.from((await s.readTile(key, { fields: ["z"] })).z), Array.from(before.z));
+	assert.equal(s.manifest.edits, 0);
 });

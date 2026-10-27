@@ -241,3 +241,22 @@ test("a column-only edit keeps each node's box", async function () {
 	await store.addColumn("w", "f32", 1);
 	assert.equal(JSON.stringify(Object.keys(store.manifest.nodes).map(function (k) { return store.manifest.nodes[k].box; })), boxes);
 });
+
+test("setPositions moves points in world coordinates, through the store transform", async function () {
+	var { buildTiles: bt, openLas: ol, writeLas: wl } = await import("../../src/index.js");
+	var n = 2000, c = { count: n, x: new Float64Array(n), y: new Float64Array(n), z: new Float64Array(n), intensity: new Uint16Array(n) };
+	for (var i = 0; i < n; i++) { c.x[i] = 478000 + (i % 50) * 0.1; c.y[i] = 6771000 + Math.floor(i / 50) * 0.1; c.z[i] = 240; c.intensity[i] = i; }
+	var store = await bt(await ol(await wl(c, { scale: { x: 0.001, y: 0.001, z: 0.001 } })), { where: { memory: true }, tilePoints: 300 });
+	await store.transform({ m: [0, -1, 0, 1, 0, 0, 0, 0, 1], t: [10, 20, 5] });   // turned 90 degrees and moved
+	var key = Object.keys(store.manifest.nodes).filter(function (k) { return store.manifest.nodes[k].count > 3; })[0];
+	var before = await store.readTile(key, { fields: ["x", "y", "z", "intensity"] });
+	var idx = Uint32Array.from([0, 2]), x = Float64Array.from([before.x[0] + 0.25, before.x[2]]), y = Float64Array.from([before.y[0], before.y[2] - 0.5]), z = Float64Array.from([before.z[0] + 1, before.z[2]]);
+	await store.setPositions({ [key]: { index: idx, x: x, y: y, z: z } });
+	var after = await store.readTile(key, { fields: ["x", "y", "z", "intensity"] });
+	assert.ok(Math.abs(after.x[0] - x[0]) < 0.0011 && Math.abs(after.z[0] - z[0]) < 0.0011, after.x[0] + " vs " + x[0]);
+	assert.ok(Math.abs(after.y[2] - y[1]) < 0.0011);
+	assert.ok(Math.abs(after.x[1] - before.x[1]) < 1e-9, "an untouched point stays");
+	assert.deepEqual(Array.from(after.intensity), Array.from(before.intensity), "other fields stay");
+	await assert.rejects(store.setPositions({ [key]: { index: Uint32Array.from([2, 0]), x: x, y: y, z: z } }), /ascending/);
+	await assert.rejects(store.setPositions({ nope: { index: idx, x: x, y: y, z: z } }), /not in the store/);
+});
