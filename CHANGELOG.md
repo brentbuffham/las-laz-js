@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.16.1 (2026-10-27)
 
 Fixed:
 - mergeStores / splitStore on OPFS left their scratch LAS behind: its sync handle was still open, so
