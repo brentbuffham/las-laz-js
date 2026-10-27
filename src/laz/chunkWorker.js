@@ -146,6 +146,7 @@ function region(m) {
 		var transfer = [out.node.buffer, out.index.buffer];
 		if (out.gid || out.fid) transfer.push((out.gid || out.fid).buffer);
 		if (out.x && out.x.buffer && !out.kept) transfer.push(out.x.buffer, out.y.buffer, out.z.buffer);
+		if (out.value) transfer.push(out.value.buffer);
 		if (out.core) transfer.push(out.core.buffer);
 		if (out.win) transfer.push(out.win.hit.buffer, out.win.held.buffer);
 		port.post({ id: m.id, result: out }, transfer);

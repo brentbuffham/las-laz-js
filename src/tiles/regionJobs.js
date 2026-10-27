@@ -21,6 +21,55 @@ import { findFacets } from "../facets/findFacets.js";
 import { facetOutline } from "../facets/outline.js";
 import { dedupeSelection } from "../filter/dedupe.js";
 import { denoisePoints } from "../ops/denoise.js";
+import { meanDistances } from "../ops/outliers.js";
+import { selectSparse } from "../ops/sparse.js";
+import { pointNormals } from "../ops/normals.js";
+
+// the core points of a region, in region order, and a per-point value of them (Float32) as { node, index, value }
+function coreValues(reg, L, a, value) {
+	var U = reg[AXES[a[0]]], V = reg[AXES[a[1]]], keep = [], j;
+	for (j = 0; j < reg.count; j++) if (inCore(L.core, U[j], V[j])) keep.push(j);
+	var m = keep.length, out = { count: reg.count, node: new Uint32Array(m), index: new Uint32Array(m), value: new Float32Array(m) };
+	keep.forEach(function (p, q) { out.node[q] = reg.node[p]; out.index[q] = reg.index[p]; out.value[q] = value[p]; });
+	return out;
+}
+// the core points among a region selection, as { node, index }
+function coreSelection(reg, L, a, sel) {
+	var U = reg[AXES[a[0]]], V = reg[AXES[a[1]]], keep = [];
+	for (var q = 0; q < sel.length; q++) { var p = sel[q]; if (inCore(L.core, U[p], V[p])) keep.push(p); }
+	var out = { count: reg.count, node: new Uint32Array(keep.length), index: new Uint32Array(keep.length) };
+	keep.forEach(function (p, i) { out.node[i] = reg.node[p]; out.index[i] = reg.index[p]; });
+	return out;
+}
+
+/**
+ * One tile of selectOutliersStore: each core point's mean distance to its k nearest (the overlap gives it its
+ * neighbours across the seam), and the core's Welford sums for the cloud's mean and spread.
+ * @returns {Promise<{count, node, index, value: Float32Array, n: number, M1: number, M2: number}>}
+ */
+export async function outlierRegion(store, t) {
+	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t);
+	var r = reg.count > t.k ? meanDistances({ count: reg.count, x: reg.x, y: reg.y, z: reg.z }, t.k, t.onProgress) : { means: new Float64Array(reg.count).fill(NaN) };
+	var out = coreValues(reg, L, t.axes, r.means), n = 0, M1 = 0, M2 = 0, U = reg[AXES[t.axes[0]]], V = reg[AXES[t.axes[1]]];
+	// the sums from the Float64 means (the Float32 values are for keeping)
+	for (var q = 0; q < reg.count; q++) { var v = r.means[q]; if (!(v === v) || !inCore(L.core, U[q], V[q])) continue; n++; var d = v - M1; M1 += d / n; M2 += d * (v - M1); }
+	return Object.assign(out, { n: n, M1: M1, M2: M2 });
+}
+
+/** One tile of selectSparseStore: selectSparse on the region (an overlap of one radius makes it exact), its core points. */
+export async function sparseRegion(store, t) {
+	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t);
+	var sel = reg.count ? selectSparse({ count: reg.count, x: reg.x, y: reg.y, z: reg.z }, t.sparse) : new Uint32Array(0);
+	if (t.onProgress) t.onProgress(1, 1);
+	return coreSelection(reg, L, t.axes, sel);
+}
+
+/** One tile of roughnessStore: pointNormals' residual (each point's RMS distance from its neighbours' plane), its core points. */
+export async function roughRegion(store, t) {
+	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t);
+	var res = reg.count ? pointNormals({ count: reg.count, x: reg.x, y: reg.y, z: reg.z }, Object.assign({}, t.normals, t.onProgress ? { onProgress: t.onProgress } : {})).residual : new Float32Array(0);
+	return coreValues(reg, L, t.axes, res);
+}
 
 var AXES = ["x", "y", "z"];
 
@@ -118,7 +167,8 @@ export async function smoothRegion(store, t) {
 }
 
 /** The region jobs by name (the worker's op). */
-export var REGION_JOBS = { fragmentsRegion: fragmentsRegion, facetsRegion: facetsRegion, dedupeRegion: dedupeRegion, smoothRegion: smoothRegion };
+export var REGION_JOBS = { fragmentsRegion: fragmentsRegion, facetsRegion: facetsRegion, dedupeRegion: dedupeRegion, smoothRegion: smoothRegion,
+	outlierRegion: outlierRegion, sparseRegion: sparseRegion, roughRegion: roughRegion };
 
 /**
  * One tile of findFacetsParallel on a store.

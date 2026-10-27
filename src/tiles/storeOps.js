@@ -15,6 +15,17 @@
 //   them in batches of batchPoints once every tile is read. A run over
 //   more than one batch is not one edit; an abort before the writes
 //   leaves the store untouched.
+// - selectOutliersStore: selectOutliers' rule (PDAL statistical: a
+//   point's mean distance to its k nearest above the cloud's mean plus
+//   multiplier standard deviations); each tile measures its core points
+//   with an overlap for their neighbours, the cloud's mean and spread
+//   come from every tile's Welford sums combined, then one threshold.
+// - selectSparseStore: selectSparse (fewer than minNeighbours within
+//   radius), exact with an overlap of one radius.
+// - roughnessStore: each point's plane residual (pointNormals), per node
+//   and, with column, written to the store as an added f32 column.
+// The selections are the store's own ({ deletes, count, tiles }), for
+// store.deletePoints.
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
@@ -118,4 +129,97 @@ export async function smoothStore(store, opts) {
 		await blobs.close();
 	}
 	return { moved: moved, sigma: sigma, batches: batches, tiles: L.tiles.length, threads: ran };
+}
+
+// per node arrays from region results { node, index, value }
+function perNode(L, Arr, fill) { return L.nodes.counts.map(function (c) { var a = new Arr(c); if (fill !== undefined) a.fill(fill); return a; }); }
+function selectionOf(store, L, lists) {
+	var sel = { deletes: store.manifest.deletes, count: 0, tiles: {} };
+	lists.forEach(function (l, i) { if (!l.length) return; var a = Uint32Array.from(l).sort(); sel.tiles[L.nodes.keys[i]] = a; sel.count += a.length; });
+	return sel;
+}
+
+/**
+ * selectOutliers over a whole tile store.
+ * @param {object} store - an open TileStore.
+ * @param {{k?: number, multiplier?: number, overlap?: number, threads?: number, tile?: number, tilePoints?: number,
+ *   onProgress?: function(number, number), signal?: AbortSignal}} [opts] - k 8, multiplier 2 (PDAL's); overlap
+ *   (default 30 point spacings, at least 0.5): enough for a core point's k nearest across the seam.
+ * @returns {Promise<{selection: object, count: number, mean: number, sd: number, threshold: number, tiles: number, threads: number}>}
+ */
+export async function selectOutliersStore(store, opts) {
+	var o = opts || {}, k = o.k === undefined ? 8 : o.k, mult = o.multiplier === undefined ? 2 : o.multiplier;
+	if (!(Number.isInteger(k) && k >= 1)) throw bad("k must be a whole number >= 1, not " + JSON.stringify(o.k));
+	if (!(typeof mult === "number" && isFinite(mult))) throw bad("multiplier must be a finite number, not " + JSON.stringify(o.multiplier));
+	var threads = await common(store, o, "selectOutliersStore");
+	var L0 = await layout(store, Object.assign({}, o, { tile: 1e9 }), 1, 0);   // the spacing, for the overlap
+	var M = o.overlap !== undefined ? o.overlap : Math.max(0.5, 30 * (L0.spacing > 0 ? L0.spacing : 0.05));
+	var L = await layout(store, o, threads, M);
+	if (!L.n) return { selection: selectionOf(store, L, []), count: 0, mean: NaN, sd: NaN, threshold: NaN, tiles: 0, threads: 1 };
+	var means = perNode(L, Float32Array, NaN), n = 0, M1 = 0, M2 = 0;
+	var ran = await runAll(store, L, o, threads, "outlierRegion", function (t) {
+		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, k: k };
+	}, function (r) {
+		for (var q = 0; q < r.node.length; q++) means[r.node[q]][r.index[q]] = r.value[q];
+		if (!r.n) return;
+		// Chan's combination of two runs' mean and squared deviations
+		var nn = n + r.n, d = r.M1 - M1;
+		M1 += d * r.n / nn; M2 += r.M2 + d * d * n * r.n / nn; n = nn;
+	});
+	var sd = n > 1 ? Math.sqrt(M2 / (n - 1)) : NaN, threshold = M1 + mult * sd, lists = means.map(function () { return []; });
+	means.forEach(function (a, i) { for (var j = 0; j < a.length; j++) if (a[j] > threshold) lists[i].push(j); });
+	var sel = selectionOf(store, L, lists);
+	return { selection: sel, count: sel.count, mean: M1, sd: sd, threshold: threshold, tiles: L.tiles.length, threads: ran };
+}
+
+/**
+ * selectSparse over a whole tile store.
+ * @param {object} store - an open TileStore.
+ * @param {{radius: number, minNeighbours?: number, xy?: boolean, threads?: number, tile?: number, tilePoints?: number,
+ *   onProgress?: function(number, number), signal?: AbortSignal}} opts - as selectSparse.
+ * @returns {Promise<{selection: object, count: number, tiles: number, threads: number}>}
+ */
+export async function selectSparseStore(store, opts) {
+	var o = opts || {};
+	if (!(typeof o.radius === "number" && o.radius > 0 && isFinite(o.radius))) throw bad("radius must be a distance > 0, not " + JSON.stringify(o.radius));
+	var threads = await common(store, o, "selectSparseStore");
+	var L = await layout(store, o, threads, o.radius * 1.01);
+	var lists = L.n ? L.nodes.keys.map(function () { return []; }) : [];
+	var ran = L.n ? await runAll(store, L, o, threads, "sparseRegion", function (t) {
+		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, sparse: { radius: o.radius, minNeighbours: o.minNeighbours, xy: o.xy } };
+	}, function (r) { for (var q = 0; q < r.node.length; q++) lists[r.node[q]].push(r.index[q]); }) : 1;
+	var sel = selectionOf(store, L, lists);
+	return { selection: sel, count: sel.count, tiles: L.n ? L.tiles.length : 0, threads: ran };
+}
+
+/**
+ * Roughness over a whole tile store: each point's RMS distance from the plane of its neighbours (pointNormals'
+ * residual; NaN where they do not span a plane).
+ * @param {object} store - an open TileStore.
+ * @param {{k?: number, maxDistance: number, column?: string, threads?: number, tile?: number, tilePoints?: number,
+ *   onProgress?: function(number, number), signal?: AbortSignal}} opts - k 16; column: write it to the store as an
+ *   added f32 column (where its edits run: a Worker for OPFS).
+ * @returns {Promise<{byTile: object, tiles: number, threads: number}>} byTile { key: Float32Array }, the node's point order
+ */
+export async function roughnessStore(store, opts) {
+	var o = opts || {};
+	if (!(typeof o.maxDistance === "number" && o.maxDistance > 0 && isFinite(o.maxDistance))) throw bad("maxDistance must be a distance > 0, not " + JSON.stringify(o.maxDistance));
+	var threads = await common(store, o, "roughnessStore");
+	var L = await layout(store, o, threads, o.maxDistance * 1.01);
+	if (!L.n) return { byTile: {}, tiles: 0, threads: 1 };
+	var rough = perNode(L, Float32Array, NaN);
+	var ran = await runAll(store, L, o, threads, "roughRegion", function (t) {
+		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, normals: { k: o.k, maxDistance: o.maxDistance } };
+	}, function (r) { for (var q = 0; q < r.node.length; q++) rough[r.node[q]][r.index[q]] = r.value[q]; });
+	var byTile = {};
+	L.nodes.keys.forEach(function (key, i) { byTile[key] = rough[i]; });
+	if (o.column) {
+		var has = store.manifest.columns.filter(function (c) { return c.name === o.column; })[0];
+		if (has && has.type !== "f32") throw bad("column " + o.column + " is taken by an added " + has.type + " column; give another name");
+		if (!has) await store.addColumn(o.column, "f32", 0);
+		var sel = { deletes: store.manifest.deletes, count: 0, tiles: {} };
+		Object.keys(byTile).forEach(function (key) { var idx = new Uint32Array(byTile[key].length); for (var j = 0; j < idx.length; j++) idx[j] = j; sel.tiles[key] = idx; sel.count += idx.length; });
+		await store.setColumn(sel, o.column, byTile);
+	}
+	return { byTile: byTile, tiles: L.tiles.length, threads: ran };
 }

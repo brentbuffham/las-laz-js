@@ -135,3 +135,30 @@ test("a smoothing run stopped mid-way leaves the store untouched", async functio
 	assert.deepEqual(Array.from((await s.readTile(key, { fields: ["z"] })).z), Array.from(before.z));
 	assert.equal(s.manifest.edits, 0);
 });
+
+test("stray points, sparse points and roughness over a store match the runs in memory, across the seams", async function () {
+	var { selectOutliers, selectSparse, pointNormals, selectOutliersStore, selectSparseStore, roughnessStore } = await import("../../src/index.js");
+	// a 10 x 10 m surface at 5 cm with a few hundred strays (some 0.5-2 m up) and a few lone points, at UTM scale
+	var xs = [], ys = [], zs = [], a = 11;
+	function r() { a = (a * 16807) % 2147483647; return a / 2147483647; }
+	for (var x = 0; x < 10; x += 0.05) for (var y = 0; y < 10; y += 0.05) { xs.push(x + (r() - 0.5) * 0.01); ys.push(y + (r() - 0.5) * 0.01); zs.push(0.1 * Math.sin(x) + (r() - 0.5) * 0.004); }
+	for (var s = 0; s < 300; s++) { xs.push(r() * 10); ys.push(r() * 10); zs.push(0.5 + r() * 1.5); }
+	var n = xs.length, loc = { count: n, x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float64Array.from(zs) };
+	var w = { count: n, x: loc.x.map(function (v) { return v + E; }), y: loc.y.map(function (v) { return v + N; }), z: loc.z.map(function (v) { return v + H; }) };
+	var dir = fs.mkdtempSync(path.join(os.tmpdir(), "lazops-")); dirs.push(dir);
+	var st = await buildTiles(await openLas(await writeLas(w, { scale: { x: 0.0001, y: 0.0001, z: 0.0001 } })), { where: { dir: dir }, tilePoints: 3000, replace: true });
+	var o1 = await selectOutliersStore(st, { threads: 2, tile: 3 }), m1 = selectOutliers(loc, {});
+	assert.ok(o1.tiles >= 9 && m1.length > 250, o1.tiles + " tiles, " + m1.length + " in memory");
+	assert.ok(Math.abs(o1.count - m1.length) <= 2, o1.count + " vs " + m1.length);
+	var o2 = await selectSparseStore(st, { radius: 0.12, minNeighbours: 2, threads: 2, tile: 3 }), m2 = selectSparse(loc, { radius: 0.12, minNeighbours: 2 });
+	assert.equal(o2.count, m2.length);
+	var o3 = await roughnessStore(st, { maxDistance: 0.2, threads: 2, tile: 3, column: "rough" }), m3 = pointNormals(loc, { maxDistance: 0.2 }).residual;
+	var stored = [], mem = Array.from(m3).filter(function (v) { return v === v; }).sort(function (p, q) { return p - q; });
+	Object.keys(o3.byTile).forEach(function (k) { o3.byTile[k].forEach(function (v) { if (v === v) stored.push(v); }); });
+	stored.sort(function (p, q) { return p - q; });
+	assert.equal(stored.length, mem.length);
+	for (var q = 0; q < mem.length; q += 997) assert.ok(Math.abs(stored[q] - mem[q]) < 1e-4, "quantile " + q + ": " + stored[q] + " vs " + mem[q]);
+	assert.ok(st.manifest.columns.some(function (c) { return c.name === "rough" && c.type === "f32"; }));
+	await assert.rejects(selectSparseStore(st, {}), /radius/);
+	await assert.rejects(roughnessStore(st, {}), /maxDistance/);
+});

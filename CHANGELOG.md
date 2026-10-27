@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.17.0 (2026-10-27)
+
+New (for Kirra's Stray points, Sparse points and Roughness on stored clouds):
+- `selectOutliersStore(store, { k, multiplier })`: selectOutliers' rule (PDAL statistical) over a whole
+  tile store. Each work tile measures its core points' mean distance to their k nearest with an overlap
+  for their neighbours (default 30 point spacings, at least 0.5 m); the cloud's mean and spread are the
+  tiles' Welford sums combined (Chan), then one threshold. Returns the store's selection, and the mean,
+  sd and threshold.
+- `selectSparseStore(store, { radius, minNeighbours, xy })`: selectSparse, exact with an overlap of one
+  radius.
+- `roughnessStore(store, { maxDistance, k, column })`: each point's plane residual (pointNormals) per
+  node (`byTile`), and with `column` written to the store as an added f32 column.
+- `meanDistances(cols, k)` (internal, src/ops/outliers.js): selectOutliers' per-point means and sums.
+Tests: a UTM-scale store with 300 strays and lone points on 9+ tiles: the same outliers as in memory
+(within 2), the same sparse points, the same roughness values (RED with no overlap).
+
 ## 0.16.7 (2026-10-27)
 
 CI:
