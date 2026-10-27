@@ -729,7 +729,9 @@ for await (var t of store.readTiles(keys, { fields: ["x", "y", "z", "red", "gree
   every field and extra byte is kept.
 - **The build** streams the file and never holds the cloud: it counts points in a grid, cuts the
   cloud into chunks of `chunkPoints`, appends each record to its chunk, then builds each chunk's
-  octree on the worker pool. A grid cell still holding more than `chunkPoints` (one stray point far
+  octree on the worker pool. Every pass is on the workers: the LAZ decoding (several windows
+  ahead, two chunks a worker), sorting each window's records into their chunks, the chunk octrees
+  and the compression; the build's own thread only writes files. A grid cell still holding more than `chunkPoints` (one stray point far
   off stretches the grid; so does a dense spot by a scanner) is counted again on a finer grid below
   it, one more read each time, so no chunk is over `chunkPoints` unless its points cannot be split. Measured in Node: the peak stays about the same from 2 to
   16 million points (about 95 MB on one thread, about 280 MB with two workers, most of it the
@@ -765,13 +767,30 @@ for await (var t of store.readTiles(keys, { fields: ["x", "y", "z", "red", "gree
 
 ```js
 var sel = await store.selectBox({ minX, maxX, minY, maxY });      // also selectPolygon, selectClasses
+var sel = await store.selectScreen(view, lasso);                   // a shape drawn on the screen, in pixels
 var sel = await store.select(function (cols, tile) { return selectPolygon(cols, poly); }, { fields: ["x", "y"] });
 await store.deletePoints(sel);                                     // or keepPoints
+var copy = await cloneStore(store, { opfs: "scan-before-edits" }); // the node files as they are
 await store.setColumn(sel, "classification", 64);                  // a value, or { [key]: typed array }
 await store.addColumn("facet", "i32", -1);                         // written back as extra bytes
 await store.transform(T);                                          // makeTransform's { m, t }; no tile rewritten
 await store.writeLas(sink, { compress: true });                    // tile by tile through createLasWriter
 ```
+
+`selectBox`, `selectPolygon` and `selectScreen` judge each tile by its box first: a tile wholly
+outside the shape is not read, and one wholly inside is taken whole without being read, so only
+the tiles the shape's edge crosses are opened. `selectScreen(view, polygon, opts)` takes the view
+as `selectTiles` does (`viewProjection`, `width`, `height`, `localOrigin`) and the polygon in pixels
+from the canvas's top-left, y down (a mouse event's `offsetX` / `offsetY`). It selects every point
+the shape covers at any depth, between the near and far planes, through any camera: perspective
+or orthographic, plan, section or oblique. `selectScreen(cols, view, polygon)` is the same rule on
+points in memory. `store.select(fn, { classify })` takes your own box rule: `classify(box)`
+returns -1 to skip a tile, 1 to take it whole, or 0 to read it.
+
+`cloneStore(store, where, { replace, signal, onProgress })` copies a store to another place
+(memory, OPFS, a folder) without decoding anything: the node files with their added columns, the
+source header, then the manifest. It is refused if the store changed in another tab during the
+copy, and a cut-short copy leaves nothing behind.
 
 A selection is `{ deletes, count, tiles: { [key]: Uint32Array } }` (`combineTileSelections(a, b,
 "union" | "intersect" | "subtract")`). A delete or keep moves points, so a selection made before

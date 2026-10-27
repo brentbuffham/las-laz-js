@@ -11,6 +11,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { countOf, checkSelection, needColumn } from "./columns.js";
 import { makePolygonTest } from "./polygon.js";
+import { screenOf, toPixel } from "./screen.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -106,6 +107,28 @@ export function selectPolygon(cols, polygon, opts) {
 		}
 		if (test(x[i], y[i])) out[m++] = i;
 	}
+	return trim(out, m);
+}
+
+/**
+ * Indices of the points inside a shape drawn on the screen: each point through the camera (in Float64),
+ * kept when it is on screen (in front of the camera, between the near and far planes, inside the view)
+ * and its pixel is inside the polygon (selectPolygon's rule: even-odd, boundary, tolerance in pixels).
+ * Every point the shape covers, at any depth: not only the ones in front.
+ * @param {object} cols - point columns (x, y, z), in world coordinates.
+ * @param {{viewProjection: number[], width: number, height: number, localOrigin?: {x, y, z}}} view - as
+ *   selectTiles: viewProjection 16 numbers, column-major (Three.js camera.projectionMatrix ×
+ *   camera.matrixWorldInverse), in world coordinates minus localOrigin; width and height in pixels
+ * @param {number[]|TypedArray} polygon - pixels [x0, y0, x1, y1, ...] from the view's top-left, y down (a mouse
+ *   event's offsetX / offsetY), at least 3 vertices; a rectangle is 4
+ * @param {{boundary?: "touching"|"inside", tolerance?: number}} [opts]
+ * @returns {Uint32Array}
+ */
+export function selectScreen(cols, view, polygon, opts) {
+	var n = countOf(cols), s = screenOf(view), test = makePolygonTest(polygon, opts).test;
+	var x = needColumn(cols, "x", "selectScreen"), y = needColumn(cols, "y", "selectScreen"), z = needColumn(cols, "z", "selectScreen");
+	var px = new Float64Array(2), out = new Uint32Array(n), m = 0;
+	for (var i = 0; i < n; i++) if (toPixel(s, x[i], y[i], z[i], px) && test(px[0], px[1])) out[m++] = i;
 	return trim(out, m);
 }
 

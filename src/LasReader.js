@@ -242,28 +242,32 @@ LasReader.prototype._rawWindows = async function* (signal, windowSize) {
 	var pool = await this._pool(plan);
 	try {
 		var buf = !pool && plan.bufferSize ? new Uint8Array(plan.bufferSize) : null, w = 0;
-		for await (var bytes of windowBytes(plan, pool, buf, signal)) yield { bytes: bytes, firstRecord: plan.list[w++].firstRecord };
+		// owned: the window's own buffer (a pool decoded it), free to transfer; else reused by the next window
+		for await (var bytes of windowBytes(plan, pool, buf, signal)) yield { bytes: bytes, firstRecord: plan.list[w++].firstRecord, owned: !!pool };
 	} finally {
 		if (pool) pool.close();
 	}
 };
 
-// Each window's raw records in order. With a pool the next window is already
-// decoding while this one is used; without one, one buffer is reused.
+// Each window's raw records in order. With a pool the windows ahead are already decoding while
+// this one is used: enough of them for two chunks a worker (at most MAX_AHEAD windows); without
+// one, one buffer is reused.
+var MAX_AHEAD = 8;
 async function* windowBytes(plan, pool, buf, signal) {
-	var list = plan.list;
-	function fetch(i) {
-		var p = plan.parallel(list[i], pool);
+	var list = plan.list, ahead = [], next = 0, chunks = 0;
+	function fetch() {
+		var p = plan.parallel(list[next], pool);
 		p.catch(function () {});                 // a prefetch abandoned by an abort must not go unhandled
-		return p;
+		ahead.push({ p: p, chunks: list[next].chunks.length });
+		chunks += list[next++].chunks.length;
 	}
-	var next = pool && list.length ? fetch(0) : null;
 	for (var w = 0; w < list.length; w++) {
 		if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "read aborted");
 		if (!pool) { yield await plan.records(list[w], buf); continue; }
-		var current = next;
-		next = w + 1 < list.length ? fetch(w + 1) : null;
-		yield await current;
+		while (next < list.length && (next === w || (chunks < 2 * pool.size && ahead.length < MAX_AHEAD))) fetch();
+		var current = ahead.shift();
+		chunks -= current.chunks;
+		yield await current.p;
 	}
 }
 

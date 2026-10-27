@@ -1,7 +1,9 @@
 // test/tiles/buildParallel.test.js
 //==========================================================
 // buildTiles on the worker pool gives the same store, node for node
-// and byte for byte, as one thread: raw and compressed.
+// and byte for byte, as one thread: raw and compressed, from a LAS
+// and from a LAZ (decoded in the reader's pool, each window grouped by
+// chunk in the build's).
 //==========================================================
 /* prettier-ignore-file */
 import { test } from "node:test";
@@ -10,6 +12,7 @@ import { openLas } from "../../src/LasReader.js";
 import { buildTiles } from "../../src/tiles/build.js";
 import { createLazPool } from "../../src/laz/pool.js";
 import { tileLas } from "../helpers/tileFiles.js";
+import { writeLas } from "../../src/write/writeLas.js";
 
 async function blobs(store) {
 	var out = {};
@@ -27,6 +30,16 @@ test("threads 1 and 4 give the same store", { timeout: 120000 }, async function 
 		var a = await blobs(one), b = await blobs(four);
 		Object.keys(a).forEach(function (k) { assert.deepEqual(b[k], a[k], "node " + k + (compress ? " (compressed)" : "")); });
 	}
+});
+
+test("from a LAZ: threads 1 and 4 give the same store", { timeout: 120000 }, async function () {
+	var las = tileLas({ pointFormat: 3, n: 150000, seed: 22, span: 500 });
+	var laz = await writeLas(await (await openLas(las)).readPoints(), { compress: true, pointFormat: 3, chunkSize: 5000 });
+	var one = await buildTiles(await openLas(laz, { threads: 1 }), { where: { memory: true }, tilePoints: 2000, chunkPoints: 20000, threads: 1 });
+	var four = await buildTiles(await openLas(laz, { threads: 4 }), { where: { memory: true }, tilePoints: 2000, chunkPoints: 20000, threads: 4 });
+	assert.deepEqual(four.manifest.nodes, one.manifest.nodes);
+	var a = await blobs(one), b = await blobs(four);
+	Object.keys(a).forEach(function (k) { assert.deepEqual(b[k], a[k], "node " + k); });
 });
 
 test("pool.octree builds a chunk as buildChunkOctree does", { timeout: 60000 }, async function () {

@@ -9,10 +9,12 @@
 //     spot) is counted again on a finer grid below it, one more read a
 //     round, until every chunk fits or cannot split
 //  3. distribute: each record's bytes appended to its chunk's blob
+//     (with a pool, each window grouped by chunk in a worker, the
+//     windows written in order)
 //  4. tiles: each chunk's octree (octree.js), then the levels above
 //     the chunk roots sampled up to the root
 //     (compress: each node one LAZ chunk, packed by the chunk's worker;
-//     the chunk roots and the levels above them at the end)
+//     the chunk roots and the levels above them at the end, in the pool)
 //  6. the manifest, last: a store without one is an unfinished build
 // Abort or any error removes the partial store.
 //==========================================================
@@ -26,12 +28,15 @@ import { encodeTile, decodeTile } from "./tileFile.js";
 import { readManifest, writeManifest, fnv1a, LAYOUT_VERSION } from "./manifest.js";
 import { keyOf, parseKey, childKey, sampleParent, compareKeys as keyOrder, MAX_DEPTH, MIN_EDGE } from "./octree.js";
 import { chunkNodes, rawBox } from "./chunkNodes.js";
+import { makeLocator, GRID_DEPTH, SUB } from "./locate.js";
 import { TileStore, tileName, toBase64, HEAD_NAME, EVLRS_NAME } from "./TileStore.js";
 
 var SPACE_FACTOR = 1.15;   // the raw records once (distribute) and the tiles as they are written
 var PUTS = 8;   // node files written at once (OPFS: about 12 ms a file one by one, 4 ms eight at a time)
-var GRID = 128, GRID_DEPTH = 7;
+var GRID = 128;
 var BUFFER_BYTES = 65536;
+var BUCKETS = 4;   // distribute windows grouped in the pool at once
+var plans = 0;   // a build's id for the pool's workers (each keeps the build's locator)
 var READ_WINDOW = 16 * 1048576;   // the build's own read window (the reader's default is 64 MB): several LAZ chunks, so they decode in parallel
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
@@ -86,44 +91,6 @@ export function planChunks(counts, chunkPoints, levels, base) {
 	}
 	visit(0, 0, 0, 0);
 	return out.sort(function (a, b) { return keyOrder(a.key, b.key); });
-}
-
-var SUB = 3;   // a refinement counts an over-full chunk on an 8³ grid, three levels below it
-
-// Which chunk a raw point goes to: a 128³ table over the cube, and below any cell holding deeper
-// chunks an 8³ table of its own; an entry is a chunk index, -1 (no chunk), or -2 - r (table r)
-function makeLocator(cube, chunks) {
-	var refs = [];
-	function table(d, x, y, z, levels) {
-		var n = Math.pow(2, levels);
-		refs.push({ d: d, x: x, y: y, z: z, levels: levels, n: n, t: new Int32Array(n * n * n).fill(-1) });
-		return refs.length - 1;
-	}
-	function place(r, k, ci) {
-		var ref = refs[r], D = ref.d + ref.levels, n = ref.n;
-		if (k[0] <= D) {
-			var span = Math.pow(2, D - k[0]), x0 = k[1] * span - ref.x * n, y0 = k[2] * span - ref.y * n, z0 = k[3] * span - ref.z * n;
-			for (var z = z0; z < z0 + span; z++) for (var y = y0; y < y0 + span; y++) for (var x = x0; x < x0 + span; x++) ref.t[x + n * (y + n * z)] = ci;
-			return;
-		}
-		var f = Math.pow(2, k[0] - D), cx = Math.floor(k[1] / f), cy = Math.floor(k[2] / f), cz = Math.floor(k[3] / f);
-		var at = (cx - ref.x * n) + n * ((cy - ref.y * n) + n * (cz - ref.z * n)), v = ref.t[at], sub;
-		if (v <= -2) sub = -2 - v;
-		else { sub = table(D, cx, cy, cz, SUB); ref.t[at] = -2 - sub; }
-		place(sub, k, ci);
-	}
-	table(0, 0, 0, 0, GRID_DEPTH);
-	chunks.forEach(function (c, ci) { place(0, parseKey(c.key), ci); });
-	function cellOf(v, m, e, N) { var k = Math.floor((v - m) / e); return k < 0 ? 0 : k >= N ? N - 1 : k; }
-	return function locate(X, Y, Z) {
-		var ref = refs[0];
-		for (;;) {
-			var D = ref.d + ref.levels, N = Math.pow(2, D), e = cube.edge / N, n = ref.n;
-			var v = ref.t[(cellOf(X, cube.min[0], e, N) - ref.x * n) + n * ((cellOf(Y, cube.min[1], e, N) - ref.y * n) + n * (cellOf(Z, cube.min[2], e, N) - ref.z * n))];
-			if (v > -2) return v;
-			ref = refs[-2 - v];
-		}
-	};
 }
 
 // Split the chunks over chunkPoints that the octree could still split: one more read counts
@@ -230,8 +197,12 @@ export async function buildTiles(las, opts) {
 		var chunks = await refineChunks(las, cube, len, planChunks(counted.counts, chunkPoints), chunkPoints, signal);
 		counted = null;
 		if (typeof opts._chunks === "function") opts._chunks(chunks.map(function (c) { return { key: c.key, count: c.count }; }));   // tests
+		if (threads !== 1 && chunks.length >= 2) {
+			var want = Math.min(threads || await defaultThreads(), chunks.length);
+			if (want >= 2) pool = await createLazPool(want);   // null when workers cannot start: this thread
+		}
 		// 3. distribute
-		await distribute(las, cube, len, chunks, backend, open, signal, phase(onProgress, "distribute", h.pointCount));
+		await distribute(las, cube, len, chunks, backend, open, signal, phase(onProgress, "distribute", h.pointCount), pool);
 		// 4. tiles
 		var nodes = {}, sizes = {}, rawKeys = new Set();
 		// a node's file; n: { count, records, packed, box (raw ints) } or raw records
@@ -246,10 +217,6 @@ export async function buildTiles(las, opts) {
 		};
 		var tiles = phase(onProgress, "tiles", chunks.length + 1);
 		var tileOpts = { tilePoints: tilePoints, maxDepth: MAX_DEPTH, minEdge: MIN_EDGE };
-		if (threads !== 1 && chunks.length >= 2) {
-			var want = Math.min(threads || await defaultThreads(), chunks.length);
-			if (want >= 2) pool = await createLazPool(want);   // null when workers cannot start: this thread
-		}
 		// at most 2 x pool.size chunks in flight; each settles (its node files written, PUTS at a time: OPFS
 		// spends most of a small write waiting) in chunk order on one chain, so the pool is fed while the
 		// files of earlier chunks are still being written
@@ -280,11 +247,16 @@ export async function buildTiles(las, opts) {
 		await upperLevels(chunks, cube, len, backend, put);
 		// 5. compress what is still raw: the chunk roots and the levels above them (few nodes)
 		if (laz) {
-			var pack = createChunkCompressor(laz, len), rest = Array.from(rawKeys).sort(keyOrder);
-			for (var k = 0; k < rest.length; k++) {
+			var pack = pool ? null : createChunkCompressor(laz, len), rest = Array.from(rawKeys).sort(keyOrder);
+			var packOne = async function (key) {
+				var t = decodeTile(await backend.get(tileName(key, 0)), [], key), box = rawBox(t.records, len), packed;
+				if (pack) packed = pack(t.records, 0, t.count);
+				else packed = (await pool.compress({ vlr: laz, recordLength: len, records: t.records.slice().buffer, counts: [t.count] })).bytes;
+				await put(key, { count: t.count, records: packed, packed: true, box: box });
+			};
+			for (var k = 0; k < rest.length; k += pool ? 2 * pool.size : 1) {
 				aborted(signal);
-				var t = decodeTile(await backend.get(tileName(rest[k], 0)), [], rest[k]);
-				await put(rest[k], { count: t.count, records: pack(t.records, 0, t.count), packed: true, box: rawBox(t.records, len) });
+				await Promise.all(rest.slice(k, k + (pool ? 2 * pool.size : 1)).map(packOne));
 			}
 		}
 		tiles.finish();
@@ -316,7 +288,7 @@ export async function buildTiles(las, opts) {
 
 // OPFS: refuse up front when the browser says the build will not fit (the distribute pass holds every record
 // raw before the tiles are written); a write past the quota later is NO_SPACE too, and the partial store goes
-async function roomFor(where, need, points) {
+export async function roomFor(where, need, points) {
 	if (!where || where.opfs === undefined || typeof navigator === "undefined" || !navigator.storage || typeof navigator.storage.estimate !== "function") return;
 	var e;
 	try { e = await navigator.storage.estimate(); } catch (x) { return; }
@@ -368,8 +340,14 @@ async function countPass(las, cube, len, signal, progress) {
 	return { counts: counts, outside: outside, min: min, max: max };
 }
 
-async function distribute(las, cube, len, chunks, backend, open, signal, progress) {
-	var locate = makeLocator(cube, chunks);
+// A chunk's run of records: through its buffer when small, else flushed and written as it is
+function append(out, bytes, cap) {
+	if (out.fill + bytes.length <= cap) { out.buf.set(bytes, out.fill); out.fill += bytes.length; if (out.fill === cap) { out.ap.write(out.buf); out.fill = 0; } return; }
+	if (out.fill) { out.ap.write(out.buf.subarray(0, out.fill)); out.fill = 0; }
+	if (bytes.length < cap) { out.buf.set(bytes); out.fill = bytes.length; } else out.ap.write(bytes);
+}
+
+async function distribute(las, cube, len, chunks, backend, open, signal, progress, pool) {
 	var cap = Math.max(1, Math.floor(BUFFER_BYTES / len)) * len, outs = [];
 	for (var i = 0; i < chunks.length; i++) {
 		var ap = await backend.appender("build/" + chunks[i].key + ".rec");
@@ -377,6 +355,40 @@ async function distribute(las, cube, len, chunks, backend, open, signal, progres
 		outs.push({ ap: ap, buf: new Uint8Array(cap), fill: 0 });
 	}
 	var done = 0;
+	if (pool || chunks.length === 1) {
+		// one chunk: each window as it is; a pool: each window grouped by chunk in a worker, BUCKETS at once,
+		// written in window order (so each chunk's records stay in file order)
+		var plan = ++plans, keys = chunks.map(function (c) { return c.key; }), inflight = [];
+		var write = async function (job) {
+			var g = await job, o = 0;
+			for (var q = 0; q < g.runs.length; q += 2) {
+				var size = g.runs[q + 1] * len;
+				append(outs[g.runs[q]], g.bytes.subarray(o, o + size), cap);
+				o += size;
+			}
+			done += g.bytes.length / len;
+			progress.tick(done);
+		};
+		try {
+			for await (var win of las._rawWindows(signal, READ_WINDOW)) {
+				var bytes = win.bytes, job;
+				if (!pool) job = Promise.resolve({ bytes: bytes, runs: [0, bytes.length / len] });
+				else {
+					if (!win.owned || bytes.byteOffset || bytes.byteLength !== bytes.buffer.byteLength) bytes = bytes.slice();
+					job = pool.bucket({ records: bytes.buffer, recordLength: len, cube: cube, chunks: keys, plan: plan });
+					job.catch(function () {});   // awaited in order below; an abort must not leave it unhandled
+				}
+				if (!pool) { await write(job); continue; }
+				inflight.push(job);
+				if (inflight.length >= BUCKETS) await write(inflight.shift());
+			}
+			while (inflight.length) await write(inflight.shift());
+		} finally {
+			inflight.length = 0;
+		}
+		return closeAll(outs, open, progress);
+	}
+	var locate = makeLocator(cube, chunks);
 	for await (var w of las._rawWindows(signal, READ_WINDOW)) {
 		var r = w.bytes, v = new DataView(r.buffer, r.byteOffset, r.byteLength);
 		for (var p = 0; p < r.length; p += len) {
@@ -389,6 +401,10 @@ async function distribute(las, cube, len, chunks, backend, open, signal, progres
 		done += r.length / len;
 		progress.tick(done);
 	}
+	return closeAll(outs, open, progress);
+}
+
+async function closeAll(outs, open, progress) {
 	for (var j = 0; j < outs.length; j++) {
 		if (outs[j].fill) outs[j].ap.write(outs[j].buf.subarray(0, outs[j].fill));
 		await outs[j].ap.close();

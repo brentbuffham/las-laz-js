@@ -171,6 +171,14 @@ export async function createLazPool(n, nodeUrl) {
 			});
 		},
 		/**
+		 * One window of a tile build's distribute pass grouped by chunk (src/tiles/locate.js), its records transferred.
+		 * @param {{records: ArrayBuffer, recordLength: number, cube: object, chunks: string[], plan: number}} task - plan: the build's id (the worker keeps its locator)
+		 * @returns {Promise<{bytes: Uint8Array, runs: number[]}>}
+		 */
+		bucket: function (task) {
+			return run(Object.assign({ op: "bucket" }, task), [task.records], function (m) { return { bytes: new Uint8Array(m.records), runs: m.runs }; });
+		},
+		/**
 		 * findFragments on one tile's points (src/fragments/parallel.js), the columns transferred.
 		 * onProgress(share of the tile done).
 		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean, opts: object, normal?: ArrayBuffer, residual?: ArrayBuffer}} task

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.18.0 (2026-10-28)
+
+New (for Kirra's open items: polygon pruning, the 3D screen-shape selection, cloneStore, buildTiles threads):
+- `store.selectScreen(view, polygon, { boundary, tolerance })` and `selectScreen(cols, view, polygon)`: the
+  points inside a shape drawn on the screen, through any camera (perspective or orthographic; plan, section,
+  oblique). The view is selectTiles' (`viewProjection`, `width`, `height`, `localOrigin`); the polygon is in
+  pixels from the canvas's top-left, y down (a mouse event's offsetX / offsetY). Every point the shape covers
+  at any depth, between the near and far planes.
+- Pruning by tile box in `selectBox`, `selectPolygon` and `selectScreen` on a store: a tile wholly outside the
+  shape is not read; one wholly inside is taken whole without being read; only tiles the edge crosses are
+  opened. A lasso over a 400k-point store read 92 of 341 tiles (polygon) and 70 of 341 (screen), where before
+  every tile under the polygon's bounding box was read (and every tile, for a screen shape). The verdict
+  keeps a margin past the tolerance and float rounding, so the points are the same as reading every tile.
+- `store.select(fn, { classify })`: your own box rule (-1 skip, 1 take whole, 0 read).
+- `cloneStore(store, where, { replace, signal, onProgress })`: a copy of a store elsewhere (memory, OPFS, a
+  folder), its files as they are (nothing decoded), the manifest last; run in the store's edit queue, refused
+  if the store changed in another tab during the copy; a cut-short copy leaves nothing.
+Faster (buildTiles):
+- The distribute pass groups each window's records by chunk on the worker pool (op "bucket",
+  src/tiles/locate.js); the build's thread only appends.
+- The reader decodes several windows ahead (two chunks a worker, at most 8 windows), not one: a LAZ pass
+  went from 2.7 to 2.0 s on 22 M points (16 workers).
+- The levels above the chunk roots are compressed on the pool.
+- Measured, 22 M-point LAZ (376 MB), compressed store: Node to a folder 14.6 s → 10.9 s; Chrome to OPFS
+  25.9 s → 21.0 s (distribute 9.0 → 4.8 s). What is left in Chrome is OPFS opening one file a tile: about
+  2 ms each (4 with the flush), serialised by the browser whatever thread asks (16 workers writing at once
+  were no faster), about 8 s of this build. To memory the same build takes 11.7 s.
+Tests: the store selections against the per-point rule on every tile (concave lasso, tolerance, "inside",
+Z limits, a rotated store; perspective, the camera inside the cloud, slanted orthographic), fewer tiles
+read; selectScreen against a projection written in the test; a top-down orthographic rectangle equals the
+box below it; rectAgainstPolygon against sampled points; cloneStore (raw and compressed, a folder opened
+again, edits stay apart, refusals, abort); buildTiles from a LAZ on 1 and 4 threads byte for byte.
+
 ## 0.17.0 (2026-10-27)
 
 New (for Kirra's Stray points, Sparse points and Roughness on stored clouds):

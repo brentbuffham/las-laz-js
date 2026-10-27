@@ -22,8 +22,10 @@ import { decodeRecords, recordFields, FIELD_TYPES } from "../read/decodeRecords.
 import { encodeRecords } from "../write/encodeRecords.js";
 import { createChunkCompressor } from "../laz/compressChunk.js";
 import { EXTRA_TYPES } from "../format/ExtraBytes.js";
-import { selectBox as boxOf, selectPolygon as polygonOf, selectClasses as classesOf, unionSelections, intersectSelections, subtractSelections } from "../ops/select.js";
+import { selectBox as boxOf, selectPolygon as polygonOf, selectScreen as screenSel, selectClasses as classesOf, unionSelections, intersectSelections, subtractSelections } from "../ops/select.js";
 import { checkTransform } from "../ops/transform.js";
+import { makePolygonTest, rectAgainstPolygon } from "../ops/polygon.js";
+import { screenOf, boxOnScreen } from "../ops/screen.js";
 import { writeManifest, readManifest } from "./manifest.js";
 import { encodeTile, COLUMN_TYPES } from "./tileFile.js";
 import { tileName } from "./TileStore.js";
@@ -47,22 +49,48 @@ function meets(nb, box) {
 	return nb.maxX >= lo("minX") && nb.minX <= hi("maxX") && nb.maxY >= lo("minY") && nb.minY <= hi("maxY") && nb.maxZ >= lo("minZ") && nb.minZ <= hi("maxZ");
 }
 
+// A box's slack for pruning: rounding in a point's world coordinates (scale, offset, transform)
+// cannot carry it this far past the node's box
+function slack(nb) {
+	return 1e-9 * (1 + Math.max(Math.abs(nb.minX), Math.abs(nb.maxX), Math.abs(nb.minY), Math.abs(nb.maxY), Math.abs(nb.minZ), Math.abs(nb.maxZ)));
+}
+
+// Where a node's box lies against limits on one axis (undefined: none): -1 clear of them, 1 within, 0 across
+function axisAgainst(lo, hi, min, max, e) {
+	if (min === undefined || min === null) min = -Infinity;
+	if (max === undefined || max === null) max = Infinity;
+	if (hi < min || lo > max) return -1;
+	return lo >= min + e && hi <= max - e ? 1 : 0;
+}
+
 /**
  * A selection across the store: fn picks points tile by tile.
  * @param {object} store
  * @param {function(object, {key: string, count: number, box: object}): (Uint32Array|null)} fn
- * @param {{fields?: string[], box?: object}} [opts] - only tiles whose box (moved by the transform) meets box
+ * @param {{fields?: string[], box?: object, classify?: function(object): number}} [opts] - box: only tiles
+ *   whose box (moved by the transform) meets it; classify(box): -1 for a tile none of whose points fn
+ *   would pick (skipped), 1 for one all of whose points it would (taken whole, not read), 0 to read it
  * @returns {Promise<{deletes: number, count: number, tiles: object}>}
  */
 export async function select(store, fn, opts) {
 	opts = opts || {};
 	if (typeof fn !== "function") throw bad("select needs a function (cols, tile) -> Uint32Array or null");
+	if (opts.classify !== undefined && typeof opts.classify !== "function") throw bad("classify must be a function (box) -> -1, 0 or 1");
 	var m = store.manifest, keys = Object.keys(m.nodes).sort(keyOrder), out = { deletes: m.deletes, count: 0, tiles: {} };
 	for (var i = 0; i < keys.length; i++) {
 		var node = m.nodes[keys[i]];
 		if (!node.count) continue;
 		var nb = nodeWorldBox(m, keys[i]);
 		if (opts.box && !meets(nb, opts.box)) continue;
+		var verdict = opts.classify ? opts.classify(nb) : 0;
+		if (verdict < 0) continue;
+		if (verdict > 0) {
+			var all = new Uint32Array(node.count);
+			for (var a = 0; a < all.length; a++) all[a] = a;
+			out.tiles[keys[i]] = all;
+			out.count += all.length;
+			continue;
+		}
 		var cols = await store.readTile(keys[i], { fields: opts.fields || ["x", "y", "z"] });
 		var picked = fn(cols, { key: keys[i], count: node.count, box: nb });
 		if (picked && picked.length) { out.tiles[keys[i]] = picked instanceof Uint32Array ? picked : Uint32Array.from(picked); out.count += picked.length; }
@@ -74,12 +102,19 @@ export async function select(store, fn, opts) {
 export function selectBox(store, box) {
 	if (!box || typeof box !== "object") throw bad("box must be an object { minX, maxX, minY, maxY, minZ, maxZ }");
 	var useZ = box.minZ !== undefined || box.maxZ !== undefined;
-	return select(store, function (cols) { return boxOf(cols, box); }, { fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: box });
+	return select(store, function (cols) { return boxOf(cols, box); }, {
+		fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: box,
+		classify: function (nb) {
+			var e = slack(nb), v = Math.min(axisAgainst(nb.minX, nb.maxX, box.minX, box.maxX, e), axisAgainst(nb.minY, nb.maxY, box.minY, box.maxY, e));
+			return useZ ? Math.min(v, axisAgainst(nb.minZ, nb.maxZ, box.minZ, box.maxZ, e)) : v;
+		}
+	});
 }
 
-/** The points inside a polygon in XY (selectPolygon's options). */
+/** The points inside a polygon in XY (selectPolygon's options): a tile wholly inside taken without reading it. */
 export function selectPolygon(store, polygon, opts) {
 	if (!polygon || polygon.length < 6) throw bad("polygon must be [x0, y0, x1, y1, ...] with 3 or more vertices");
+	var shape = makePolygonTest(polygon, opts);
 	var b = { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity };
 	for (var i = 0; i + 1 < polygon.length; i += 2) {
 		b.minX = Math.min(b.minX, polygon[i]); b.maxX = Math.max(b.maxX, polygon[i]);
@@ -90,7 +125,32 @@ export function selectPolygon(store, polygon, opts) {
 	if (opts && opts.minZ !== undefined) b.minZ = opts.minZ;
 	if (opts && opts.maxZ !== undefined) b.maxZ = opts.maxZ;
 	var useZ = opts && (opts.minZ !== undefined || opts.maxZ !== undefined);
-	return select(store, function (cols) { return polygonOf(cols, polygon, opts); }, { fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: b });
+	return select(store, function (cols) { return polygonOf(cols, polygon, opts); }, {
+		fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: b,
+		classify: function (nb) {
+			var e = slack(nb), z = useZ ? axisAgainst(nb.minZ, nb.maxZ, opts.minZ, opts.maxZ, e) : 1;
+			if (z < 0) return -1;
+			var r = rectAgainstPolygon(shape.points, nb.minX, nb.minY, nb.maxX, nb.maxY, shape.tolerance + e);
+			return r < 0 ? -1 : Math.min(r, z);
+		}
+	});
+}
+
+/**
+ * The points inside a shape drawn on the screen (selectScreen's rule): every point it covers, at any
+ * depth. A tile wholly outside the view or the shape is not read; one wholly inside both is taken
+ * without reading it.
+ * @param {object} store
+ * @param {{viewProjection: number[], width: number, height: number, localOrigin?: {x, y, z}}} view - as selectTiles
+ * @param {number[]|TypedArray} polygon - pixels from the view's top-left, y down
+ * @param {{boundary?: "touching"|"inside", tolerance?: number}} [opts]
+ */
+export function selectScreen(store, view, polygon, opts) {
+	var s = screenOf(view), shape = makePolygonTest(polygon, opts), margin = shape.tolerance + 1e-6 * (1 + s.width + s.height);
+	return select(store, function (cols) { return screenSel(cols, view, polygon, opts); }, {
+		fields: ["x", "y", "z"],
+		classify: function (nb) { return boxOnScreen(s, nb, shape.points, margin); }
+	});
 }
 
 /** The points of some classes. */
@@ -152,7 +212,7 @@ function packOf(store) {
 }
 
 // Edits on one store run one at a time, in the order asked
-function queued(store, fn) {
+export function queued(store, fn) {
 	var run = (store._editing || Promise.resolve()).then(fn);
 	store._editing = run.catch(function () {});
 	return run;

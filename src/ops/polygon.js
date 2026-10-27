@@ -34,8 +34,9 @@ function checkPolygon(polygon) {
  * @param {{boundary?: string, tolerance?: number}} [opts] - boundary "touching" (default: points on the
  *   boundary are in) or "inside" (they are out); tolerance (default 0): within this distance of an edge
  *   or vertex is on the boundary.
- * @returns {{test: function(number, number): boolean, minX: number, maxX: number, minY: number, maxY: number}}
- *   test(x, y) decides a point (false outside the box at once); the box is the polygon's grown by tolerance.
+ * @returns {{test: function(number, number): boolean, minX: number, maxX: number, minY: number, maxY: number, points: Float64Array, tolerance: number}}
+ *   test(x, y) decides a point (false outside the box at once); the box is the polygon's grown by tolerance;
+ *   points: the polygon checked and copied.
  */
 export function makePolygonTest(polygon, opts) {
 	if (opts === undefined || opts === null) opts = {};
@@ -79,5 +80,45 @@ export function makePolygonTest(polygon, opts) {
 		}
 		return inside;
 	}
-	return { test: test, minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+	return { test: test, minX: minX, maxX: maxX, minY: minY, maxY: maxY, points: p, tolerance: tol };
+}
+
+/**
+ * Where a rectangle lies against a polygon (even-odd), for pruning: -1 when no point of it can be
+ * selected, 1 when every point of it is, 0 when it must be decided point by point. Decided only when
+ * no edge comes within margin of the rectangle (then the rectangle is all on one side, and every
+ * point in it is further than margin from the boundary): margin is the test's tolerance and a little
+ * more, so a point's boundary and crossing tests cannot disagree with the rectangle's.
+ * @param {number[]|TypedArray} polygon - [x0, y0, ...], checked (makePolygonTest)
+ * @param {number} minX
+ * @param {number} minY
+ * @param {number} maxX
+ * @param {number} maxY
+ * @param {number} margin
+ * @returns {-1|0|1}
+ */
+export function rectAgainstPolygon(polygon, minX, minY, maxX, maxY, margin) {
+	var p = polygon, n = p.length / 2;
+	var x0 = minX - margin, y0 = minY - margin, x1 = maxX + margin, y1 = maxY + margin;
+	for (var i = 0, j = n - 1; i < n; j = i++) if (segmentMeetsRect(p[2 * j], p[2 * j + 1], p[2 * i], p[2 * i + 1], x0, y0, x1, y1)) return 0;
+	// clear of every edge: the centre's side is the rectangle's
+	var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, inside = false;
+	for (var a = 0, b = n - 1; a < n; b = a++) {
+		var ax = p[2 * b], ay = p[2 * b + 1], bx = p[2 * a], by = p[2 * a + 1];
+		if ((by > cy) !== (ay > cy) && cx < (ax - bx) * (cy - by) / (ay - by) + bx) inside = !inside;
+	}
+	return inside ? 1 : -1;
+}
+
+// Does the segment (ax, ay)-(bx, by) meet the rectangle (closed)? Liang-Barsky clipping
+function segmentMeetsRect(ax, ay, bx, by, x0, y0, x1, y1) {
+	var t0 = 0, t1 = 1, dx = bx - ax, dy = by - ay;
+	var P = [-dx, dx, -dy, dy], Q = [ax - x0, x1 - ax, ay - y0, y1 - ay];
+	for (var k = 0; k < 4; k++) {
+		if (P[k] === 0) { if (Q[k] < 0) return false; continue; }
+		var r = Q[k] / P[k];
+		if (P[k] < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+		else { if (r < t0) return false; if (r < t1) t1 = r; }
+	}
+	return true;
 }

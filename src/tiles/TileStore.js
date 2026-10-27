@@ -229,6 +229,8 @@ TileStore.prototype.select = editing("select");
 TileStore.prototype.selectBox = editing("selectBox");
 /** The points inside an XY polygon (selectPolygon's options). @function */
 TileStore.prototype.selectPolygon = editing("selectPolygon");
+/** The points inside a shape drawn on the screen (selectScreen's rule). @function */
+TileStore.prototype.selectScreen = editing("selectScreen");
 /** The points of some classes. @function */
 TileStore.prototype.selectClasses = editing("selectClasses");
 /** Delete the selected points. @function @returns {Promise<{removed: number}>} */

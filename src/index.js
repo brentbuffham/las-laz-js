@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.17.0";
+export var VERSION = "0.18.0";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -22,7 +22,7 @@ export { dedupe, dedupeSelection } from "./filter/dedupe.js";
 export { buildIndex } from "./index/grid.js";
 export { pointsInRadius, nearestPoint, pointsNearRay } from "./index/query.js";
 export { nearestPoints } from "./index/knn.js";
-export { selectBox, selectPolygon, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
+export { selectBox, selectPolygon, selectScreen, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
 export { keepPoints, removePoints, splitPoints, mergePoints } from "./ops/apply.js";
 export { makeTransform, transformPoints } from "./ops/transform.js";
 export { interleavePositions } from "./ops/interleave.js";
@@ -37,6 +37,7 @@ export { alignCloud } from "./register/align.js";
 export { alignStores, storeSample } from "./tiles/align.js";
 export { dedupeStore, smoothStore, selectOutliersStore, selectSparseStore, roughnessStore } from "./tiles/storeOps.js";
 export { mergeStores, splitStore } from "./tiles/merge.js";
+export { cloneStore } from "./tiles/clone.js";
 export { poleOf, orientationOf, poleFromOrientation } from "./facets/orientation.js";
 export { findFacets } from "./facets/findFacets.js";
 export { findFacetsParallel } from "./facets/parallel.js";
