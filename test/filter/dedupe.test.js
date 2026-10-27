@@ -64,7 +64,7 @@ test("dedupe handles 2 million points in 2D and 3D in a few seconds", { timeout:
 	var ms = performance.now() - t;
 	// string-keyed grid: ~27,000 ms; the typed table: ~3,000 ms alone, up to ~10,000 ms with the
 	// suite's files running in parallel. Not timed under coverage (src instrumented, ~3x slower)
-	if (!process.env.NODE_V8_COVERAGE) assert.ok(ms < 20000, "2D + 3D took " + Math.round(ms) + " ms");
+	if (!(process.env.NODE_V8_COVERAGE || process.env.CI)) assert.ok(ms < 20000, "2D + 3D took " + Math.round(ms) + " ms");
 });
 
 test("dedupe moves every column, k values per point, with the kept points", function () {

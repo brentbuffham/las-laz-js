@@ -102,7 +102,7 @@ test("nearestPoints from far off the cloud's edge stops after a few rings", func
 		nearestPoints(ix, q, 16);
 		var t = performance.now(), got = nearestPoints(ix, q, 16), ms = performance.now() - t;
 		assert.deepEqual(Array.from(got.points), brute(c, q, 16, undefined, false, -1).map(function (w) { return w[1]; }), "q=" + q);
-		if (!process.env.NODE_V8_COVERAGE) assert.ok(ms < 30, "q=" + q + " took " + ms.toFixed(1) + " ms");
+		if (!(process.env.NODE_V8_COVERAGE || process.env.CI)) assert.ok(ms < 30, "q=" + q + " took " + ms.toFixed(1) + " ms");
 	});
 });
 

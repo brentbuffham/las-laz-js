@@ -135,7 +135,7 @@ test("onProgress climbs once to the total on a rough wall that revisits points",
 	assert.ok(calls.length <= 202, calls.length + " calls");
 });
 
-test("growth stays linear",{ skip: !!process.env.NODE_V8_COVERAGE }, function () {
+test("growth stays linear",{ skip: !!(process.env.NODE_V8_COVERAGE || process.env.CI) }, function () {
 	function time(side) {
 		var c = planesCloud({ planes: [{ centre: [0, 0, 0], dip: 5, dipDirection: 200, width: side, height: side }], spacing: 0.05, noise: 0.003, seed: 6 });
 		var n = pointNormals(c.cols, { k: 16, maxDistance: 0.2 });
@@ -149,7 +149,7 @@ test("growth stays linear",{ skip: !!process.env.NODE_V8_COVERAGE }, function ()
 
 // Rough ground (bumps bigger than the plane distance) makes many tiny attempts; their points must not
 // be regrown over and over (a real 2.4 M-point scan took 6.2 visits a point before the fix)
-test("rough ground is not regrown over and over", { skip: !!process.env.NODE_V8_COVERAGE }, function () {
+test("rough ground is not regrown over and over", { skip: !!(process.env.NODE_V8_COVERAGE || process.env.CI) }, function () {
 	function surface(rough) {
 		var r = rng(11), x = [], y = [], z = [];
 		for (var a = 0; a < 20; a += 0.04) for (var b = 0; b < 20; b += 0.04) {

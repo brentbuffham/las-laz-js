@@ -1,0 +1,23 @@
+# The test suite on every push and pull request, on Node 22 and 24 (no dependencies to install).
+# Wall-clock limits are skipped here (CI=true: shared runners vary); the PDAL cross-checks skip
+# without PDAL; the private sample tests skip without the samples.
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+      - run: npm run test:coverage
+        if: matrix.node == 22

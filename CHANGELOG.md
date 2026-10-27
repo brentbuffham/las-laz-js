@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.6 (2026-10-27)
+
+CI:
+- `.github/workflows/test.yml`: the test suite on every push to main and every pull request, on Node 22
+  and 24, and the coverage gates (lines 97, branches 88, functions 97) on Node 22. Wall-clock limits
+  skip under CI (shared runners vary), as they already did under coverage; the PDAL cross-checks and
+  the private sample tests skip without PDAL and the samples. Locally as CI: 947 pass, coverage 99.70
+  / 96.18 / 97.62. (From an outside review.)
+
 ## 0.16.5 (2026-10-27)
 
 Tests:

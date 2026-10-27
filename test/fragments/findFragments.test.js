@@ -20,7 +20,7 @@ import { buildKdTree, kdNearest } from "../../src/index/kdtree.js";
 import { sizeDistribution } from "../../src/fragments/sizeDistribution.js";
 import { fragmentAxes } from "../../src/fragments/axes.js";
 
-var COVERAGE = !!process.env.NODE_V8_COVERAGE;
+var COVERAGE = !!(process.env.NODE_V8_COVERAGE || process.env.CI);
 var PILE = { count: 150, swebrec: { x50: 0.5, xmax: 2, b: 2 }, extent: 12, spacing: 0.02, noise: 0.005, seed: 1, fines: "pebbles" };
 var MD = 0.06;
 var cache = {};
