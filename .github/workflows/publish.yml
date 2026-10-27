@@ -1,0 +1,40 @@
+# Publish to npm when a release tag (v1.2.3) is pushed, through npm's trusted publishing: npm trusts this
+# workflow (set on npmjs.com: las-laz-js > Settings > Trusted Publisher > GitHub Actions, workflow
+# publish.yml), so no token or one-time code is needed, and the package carries provenance.
+# The tag must match package.json's version; a version already on npm is skipped; the suite runs first.
+# Run it by hand (Actions > publish > Run workflow) with a tag to publish one pushed before this existed.
+name: publish
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The release tag to publish (v0.18.0)"
+        required: true
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm install -g npm@latest   # trusted publishing needs npm 11.5.1 or later
+      - name: The tag matches package.json, and is not on npm yet
+        id: check
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="$(node -p 'require("./package.json").version')"
+          if [ "$TAG" != "v$VERSION" ]; then echo "tag $TAG is not v$VERSION (package.json)"; exit 1; fi
+          if npm view "las-laz-js@$VERSION" version >/dev/null 2>&1; then echo "las-laz-js@$VERSION is already on npm"; echo "skip=true" >> "$GITHUB_OUTPUT"; fi
+      - run: npm test
+        if: steps.check.outputs.skip != 'true'
+      - run: npm publish
+        if: steps.check.outputs.skip != 'true'
