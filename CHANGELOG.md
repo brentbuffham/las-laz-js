@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.5 (2026-10-27)
+
+Tests:
+- LAZ fuzzing (`test/laz/fuzz.test.js`): every LAZ fixture (formats 0-3, 6-8, with and without extra
+  bytes) damaged 60 ways, deterministically: cut short in the header, the VLRs, the point data and the
+  chunk table; bytes flipped in the point data; the chunk table's offset and entries scrambled. Each
+  read, on this thread and on the pool, must end in a LasError (TRUNCATED, BAD_VLR, BAD_HEADER,
+  UNSUPPORTED seen) or a read, never a raw TypeError / RangeError, within 10 s. All 540 pass; no code
+  change was needed. (From an outside review.)
+
 ## 0.16.4 (2026-10-27)
 
 New:
