@@ -28,6 +28,7 @@ import { keyOf, parseKey, childKey, sampleParent, compareKeys as keyOrder, MAX_D
 import { chunkNodes, rawBox } from "./chunkNodes.js";
 import { TileStore, tileName, toBase64, HEAD_NAME, EVLRS_NAME } from "./TileStore.js";
 
+var PUTS = 8;   // node files written at once (OPFS: about 12 ms a file one by one, 4 ms eight at a time)
 var GRID = 128, GRID_DEPTH = 7;
 var BUFFER_BYTES = 65536;
 var READ_WINDOW = 16 * 1048576;   // the build's own read window (the reader's default is 64 MB): several LAZ chunks, so they decode in parallel
@@ -247,24 +248,33 @@ export async function buildTiles(las, opts) {
 			var want = Math.min(threads || await defaultThreads(), chunks.length);
 			if (want >= 2) pool = await createLazPool(want);   // null when workers cannot start: this thread
 		}
-		// at most pool.size chunks in flight, settled in chunk order
-		var inflight = [], settled = 0;
+		// at most 2 x pool.size chunks in flight; each settles (its node files written, PUTS at a time: OPFS
+		// spends most of a small write waiting) in chunk order on one chain, so the pool is fed while the
+		// files of earlier chunks are still being written
+		var inflight = [], settled = 0, chain = Promise.resolve();
 		var settle = async function (job) {
 			var built = await job.nodes;
-			for (var n = 0; n < built.length; n++) await put(built[n].key, built[n]);
+			for (var n = 0; n < built.length; n += PUTS) {
+				var batch = [];
+				for (var b2 = n; b2 < Math.min(built.length, n + PUTS); b2++) batch.push(put(built[b2].key, built[b2]));
+				await Promise.all(batch);
+			}
 			await backend.remove(job.blob);
 			tiles.tick(++settled);
 		};
+		var queueSettle = function (job) { var next = chain.then(function () { return settle(job); }); chain = next; return next; };
 		for (var c = 0; c < chunks.length; c++) {
 			aborted(signal);
 			var blob = "build/" + chunks[c].key + ".rec", recs = await backend.get(blob);
 			if (!pool) { await settle({ blob: blob, nodes: chunkNodes(recs, len, cube, chunks[c].key, tileOpts, laz) }); continue; }
 			var job = { blob: blob, nodes: pool.octree({ records: recs.slice().buffer, recordLength: len, cube: cube, rootKey: chunks[c].key, opts: tileOpts, laz: laz }) };
 			job.nodes.catch(function () {});   // awaited in settle; an abort must not leave it unhandled
+			job.done = queueSettle(job);
+			job.done.catch(function () {});
 			inflight.push(job);
-			if (inflight.length >= pool.size) await settle(inflight.shift());
+			if (inflight.length >= 2 * pool.size) await inflight.shift().done;
 		}
-		while (inflight.length) await settle(inflight.shift());
+		await chain;
 		await upperLevels(chunks, cube, len, backend, put);
 		// 5. compress what is still raw: the chunk roots and the levels above them (few nodes)
 		if (laz) {

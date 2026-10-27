@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+Faster (found from Kirra's 160 M / 177 M imports):
+- **OPFS tile stores** look each folder up once, not on every file: a walk from the OPFS root was
+  about 7 ms of the 12 ms a tile write took. Every read and write of an OPFS store gains.
+- **buildTiles** writes a chunk's node files 8 at a time and keeps the pool fed while earlier
+  chunks' files are being written (it waited on each chunk's writes before handing out the next).
+  The 59.7 M-point pile into OPFS in Chrome: 50 s, the tiles phase about 2.4 x faster (35 s, from
+  about 83 s on a quiet machine); in Node (a folder) 26.4 s to 22.8 s.
+
 ## 0.15.0 (2026-10-27)
 
 New:

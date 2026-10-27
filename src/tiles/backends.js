@@ -12,7 +12,7 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { openScratchSyncWriter, getScratchFile, removeScratchFile } from "../io/ScratchBinaryFile.js";
+import { removeScratchFile } from "../io/ScratchBinaryFile.js";
 
 /** The OPFS folder holding every tile store. */
 export var TILES_DIR = "las-tiles";
@@ -93,6 +93,20 @@ async function folder(root, path, create) {
 function opfsBackend(where) {
 	var base = TILES_DIR + "/" + where.opfs, held = null;
 	function opts(sub) { return { root: where.root, dir: sub ? base + "/" + sub : base }; }
+	// the store's folders, looked up once each (a walk from the OPFS root on every file was about 7 ms of the
+	// 12 ms a tile write took); forgotten when the store's folder is removed
+	var dirs = new Map();
+	function dirFor(sub) {
+		var d = dirs.get(sub);
+		if (!d) { d = folder(where.root, sub ? base + "/" + sub : base, true); dirs.set(sub, d); d.catch(function () { dirs.delete(sub); }); }
+		return d;
+	}
+	async function writer(p) {
+		var fh = await (await dirFor(p[0])).getFileHandle(p[1], { create: true }), h = await fh.createSyncAccessHandle();
+		h.truncate(0);
+		var at = 0;
+		return { write: function (bytes) { h.write(bytes, { at: at }); at += bytes.length; }, close: function () { h.flush(); h.close(); } };
+	}
 	function missing(e) { return e && e.name === "NotFoundError"; }
 	// a write refused before a byte went in: the empty file it made goes too
 	async function refused(p, e) {
@@ -112,7 +126,7 @@ function opfsBackend(where) {
 		get: async function (name) {
 			var p = split(name);
 			try {
-				var file = await getScratchFile(p[1], opts(p[0]));
+				var file = await (await (await dirFor(p[0])).getFileHandle(p[1])).getFile();
 				return new Uint8Array(await file.arrayBuffer());
 			} catch (e) {
 				if (missing(e)) return null;
@@ -121,20 +135,24 @@ function opfsBackend(where) {
 		},
 		put: async function (name, bytes) {
 			var p = split(name), w;
-			try { w = await openScratchSyncWriter(p[1], opts(p[0])); } catch (e) { throw await refused(p, e); }
+			try { w = await writer(p); } catch (e) { throw await refused(p, e); }
 			try { w.write(bytes); } finally { w.close(); }
 		},
 		appender: async function (name) {
 			var p = split(name), w;
-			try { w = await openScratchSyncWriter(p[1], opts(p[0])); } catch (e) { throw await refused(p, e); }
+			try { w = await writer(p); } catch (e) { throw await refused(p, e); }
 			return { write: function (bytes) { if (bytes.length) w.write(bytes); }, close: async function () { w.close(); } };
 		},
-		remove: async function (name) { var p = split(name); await removeScratchFile(p[1], opts(p[0])); },
+		remove: async function (name) {
+			var p = split(name);
+			try { await (await dirFor(p[0])).removeEntry(p[1]); } catch (e) { if (!missing(e)) throw e; }
+		},
 		list: async function () {
 			try { return (await names(await folder(where.root, base, false), "", [])).sort(); } catch (e) { if (missing(e)) return []; throw e; }
 		},
 		removeAll: async function () {
 			this.unlock();
+			dirs.clear();
 			try {
 				var parent = await folder(where.root, TILES_DIR, false);
 				await parent.removeEntry(where.opfs, { recursive: true });
