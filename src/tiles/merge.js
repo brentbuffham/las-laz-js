@@ -39,7 +39,9 @@ async function scratch(where) {
 	var id = "merge-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) + ".las";
 	if (where.opfs !== undefined) {
 		var w = await openScratchSyncWriter(id, where.root ? { root: where.root } : undefined);
-		return { sink: w, open: async function () { return openLas(await getScratchFile(id, where.root ? { root: where.root } : undefined)); }, remove: function () { return removeScratchFile(id, where.root ? { root: where.root } : undefined); } };
+		// the writer closed before the file is read or removed (an open sync handle blocks both)
+		var shut = false, close = function () { if (!shut) { shut = true; w.close(); } };
+		return { sink: w, open: async function () { close(); return openLas(await getScratchFile(id, where.root ? { root: where.root } : undefined)); }, remove: function () { close(); return removeScratchFile(id, where.root ? { root: where.root } : undefined); } };
 	}
 	if (where.dir !== undefined) {
 		var fs = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_FS), os = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_OS), path = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_PATH);

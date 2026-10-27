@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed:
+- mergeStores / splitStore on OPFS left their scratch LAS behind: its sync handle was still open, so
+  the removal was refused (and the error swallowed). The writer now closes before the file is read
+  or removed. Checked in Chrome: none left.
+
 ## 0.16.0 (2026-10-27)
 
 Whole-cloud edits on a tile store (no point limit: never the cloud in memory):
