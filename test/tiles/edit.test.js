@@ -206,3 +206,38 @@ test("a compressed store edits as a raw one", async function () {
 	assert.deepEqual(await storeRecords(laz), await storeRecords(raw));
 	Object.keys(raw.manifest.nodes).forEach(function (k) { assert.equal(laz.manifest.nodes[k].count, raw.manifest.nodes[k].count); });
 });
+
+// A column-only edit (addColumn, removeColumn, setColumn of an added column) leaves each node's
+// records as they are: on a compressed store they are copied packed, never decompressed and packed
+// again (Kirra 2026-10-27: one column on an 11 M-point store took ~30 s, three full re-compressions).
+// store._onPack(key) fires whenever a node's records are packed.
+test("column-only edits keep the packed records; a records edit packs them", async function () {
+	var store = await build(B3, { compress: true });
+	var packs = 0;
+	store._onPack = function () { packs++; };
+	var keys = Object.keys(store.manifest.nodes);
+	var before = {};
+	for (var k of keys) before[k] = (await store.readTile(k, { fields: ["x", "y", "z", "classification"] }));
+	await store.addColumn("fragment", "u32", 0);
+	var sel = await store.selectBox(BOX);
+	var values = {};
+	Object.keys(sel.tiles).forEach(function (key) { values[key] = new Uint32Array(sel.tiles[key].length).fill(7); });
+	await store.setColumn(sel, "fragment", values);
+	await store.removeColumn("fragment");
+	assert.equal(packs, 0, "column-only edits packed records");
+	for (var k2 of keys) {
+		var after = await store.readTile(k2, { fields: ["x", "y", "z", "classification"] });
+		assert.deepEqual(Array.from(after.x), Array.from(before[k2].x));
+		assert.deepEqual(Array.from(after.classification), Array.from(before[k2].classification));
+	}
+	var sel2 = await store.selectBox(BOX);
+	await store.setColumn(sel2, "classification", 9);
+	assert.ok(packs > 0, "a records edit packs the nodes it changes");
+});
+
+test("a column-only edit keeps each node's box", async function () {
+	var store = await build(B3, { compress: true });
+	var boxes = JSON.stringify(Object.keys(store.manifest.nodes).map(function (k) { return store.manifest.nodes[k].box; }));
+	await store.addColumn("w", "f32", 1);
+	assert.equal(JSON.stringify(Object.keys(store.manifest.nodes).map(function (k) { return store.manifest.nodes[k].box; })), boxes);
+});

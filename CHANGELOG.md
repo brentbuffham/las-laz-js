@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+Faster:
+- Column-only tile edits (`addColumn`, `removeColumn`, `setColumn` of an added column) keep each
+  tile's records as stored: on a compressed store they are copied packed, never decompressed and
+  compressed again, and the tile's box is kept. On a 10.9 M-point, 848-tile LAZ store each step went
+  from about 10 s to 0.3 s. A records edit (a standard field, a delete or keep) is unchanged.
+
 ## 0.12.0 (2026-10-27)
 
 What a cloud can resolve, the watershed and the hybrid, limits and fines.

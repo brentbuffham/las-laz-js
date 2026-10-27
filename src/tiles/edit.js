@@ -139,6 +139,13 @@ async function readNode(store, key) {
 	return { t: t, records: rawRecords(store, t) };
 }
 
+// A node for an edit that changes only its added columns: the records are left as stored (packed
+// on a compressed store), never decompressed - put copies them through
+async function readNodeColumns(store, key) {
+	var t = await loadTile(store, key);
+	return { t: t, records: null, packed: t.compressed ? t.records : null, raw: t.compressed ? null : t.records };
+}
+
 function packOf(store) {
 	var m = store.manifest;
 	return m.laz ? createChunkCompressor(m.laz, m.recordLength) : null;
@@ -164,8 +171,22 @@ async function session(store, run, change) {
 		if (!disk || disk.seq !== store._seq) throw new LasError(ERROR_CODES.BAD_STORE, "the tile store changed in another tab or worker since it was opened here; open it again");
 		var m = store.manifest, len = m.recordLength, pack = packOf(store);
 		var body = JSON.parse(JSON.stringify(m)), written = [], replaced = [];
-		var put = async function (key, records, columns, oldSize) {
-			var old = m.nodes[key], count = records.length / len;
+		var put = async function (key, records, columns, oldSize, same) {
+			var old = m.nodes[key];
+			// same: a column-only edit - the node's records go through as stored (packed or raw), its box stays
+			if (same) {
+				var keep = same.packed || same.raw;
+				var kept = encodeTile({ count: old.count, records: keep, compressed: !!same.packed, columns: columns });
+				var keptName = tileName(key, old.gen + 1);
+				await be.put(keptName, kept);
+				written.push(keptName);
+				replaced.push(tileName(key, old.gen));
+				body.nodes[key] = { count: old.count, gen: old.gen + 1, box: old.box };
+				body.bytes += kept.length - oldSize;
+				return;
+			}
+			var count = records.length / len;
+			if (pack && store._onPack) store._onPack(key);
 			var bytes = encodeTile({ count: count, records: pack ? pack(records, 0, count) : records, compressed: !!pack, columns: columns });
 			var name = tileName(key, old.gen + 1);
 			await be.put(name, bytes);
@@ -284,7 +305,7 @@ export function setColumn(store, sel, name, value) {
 		});
 		return session(store, async function (put) {
 			for (var t = 0; t < keys.length; t++) {
-				var key = keys[t], idx = sel.tiles[key], n = await readNode(store, key), want = perTile ? value[key] : null;
+				var key = keys[t], idx = sel.tiles[key], n = ai >= 0 ? await readNodeColumns(store, key) : await readNode(store, key), want = perTile ? value[key] : null;
 				var records = n.records, columns = n.t.columns;
 				if (ai >= 0) {
 					var col = columns[ai].slice(), big = EXTRA_TYPES[m.columns[ai].type].big;
@@ -292,7 +313,7 @@ export function setColumn(store, sel, name, value) {
 					columns = columns.slice();
 					columns[ai] = col;
 				} else records = patchField(store, records, name, idx, perTile ? want : null, value);
-				await put(key, records, columns, n.t.size);
+				await put(key, records, columns, n.t.size, ai >= 0 ? n : null);
 			}
 		}, null);
 	});
@@ -330,9 +351,9 @@ export function addColumn(store, name, type, fill) {
 		return session(store, async function (put) {
 			var keys = Object.keys(m.nodes).sort(keyOrder);
 			for (var i = 0; i < keys.length; i++) {
-				var n = await readNode(store, keys[i]), col = new COLUMN_TYPES[type](n.t.count);
+				var n = await readNodeColumns(store, keys[i]), col = new COLUMN_TYPES[type](n.t.count);
 				col.fill(f);
-				await put(keys[i], n.records, n.t.columns.concat([col]), n.t.size);
+				await put(keys[i], null, n.t.columns.concat([col]), n.t.size, n);
 			}
 		}, function (body) { body.columns.push({ name: name, type: type, fill: typeof f === "bigint" ? String(f) : f }); });
 	});
@@ -346,8 +367,8 @@ export function removeColumn(store, name) {
 		return session(store, async function (put) {
 			var keys = Object.keys(m.nodes).sort(keyOrder);
 			for (var i = 0; i < keys.length; i++) {
-				var n = await readNode(store, keys[i]);
-				await put(keys[i], n.records, n.t.columns.filter(function (c, j) { return j !== ai; }), n.t.size);
+				var n = await readNodeColumns(store, keys[i]);
+				await put(keys[i], null, n.t.columns.filter(function (c, j) { return j !== ai; }), n.t.size, n);
 			}
 		}, function (body) { body.columns.splice(ai, 1); });
 	});
