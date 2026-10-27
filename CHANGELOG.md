@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.0 (2026-10-27)
 
 New:
 - **Runs on a tile store, never reading the cloud whole.** `findFragmentsParallel(store, opts)` and
