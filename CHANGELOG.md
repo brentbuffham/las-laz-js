@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.14.2 (2026-10-27)
 
 Fixed (found from Kirra's Facets dialog):
 - `findFacetsParallel` and `findFragmentsParallel` given precomputed `normals` no longer drop to one
