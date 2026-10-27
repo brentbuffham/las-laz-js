@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.2 (2026-10-27)
+
+Fixed:
+- Point formats 6-10 now always set the global-encoding WKT bit (LAS 1.4 R15: their CRS can only be
+  WKT), with or without a CRS; before, only with a WKT CRS, and PDAL warned "Global encoding WKT flag
+  not set for point format 6 - 10" on our files. Formats 0-5 set it only with a WKT CRS, as before.
+  (From an outside review.)
+
 ## 0.16.1 (2026-10-27)
 
 Fixed:

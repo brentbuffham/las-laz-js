@@ -140,7 +140,10 @@ function headerBytes(s, so, totals) {
 
 	ascii(v, 0, "LASF", 4);
 	v.setUint16(4, o.fileSourceId || 0, LE);
-	v.setUint16(6, (o.globalEncoding || 0) + (o.crs && o.crs.wkt && !((o.globalEncoding || 0) & 16) ? 16 : 0), LE); // bits-ok
+	// the WKT bit: with a WKT CRS, and always for point formats 6-10 (LAS 1.4 R15: their CRS can only be WKT)
+	var ge = o.globalEncoding || 0;
+	if (((o.crs && o.crs.wkt) || s.fmt >= 6) && !(ge & 16)) ge += 16; // bits-ok
+	v.setUint16(6, ge, LE);
 	v.setUint8(24, 1);
 	v.setUint8(25, s.minor);
 	ascii(v, 26, o.systemId || "las-laz-js", 32);

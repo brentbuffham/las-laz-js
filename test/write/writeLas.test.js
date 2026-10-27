@@ -273,3 +273,15 @@ test("a refused batch leaves the streaming LAS writer's totals as they were", as
 	assert.equal(h.pointsByReturn.reduce(function (s, v) { return s + v; }, 0), 100);
 	assert.ok(h.bounds.maxX < 477100, "maxX " + h.bounds.maxX);
 });
+
+test("point formats 6-10 set the WKT bit with or without a CRS (LAS 1.4 R15); formats 0-5 without one do not", async function () {
+	var c = { count: 3, x: new Float64Array([1, 2, 3]), y: new Float64Array([1, 2, 3]), z: new Float64Array([0, 0, 0]) };
+	for (var fmt of [6, 7, 8]) {
+		var las = await openLas(await writeLas(c, { version: "1.4", pointFormat: fmt }));
+		assert.equal(las.header.globalEncoding & 16, 16, "format " + fmt);
+	}
+	var old = await openLas(await writeLas(c, { version: "1.4", pointFormat: 1 }));
+	assert.equal(old.header.globalEncoding & 16, 0);
+	var laz = await openLas(await writeLas(c, { version: "1.4", pointFormat: 6, compress: true }));
+	assert.equal(laz.header.globalEncoding & 16, 16, "LAZ too");
+});

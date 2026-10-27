@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.16.1";
+export var VERSION = "0.16.2";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
