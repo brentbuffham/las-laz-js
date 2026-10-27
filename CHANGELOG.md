@@ -3,6 +3,19 @@
 ## Unreleased
 
 New:
+- **Runs on a tile store, never reading the cloud whole.** `findFragmentsParallel(store, opts)` and
+  `findFacetsParallel(store, opts)` take an open `TileStore`: work tiles are cut from the store's box,
+  each worker opens the store and reads its tile and the overlap at full density (one node at a time,
+  no pool inside a worker), and this thread keeps one label a point per node (about 6.5 bytes a
+  point). Labels come back as `byTile` ({ key: Uint32Array }), and `column` writes them to the store
+  in one edit at the end (an added u32 column; set again on a re-run; a name a field already holds is
+  refused). The spacing is the median of 9 full-density samples; positions are about the store box's
+  centre (`localOrigin` to choose), so a UTM-scale store has no Float32 jitter. Facets pieces of one
+  face in neighbouring tiles are joined where they meet in a seam cell along the shared core edge;
+  a joined facet carries `outlineParts`. `threads` defaults to 8 here (each worker about 0.3 GB),
+  `tilePoints` 500,000. A store in memory runs its tiles on this thread. On the 59.7 M-point pile
+  (4,244 nodes): hybrid in 119 s on 8 threads (86 s on 16), 386 MB on this thread; 59,681 fragments
+  (60,827 in memory), unresolved 23.5 % (24 %).
 - `resolutionOf(spacing)` and `FLOOR_SPACINGS` (30) are exported, so an app can say what a scan
   resolves (and its floor, 30 x `pointSpacing`) before a run.
 

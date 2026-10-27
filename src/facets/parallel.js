@@ -15,6 +15,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
 import { planTiles, runTiles } from "../index/planTiles.js";
+import { isTileStore, facetsOnStore } from "../tiles/parallelStore.js";
 import { defaultThreads } from "../laz/pool.js";
 import { estimateNoise, smallestEigen, pointNormals } from "../ops/normals.js";
 import { findFacets, checkFacetOptions } from "./findFacets.js";
@@ -27,7 +28,8 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
 
 /**
  * findFacets split over tiles and run in parallel workers (browser Web Workers or Node worker_threads).
- * @param {object} cols - point columns, as findFacets.
+ * @param {object} cols - point columns, as findFacets; or an open TileStore, read tile by tile and never whole
+ *   (src/tiles/parallelStore.js: labels per node as byTile, column to write them to the store).
  * @param {object} opts - findFacets' options, and: threads (default one fewer than the cores, at most 16; 1 runs
  *   here), tile (a core's side, m; default about two tiles a thread, at least 4 overlaps), overlap (m each side;
  *   default max(0.5, 5 x maxDistance)), onProgress(done, total) (points, the tiles weighed by their points), signal
@@ -38,6 +40,7 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  */
 export async function findFacetsParallel(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFacetsParallel needs options: { maxDistance, … }");
+	if (isTileStore(cols)) return facetsOnStore(cols, opts);
 	var o = checkFacetOptions(cols, opts), n = cols.count;
 	var threads = opts.threads === undefined ? await defaultThreads() : opts.threads;
 	if (!Number.isInteger(threads) || threads < 1) throw bad("threads must be a whole number >= 1, not " + JSON.stringify(opts.threads));

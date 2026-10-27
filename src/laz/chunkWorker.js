@@ -28,6 +28,8 @@ import { chunkNodes } from "../tiles/chunkNodes.js";
 import { findFragments } from "../fragments/findFragments.js";
 import { findFacets } from "../facets/findFacets.js";
 import { pointNormals } from "../ops/normals.js";
+import { openTiles } from "../tiles/TileStore.js";
+import { fragmentsRegion, facetsRegion } from "../tiles/regionJobs.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -60,6 +62,7 @@ function handle(m) {
 		else if (m.op === "octree") octree(m);
 		else if (m.op === "fragments") fragments(m);
 		else if (m.op === "facets") facets(m);
+		else if (m.op === "fragmentsRegion" || m.op === "facetsRegion") region(m);
 		else decode(m);
 	} catch (err) {
 		port.post({ id: m.id, error: { code: err && err.code, message: err && err.message ? err.message : String(err), offset: err && err.offset } });
@@ -123,6 +126,30 @@ function facets(m) {
 	r.facet = null;
 	if (nm) { out.normal = nm.normal.buffer; out.residual = nm.residual.buffer; transfer.push(out.normal, out.residual); }
 	port.post(out, transfer);
+}
+
+// one work tile of a parallel run on a tile store: the store opened here, once a run (a run after an
+// edit opens the edited store), read on this thread (no pool inside a worker)
+var runStore = { run: null, store: null };
+function storeFor(m) {
+	if (runStore.run !== m.run) {
+		if (runStore.store) runStore.store.then(function (s) { s.close(); }, function () {});
+		runStore = { run: m.run, store: openTiles(m.where) };
+	}
+	return runStore.store;
+}
+function region(m) {
+	storeFor(m).then(function (store) {
+		var t = Object.assign({}, m.task, { onProgress: tileProgress(m, 0, 1) });
+		return (m.op === "fragmentsRegion" ? fragmentsRegion : facetsRegion)(store, t);
+	}).then(function (out) {
+		var transfer = [out.node.buffer, out.index.buffer, (out.gid || out.fid).buffer];
+		if (out.core) transfer.push(out.core.buffer);
+		if (out.win) transfer.push(out.win.hit.buffer, out.win.held.buffer);
+		port.post({ id: m.id, result: out }, transfer);
+	}, function (err) {
+		port.post({ id: m.id, error: { code: err && err.code, message: err && err.message ? err.message : String(err), offset: err && err.offset } });
+	});
 }
 
 function decode(m) {

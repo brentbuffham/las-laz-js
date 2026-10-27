@@ -132,6 +132,7 @@ export async function createLazPool(n, nodeUrl) {
 	}
 	idle = workers.slice();
 
+	function run_(op, task, where, runId, onProgress) { return run({ op: op, task: task, where: where, run: runId }, [], function (m) { return m.result; }, onProgress); }
 	function run(msg, transfer, result, onProgress) {
 		if (closed) return Promise.reject(new LasError(ERROR_CODES.ABORTED, "the LAZ pool is closed"));
 		return new Promise(function (resolve, reject) {
@@ -188,6 +189,14 @@ export async function createLazPool(n, nodeUrl) {
 			return run(Object.assign({ op: "facets" }, task), transfers(task), function (m) {
 				return Object.assign(m.result, { facet: new Uint32Array(m.facet), normals: m.normal ? { normal: new Float32Array(m.normal), residual: new Float32Array(m.residual) } : undefined });
 			}, onProgress);
+		},
+		/**
+		 * One work tile of a parallel run on a tile store (src/tiles/parallelStore.js): the worker opens the store
+		 * at where (once a run), reads its region and runs op ("fragmentsRegion" or "facetsRegion").
+		 * @returns {Promise<object>} regionJobs' result
+		 */
+		region: function (op, task, where, run, onProgress) {
+			return run_(op, task, where, run, onProgress);
 		},
 		close: function () {
 			if (closed) return;

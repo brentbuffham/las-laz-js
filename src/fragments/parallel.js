@@ -18,6 +18,7 @@ import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
 import { defaultThreads } from "../laz/pool.js";
 import { planTiles, runTiles } from "../index/planTiles.js";
+import { isTileStore, fragmentsOnStore } from "../tiles/parallelStore.js";
 import { findFragments } from "./findFragments.js";
 import { pointSpacing } from "./spacing.js";
 import { resultFields } from "./resolution.js";
@@ -31,7 +32,8 @@ function checkNormals(nm, n) { if (!nm || !nm.normal || !nm.residual || nm.norma
 
 /**
  * findFragments split over tiles and run in parallel workers (browser Web Workers or Node worker_threads).
- * @param {object} cols - point columns, as findFragments.
+ * @param {object} cols - point columns, as findFragments; or an open TileStore, read tile by tile and never whole
+ *   (src/tiles/parallelStore.js: labels per node as byTile, column to write them to the store).
  * @param {object} opts - findFragments' options, and: threads (workers; default one fewer than the cores, at
  *   most 16; 1 runs here), tile (the side of a tile's core, m; default from the cloud's area, about two tiles a
  *   thread, at least 4 overlaps), overlap (m each side; default max(2.5, reliefRadius + 1.5): wider than the
@@ -44,6 +46,7 @@ function checkNormals(nm, n) { if (!nm || !nm.normal || !nm.residual || nm.norma
  */
 export async function findFragmentsParallel(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFragmentsParallel needs options: { method?, … }");
+	if (isTileStore(cols)) return fragmentsOnStore(cols, opts);
 	var n = cols.count, st = coordsOf(cols, "findFragmentsParallel").stride;
 	var threads = opts.threads === undefined ? await defaultThreads() : opts.threads;
 	if (!Number.isInteger(threads) || threads < 1) throw bad("threads must be a whole number >= 1, not " + JSON.stringify(opts.threads));
