@@ -26,7 +26,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { createLazPool, defaultThreads } from "../laz/pool.js";
 import { storeNodes, nodesMeeting, readRegion } from "./region.js";
-import { fragmentsRegion, facetsRegion } from "./regionJobs.js";
+import { REGION_JOBS } from "./regionJobs.js";
 import { pointSpacing } from "../fragments/spacing.js";
 import { resultFields } from "../fragments/resolution.js";
 import { estimateNoise, smallestEigen } from "../ops/normals.js";
@@ -46,7 +46,7 @@ function strip(opts) { var o = {}; Object.keys(opts).forEach(function (k) { if (
 export function isTileStore(x) { return !!x && typeof x === "object" && !!x.manifest && typeof x.readTile === "function"; }
 
 // the run's frame and tiles: the store's box, its two widest axes, the origin, the spacing sample, the cores
-async function layout(store, opts, threads, M) {
+export async function layout(store, opts, threads, M) {
 	var nodes = storeNodes(store.manifest), n = 0, lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
 	nodes.counts.forEach(function (c) { n += c; });
 	nodes.boxes.forEach(function (b) { for (var a = 0; a < 3; a++) { lo[a] = Math.min(lo[a], b[MIN[a]]); hi[a] = Math.max(hi[a], b[MAX[a]]); } });
@@ -80,7 +80,7 @@ async function layout(store, opts, threads, M) {
 }
 
 // run every tile: in the pool (the store opened in each worker), or here; apply(result, tile number) as each ends
-async function runAll(store, L, opts, threads, op, task, apply) {
+export async function runAll(store, L, opts, threads, op, task, apply) {
 	var where = store.where, shareable = where && (where.opfs !== undefined || where.dir !== undefined), signal = opts.signal;
 	var pool = threads > 1 && shareable && L.tiles.length > 1 ? await createLazPool(Math.min(threads, L.tiles.length)) : null;
 	var share = new Float64Array(L.tiles.length), total = 0, last = -1, run = Math.random().toString(36).slice(2);
@@ -105,7 +105,7 @@ async function runAll(store, L, opts, threads, op, task, apply) {
 				if (signal && signal.aborted) throw stopped();
 				var t = Object.assign(task(L.tiles[i]), { keys: L.nodes.keys }), k = i;
 				t.onProgress = function (d, n) { report(k, n ? d / n : 1); };
-				apply(await (op === "fragmentsRegion" ? fragmentsRegion : facetsRegion)(store, t), i);
+				apply(await REGION_JOBS[op](store, t), i);
 				report(i, 1);
 			}
 		}
@@ -136,7 +136,7 @@ async function writeColumn(store, name, out) {
 	await store.setColumn(sel, name, out);
 }
 
-async function common(store, opts, name) {
+export async function common(store, opts, name) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad(name + " needs options");
 	// each worker's heap grows to about 0.3 GB on a run and keeps it: 8 by default (about 3 GB), more when asked
 	var threads = opts.threads === undefined ? Math.min(STORE_THREADS, await defaultThreads()) : opts.threads;

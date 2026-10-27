@@ -19,6 +19,7 @@ import { readRegion } from "./region.js";
 import { findFragments } from "../fragments/findFragments.js";
 import { findFacets } from "../facets/findFacets.js";
 import { facetOutline } from "../facets/outline.js";
+import { dedupeSelection } from "../filter/dedupe.js";
 
 var AXES = ["x", "y", "z"];
 
@@ -73,6 +74,31 @@ export async function fragmentsRegion(store, t) {
 	return { count: reg.count, kept: kept, node: node, index: index, gid: gid, core: core, win: win, planeDistance: r.planeDistance, cell: r.cell,
 		sideOn: r.warnings.some(function (w) { return w.code === "SIDE_ON"; }) };
 }
+
+/**
+ * One tile of dedupeStore: dedupe (first point wins) on the region, whose points come in the store's own order
+ * (node, then index in node) in every tile, so neighbouring tiles agree on which of two points stays; the points
+ * it drops that lie in the core.
+ * @param {object} store - an open TileStore.
+ * @param {{keys: string[], which: number[], axes: number[], box: number[], core: number[], origin: object, tolerance: number,
+ *   z?: boolean}} t
+ * @returns {Promise<{count: number, node: Uint32Array, index: Uint32Array}>} the dropped core points
+ */
+export async function dedupeRegion(store, t) {
+	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t), a = t.axes;
+	if (!reg.count) return { count: 0, node: new Uint32Array(0), index: new Uint32Array(0) };
+	var keep = dedupeSelection({ count: reg.count, x: reg.x, y: reg.y, z: reg.z }, t.tolerance, { z: !!t.z }).keep;
+	var kept = new Uint8Array(reg.count), U = reg[AXES[a[0]]], V = reg[AXES[a[1]]], out = [], j;
+	for (j = 0; j < keep.length; j++) kept[keep[j]] = 1;
+	for (j = 0; j < reg.count; j++) if (!kept[j] && inCore(L.core, U[j], V[j])) out.push(j);
+	var node = new Uint32Array(out.length), index = new Uint32Array(out.length);
+	out.forEach(function (p, q) { node[q] = reg.node[p]; index[q] = reg.index[p]; });
+	if (t.onProgress) t.onProgress(1, 1);
+	return { count: reg.count, node: node, index: index };
+}
+
+/** The region jobs by name (the worker's op). */
+export var REGION_JOBS = { fragmentsRegion: fragmentsRegion, facetsRegion: facetsRegion, dedupeRegion: dedupeRegion };
 
 /**
  * One tile of findFacetsParallel on a store.
