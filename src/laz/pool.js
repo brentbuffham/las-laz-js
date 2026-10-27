@@ -84,6 +84,9 @@ async function spawn(onMessage, onFail, nodeUrl) {
  * @param {URL} [nodeUrl] - a Node worker entry in place of chunkWorker.js (tests)
  * @returns {Promise<{size:number, decode:function(object): Promise<Uint8Array>, compress:function(object): Promise<{bytes:Uint8Array, sizes:number[]}>, close:function(): void}|null>}
  */
+// a tile task's buffers: its columns, and its normals when given
+function transfers(task) { return [task.x, task.y, task.z].concat(task.normal ? [task.normal, task.residual] : []); }
+
 export async function createLazPool(n, nodeUrl) {
 	var workers = [], idle = [], queue = [], waiting = new Map(), nextId = 1, closed = false;
 
@@ -109,6 +112,7 @@ export async function createLazPool(n, nodeUrl) {
 	function onMessage(m) {
 		var job = waiting.get(m.id);
 		if (!job) return;
+		if (m.progress !== undefined) { if (job.onProgress) job.onProgress(m.progress); return; }   // a tile's share done, not its end
 		waiting.delete(m.id);
 		if (job.worker.release) job.worker.release();
 		idle.push(job.worker);
@@ -128,10 +132,10 @@ export async function createLazPool(n, nodeUrl) {
 	}
 	idle = workers.slice();
 
-	function run(msg, transfer, result) {
+	function run(msg, transfer, result, onProgress) {
 		if (closed) return Promise.reject(new LasError(ERROR_CODES.ABORTED, "the LAZ pool is closed"));
 		return new Promise(function (resolve, reject) {
-			queue.push({ msg: Object.assign({ id: nextId++ }, msg), transfer: transfer, result: result, resolve: resolve, reject: reject });
+			queue.push({ msg: Object.assign({ id: nextId++ }, msg), transfer: transfer, result: result, onProgress: onProgress, resolve: resolve, reject: reject });
 			pump();
 		});
 	}
@@ -167,19 +171,23 @@ export async function createLazPool(n, nodeUrl) {
 		},
 		/**
 		 * findFragments on one tile's points (src/fragments/parallel.js), the columns transferred.
-		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean, opts: object}} task
+		 * onProgress(share of the tile done).
+		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean, opts: object, normal?: ArrayBuffer, residual?: ArrayBuffer}} task
 		 * @returns {Promise<object>} findFragments' result, fragment a Uint32Array
 		 */
-		fragments: function (task) {
-			return run(Object.assign({ op: "fragments" }, task), [task.x, task.y, task.z], function (m) { return Object.assign(m.result, { fragment: new Uint32Array(m.fragment) }); });
+		fragments: function (task, onProgress) {
+			return run(Object.assign({ op: "fragments" }, task), transfers(task), function (m) { return Object.assign(m.result, { fragment: new Uint32Array(m.fragment) }); }, onProgress);
 		},
 		/**
-		 * findFacets on one tile's points (src/facets/parallel.js), the columns transferred.
-		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean, opts: object}} task
+		 * findFacets on one tile's points (src/facets/parallel.js), the columns transferred; keepNormals: the
+		 * normals it computed come back too. onProgress(share of the tile done).
+		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean, opts: object, normal?: ArrayBuffer, residual?: ArrayBuffer}} task
 		 * @returns {Promise<object>} findFacets' result, facet a Uint32Array
 		 */
-		facets: function (task) {
-			return run(Object.assign({ op: "facets" }, task), [task.x, task.y, task.z], function (m) { return Object.assign(m.result, { facet: new Uint32Array(m.facet) }); });
+		facets: function (task, onProgress) {
+			return run(Object.assign({ op: "facets" }, task), transfers(task), function (m) {
+				return Object.assign(m.result, { facet: new Uint32Array(m.facet), normals: m.normal ? { normal: new Float32Array(m.normal), residual: new Float32Array(m.residual) } : undefined });
+			}, onProgress);
 		},
 		close: function () {
 			if (closed) return;

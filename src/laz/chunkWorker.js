@@ -27,6 +27,7 @@ import { createChunkCompressor } from "./compressChunk.js";
 import { chunkNodes } from "../tiles/chunkNodes.js";
 import { findFragments } from "../fragments/findFragments.js";
 import { findFacets } from "../facets/findFacets.js";
+import { pointNormals } from "../ops/normals.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -87,10 +88,22 @@ function octree(m) {
 	port.post({ id: m.id, nodes: out }, out.map(function (n) { return n.records; }));
 }
 
+// a tile's options with its own normals (cut from the whole cloud's), when it was given them
+function withNormals(m) {
+	var o = Object.assign({}, m.opts, { onProgress: tileProgress(m, 0, 1) });
+	if (m.normal) o.normals = { normal: new Float32Array(m.normal), residual: new Float32Array(m.residual) };
+	return o;
+}
+// a tile's progress as a share (from + span x done), posted at most every 2 %
+function tileProgress(m, from, span) {
+	var last = -1;
+	return function (d, t) { var f = from + span * (t ? d / t : 1); if (f - last >= 0.02 || f >= 1) { last = f; port.post({ id: m.id, progress: f }); } };
+}
+
 // one tile of findFragmentsParallel: the result without its fragment column (sent as a buffer) or its facets
 function fragments(m) {
 	var A = m.f32 ? Float32Array : Float64Array;
-	var r = findFragments({ count: m.count, x: new A(m.x), y: new A(m.y), z: new A(m.z) }, m.opts);
+	var r = findFragments({ count: m.count, x: new A(m.x), y: new A(m.y), z: new A(m.z) }, withNormals(m));
 	var fragment = r.fragment.buffer;
 	r.fragment = null; r.facets = null;
 	port.post({ id: m.id, result: r, fragment: fragment }, [fragment]);
@@ -99,10 +112,17 @@ function fragments(m) {
 // one tile of findFacetsParallel: the result with its facet column sent as a buffer
 function facets(m) {
 	var A = m.f32 ? Float32Array : Float64Array;
-	var r = findFacets({ count: m.count, x: new A(m.x), y: new A(m.y), z: new A(m.z) }, m.opts);
-	var facet = r.facet.buffer;
+	var cols = { count: m.count, x: new A(m.x), y: new A(m.y), z: new A(m.z) }, o = withNormals(m), nm = null;
+	if (m.keepNormals && !o.normals) {
+		// the normals made here, to hand back (the slowest stage: half the progress)
+		nm = pointNormals(cols, { k: o.k || 16, maxDistance: o.maxDistance, onProgress: tileProgress(m, 0, 0.5) });
+		o.normals = nm; o.onProgress = tileProgress(m, 0.5, 0.5);
+	}
+	var r = findFacets(cols, o);
+	var facet = r.facet.buffer, out = { id: m.id, result: r, facet: facet }, transfer = [facet];
 	r.facet = null;
-	port.post({ id: m.id, result: r, facet: facet }, [facet]);
+	if (nm) { out.normal = nm.normal.buffer; out.residual = nm.residual.buffer; transfer.push(out.normal, out.residual); }
+	port.post(out, transfer);
 }
 
 function decode(m) {

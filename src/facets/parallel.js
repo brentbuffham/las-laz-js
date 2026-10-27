@@ -16,7 +16,7 @@ import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
 import { planTiles, runTiles } from "../index/planTiles.js";
 import { defaultThreads } from "../laz/pool.js";
-import { estimateNoise, smallestEigen } from "../ops/normals.js";
+import { estimateNoise, smallestEigen, pointNormals } from "../ops/normals.js";
 import { findFacets, checkFacetOptions } from "./findFacets.js";
 import { poleOf, orientationOf } from "./orientation.js";
 import { facetOutline } from "./outline.js";
@@ -30,8 +30,11 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  * @param {object} cols - point columns, as findFacets.
  * @param {object} opts - findFacets' options, and: threads (default one fewer than the cores, at most 16; 1 runs
  *   here), tile (a core's side, m; default about two tiles a thread, at least 4 overlaps), overlap (m each side;
- *   default max(0.5, 5 x maxDistance)), onProgress(done, total) (tiles).
- * @returns {Promise<object>} findFacets' result (facet, facets, planeDistance) plus tiles and threads.
+ *   default max(0.5, 5 x maxDistance)), onProgress(done, total) (points, the tiles weighed by their points), signal
+ *   (an AbortSignal: the workers end and the run rejects with ABORTED), normals (pointNormals for the whole cloud:
+ *   each tile gets its cut), keepNormals (true: the result's normals, for a quicker re-run).
+ * @returns {Promise<object>} findFacets' result (facet, facets, planeDistance) plus tiles, threads, and normals with
+ *   keepNormals (the ones given, or the tiles' joined: each point's from the tile whose core holds it).
  */
 export async function findFacetsParallel(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFacetsParallel needs options: { maxDistance, … }");
@@ -41,17 +44,25 @@ export async function findFacetsParallel(cols, opts) {
 	var M = opts.overlap === undefined ? Math.max(0.5, 5 * o.maxDistance) : opts.overlap;
 	if (!(typeof M === "number" && M >= 0 && isFinite(M))) throw bad("overlap must be a distance >= 0, not " + JSON.stringify(opts.overlap));
 	if (opts.tile !== undefined && !(typeof opts.tile === "number" && opts.tile > 0 && isFinite(opts.tile))) throw bad("tile must be a positive distance, not " + JSON.stringify(opts.tile));
-	// precomputed normals are per point of the whole cloud; a small cloud: findFacets as it is
-	if (o.normals || n < 2 * MIN_TILE_POINTS && opts.tile === undefined) return Object.assign(findFacets(cols, strip(opts)), { tiles: 1, threads: 1 });
+	// a small cloud: findFacets as it is (precomputed normals are cut per tile below)
+	if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the run was stopped");
+	if (n < 2 * MIN_TILE_POINTS && opts.tile === undefined) return oneRun(cols, strip(opts), o, opts);
 
 	// one plane distance for every tile
 	var pd = o.planeDistance;
 	if (pd === undefined) { var noise = estimateNoise(cols, { k: o.k, maxDistance: o.maxDistance }); pd = noise > 0 ? 3 * noise : o.maxDistance / 10; }
 	var plan = planTiles(cols, opts.tile !== undefined ? opts.tile : function (du, dv) { return Math.max(4 * M, Math.sqrt(du * dv / (2 * threads))); }, M, "findFacetsParallel");
 	var tileOpts = Object.assign(strip(opts), { planeDistance: pd });
-	if (plan.NT === 1 || threads === 1 && opts.tile === undefined) return Object.assign(findFacets(cols, tileOpts), { tiles: 1, threads: 1 });
-	var ran = await runTiles(plan, threads, function (pool, task) { return pool.facets(Object.assign(task, { opts: tileOpts })); },
-		function (tc) { return findFacets(tc, tileOpts); }, opts.onProgress);
+	if (plan.NT === 1 || threads === 1 && opts.tile === undefined) return oneRun(cols, tileOpts, o, opts);
+	var keep = !!opts.keepNormals && !o.normals;
+	var ran = await runTiles(plan, { threads: threads, onProgress: opts.onProgress, normals: o.normals, signal: opts.signal,
+		remote: function (pool, task, onShare) { return pool.facets(Object.assign(task, { opts: tileOpts, keepNormals: keep }), onShare); },
+		local: function (tc, nm, onTile) {
+			if (keep) nm = pointNormals(tc, { k: o.k, maxDistance: o.maxDistance });
+			var r = findFacets(tc, Object.assign({}, tileOpts, nm ? { normals: nm } : {}, { onProgress: onTile }));
+			if (keep) r.normals = nm;
+			return r;
+		} });
 	var results = ran.results, members = plan.members, i, j, t;
 
 	// a node per (tile, facet); each point's owner is its core tile's facet
@@ -134,12 +145,37 @@ export async function findFacetsParallel(cols, opts) {
 	});
 	var facet = new Uint32Array(n);
 	for (i = 0; i < n; i++) if (root[i]) facet[i] = idOf.get(root[i]) || 0;
-	return { facet: facet, facets: facets, planeDistance: pd, tiles: plan.NT, threads: ran.threads };
+	var out = { facet: facet, facets: facets, planeDistance: pd, tiles: plan.NT, threads: ran.threads };
+	if (opts.keepNormals) out.normals = o.normals || stitchNormals(plan, results, n);
+	return out;
 }
 
-// findFacets' own options: no function (it cannot go to a worker) and none of this module's
+// one findFacets on this thread, with the normals given or made (and kept when asked)
+function oneRun(cols, base, o, opts) {
+	var nm = o.normals || (opts.keepNormals ? pointNormals(cols, { k: o.k, maxDistance: o.maxDistance }) : undefined);
+	var r = findFacets(cols, Object.assign({}, base, nm ? { normals: nm } : {}, opts.onProgress ? { onProgress: opts.onProgress } : {}));
+	return Object.assign(r, { tiles: 1, threads: 1 }, opts.keepNormals ? { normals: nm } : {});
+}
+
+// the whole cloud's normals from the tiles': each point's from the tile whose core holds it
+function stitchNormals(plan, results, n) {
+	var normal = new Float32Array(3 * n), residual = new Float32Array(n).fill(NaN);
+	results.forEach(function (r, t) {
+		if (!r || !r.normals) return;
+		var idx = plan.members[t], nm = r.normals;
+		for (var j = 0; j < idx.length; j++) {
+			var p = idx[j];
+			if (plan.coreTile(p) !== t) continue;
+			normal[3 * p] = nm.normal[3 * j]; normal[3 * p + 1] = nm.normal[3 * j + 1]; normal[3 * p + 2] = nm.normal[3 * j + 2]; residual[p] = nm.residual[j];
+		}
+	});
+	return { normal: normal, residual: residual };
+}
+
+// findFacets' own options: no function or signal (they cannot go to a worker), no normals (each tile gets its own cut) and none of this module's
+var STRIP = ["onProgress", "signal", "threads", "tile", "overlap", "normals", "keepNormals"];
 function strip(opts) {
 	var o = {};
-	Object.keys(opts).forEach(function (key) { if (key !== "onProgress" && key !== "threads" && key !== "tile" && key !== "overlap") o[key] = opts[key]; });
+	Object.keys(opts).forEach(function (key) { if (STRIP.indexOf(key) < 0) o[key] = opts[key]; });
 	return o;
 }

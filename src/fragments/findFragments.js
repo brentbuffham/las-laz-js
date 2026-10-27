@@ -31,7 +31,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
 import { buildKdTree, kdNearest } from "../index/kdtree.js";
-import { pointNormals } from "../ops/normals.js";
+import { pointNormals, sliceNormals } from "../ops/normals.js";
 import { findFacets, checkFacetOptions } from "../facets/findFacets.js";
 import { facetOutline } from "../facets/outline.js";
 import { poleOf } from "../facets/orientation.js";
@@ -198,6 +198,10 @@ function hybridRun(cols, opts) {
 	var fo = {};
 	Object.keys(opts).forEach(function (key) { if (key !== "method" && key !== "onProgress" && key !== "spacing" && WS_ONLY.indexOf(key) < 0) fo[key] = opts[key]; });
 	if (fo.maxDistance === undefined) fo.maxDistance = MD_SPACINGS * spacing; else given.maxDistance = fo.maxDistance;
+	if (fo.normals !== undefined) {
+		if (!fo.normals || !fo.normals.normal || !fo.normals.residual || fo.normals.normal.length !== 3 * n || fo.normals.residual.length !== n) throw bad("normals must be { normal (3 a point), residual (1 a point) } from pointNormals for this cloud");
+		fo.normals = sliceNormals(fo.normals, rest);   // the whole cloud's, for the points the watershed left
+	}
 	if (prog) fo.onProgress = function (d, t) { prog(0.15 + 0.85 * (t ? d / t : 1), 1); };
 	var fr = facetFragments(rc, fo);
 	var kept = fr.fragments.filter(function (f) { return f.axes[1] > 0 && f.axes[2] / f.axes[1] >= SHEET_CB; });

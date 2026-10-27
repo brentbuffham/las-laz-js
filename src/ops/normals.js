@@ -180,6 +180,22 @@ export function pointNormals(cols, opts) {
 }
 
 /**
+ * pointNormals' result for some of the points (a tile, the hybrid's rest), in their order.
+ * @param {{normal: Float32Array, residual: Float32Array}} nm - for the whole cloud.
+ * @param {ArrayLike<number>} idx - the points' indices.
+ * @returns {{normal: Float32Array, residual: Float32Array}}
+ */
+export function sliceNormals(nm, idx) {
+	var m = idx.length, normal = new nm.normal.constructor(3 * m), residual = new nm.residual.constructor(m);
+	for (var j = 0; j < m; j++) {
+		var p = idx[j];
+		normal[3 * j] = nm.normal[3 * p]; normal[3 * j + 1] = nm.normal[3 * p + 1]; normal[3 * j + 2] = nm.normal[3 * p + 2];
+		residual[j] = nm.residual[p];
+	}
+	return { normal: normal, residual: residual };
+}
+
+/**
  * The cloud's noise level: the median residual (lower median, finite ones) over up to
  * 100,000 points spread evenly through it.
  * @param {object} cols - point columns (x, y, z or a k = 3 positions column).

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+Fixed (found from Kirra's Facets dialog):
+- `findFacetsParallel` and `findFragmentsParallel` given precomputed `normals` no longer drop to one
+  thread: each tile gets its cut of them. On the ultra corner a facets re-run with them takes 13 s
+  (a fresh run 17.7 s; before, one thread, about 100 s).
+- `findFragments` method `"hybrid"` given `normals` threw ("normals must be … for this cloud"): the
+  facet pass on the rest now takes the rest's cut.
+
+New:
+- `keepNormals: true` (`findFacetsParallel`): the result's `normals`, joined from the tiles', to pass
+  back for a quicker re-run.
+- `signal` (an AbortSignal) on both parallel runs: the workers end and the run rejects with ABORTED.
+- Progress within the tiles: `onProgress(done, total)` in points (the tiles weighed by their points),
+  from inside each worker, not only as tiles finish.
+- `sliceNormals(normals, indices)` (internal, src/ops/normals.js).
+
 ## 0.14.1 (2026-10-27)
 
 Behaviour changes (`sizeDistribution`):

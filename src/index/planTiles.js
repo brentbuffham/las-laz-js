@@ -8,8 +8,10 @@
 // worker pool, or runs them here one by one; results in tile order.
 //==========================================================
 
+import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "./grid.js";
 import { createLazPool } from "../laz/pool.js";
+import { sliceNormals } from "../ops/normals.js";
 
 /**
  * @param {object} cols - point columns.
@@ -53,30 +55,58 @@ export function planTiles(cols, T, M, name) {
 /**
  * Run every tile: in the pool when threads > 1 (and it starts), else here.
  * @param {object} plan - planTiles' result.
- * @param {number} threads
- * @param {function(object, object): Promise<object>} remote - (pool, task) to a result; task {count, x, y, z, f32}.
- * @param {function(object): object} local - the tile's columns to a result.
- * @param {function(number, number)} [onProgress] - (tiles done, tiles).
+ * @param {{threads: number, remote: function(object, object, function(number)): Promise<object>,
+ *   local: function(object, object|undefined, function(number, number)): object, onProgress?: function(number, number),
+ *   normals?: {normal: Float32Array, residual: Float32Array}, signal?: AbortSignal}} o - remote(pool, task, onShare):
+ *   task {count, x, y, z, f32, and normal, residual (buffers) with normals}; local(the tile's columns, its normals,
+ *   onProgress); onProgress(points done, points), the tiles weighed by their points; normals for the whole cloud,
+ *   cut per tile; signal stops the run (the workers end, the run rejects with ABORTED).
  * @returns {Promise<{results: Array<object|null>, threads: number}>} null for a tile under 9 points.
  */
-export async function runTiles(plan, threads, remote, local, onProgress) {
-	var co = plan.co, st = plan.st, Arr = co.x instanceof Float32Array ? Float32Array : Float64Array, done = 0;
+export async function runTiles(plan, o) {
+	var co = plan.co, st = plan.st, Arr = co.x instanceof Float32Array ? Float32Array : Float64Array, signal = o.signal;
+	function stopped() { return new LasError(ERROR_CODES.ABORTED, "the run was stopped"); }
+	if (signal && signal.aborted) throw stopped();
 	function columns(idx) {
 		var m = idx.length, x = new Arr(m), y = new Arr(m), z = new Arr(m);
-		for (var j = 0; j < m; j++) { var o = idx[j] * st; x[j] = co.x[o]; y[j] = co.y[o]; z[j] = co.z[o]; }
+		for (var j = 0; j < m; j++) { var q = idx[j] * st; x[j] = co.x[q]; y[j] = co.y[q]; z[j] = co.z[q]; }
 		return { count: m, x: x, y: y, z: z };
 	}
-	var pool = threads > 1 ? await createLazPool(Math.min(threads, plan.NT)) : null;
+	// progress: each tile's share of its points, summed; reported at most every 1 %
+	var share = new Float64Array(plan.NT), total = 0, last = -1;
+	plan.members.forEach(function (idx) { total += idx.length; });
+	function report(t, f) {
+		share[t] = Math.max(share[t], Math.min(1, f));
+		if (!o.onProgress) return;
+		var done = 0;
+		for (var k = 0; k < plan.NT; k++) done += share[k] * plan.members[k].length;
+		if (done - last >= 0.01 * total || done >= total) { last = done; o.onProgress(done, total); }
+	}
+	if (o.onProgress) o.onProgress(0, total);
+	var pool = o.threads > 1 ? await createLazPool(Math.min(o.threads, plan.NT)) : null;
+	var abort = function () { if (pool) pool.close(); };
+	if (signal) signal.addEventListener("abort", abort);
 	try {
-		var results = await Promise.all(plan.members.map(function (idx) {
-			if (idx.length < 9) return Promise.resolve(null);
-			var tc = columns(idx);
-			var job = pool ? remote(pool, { count: tc.count, x: tc.x.buffer, y: tc.y.buffer, z: tc.z.buffer, f32: Arr === Float32Array })
-				: Promise.resolve().then(function () { return local(tc); });
-			return job.then(function (r) { done++; if (onProgress) onProgress(done, plan.NT); return r; });
+		var results = await Promise.all(plan.members.map(function (idx, t) {
+			if (idx.length < 9) { report(t, 1); return Promise.resolve(null); }
+			var tc = columns(idx), nm = o.normals ? sliceNormals(o.normals, idx) : undefined, task;
+			if (pool) {
+				task = { count: tc.count, x: tc.x.buffer, y: tc.y.buffer, z: tc.z.buffer, f32: Arr === Float32Array };
+				if (nm) { task.normal = nm.normal.buffer; task.residual = nm.residual.buffer; }
+			}
+			var job = pool ? o.remote(pool, task, function (f) { report(t, f); })
+				: Promise.resolve().then(function () {
+					if (signal && signal.aborted) throw stopped();
+					return o.local(tc, nm, function (d, n) { report(t, n ? d / n : 1); });
+				});
+			return job.then(function (r) { report(t, 1); return r; });
 		}));
-		return { results: results, threads: pool ? Math.min(threads, plan.NT) : 1 };
+		if (signal && signal.aborted) throw stopped();
+		return { results: results, threads: pool ? Math.min(o.threads, plan.NT) : 1 };
+	} catch (err) {
+		throw signal && signal.aborted ? stopped() : err;
 	} finally {
+		if (signal) signal.removeEventListener("abort", abort);
 		if (pool) pool.close();
 	}
 }

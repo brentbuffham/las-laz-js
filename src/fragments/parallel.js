@@ -27,6 +27,7 @@ var CELL_SPACINGS = 1.5, MAX_CELLS = 6e7;
 var FACET_ONLY = ["maxDistance", "k", "normals", "facetOptions", "concaveAngle", "surfaceDistance", "viewpoint", "fill", "fillDistance"];
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
+function checkNormals(nm, n) { if (!nm || !nm.normal || !nm.residual || nm.normal.length !== 3 * n || nm.residual.length !== n) throw bad("normals must be { normal (3 a point), residual (1 a point) } from pointNormals for this cloud"); }
 
 /**
  * findFragments split over tiles and run in parallel workers (browser Web Workers or Node worker_threads).
@@ -34,7 +35,9 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  * @param {object} opts - findFragments' options, and: threads (workers; default one fewer than the cores, at
  *   most 16; 1 runs here), tile (the side of a tile's core, m; default from the cloud's area, about two tiles a
  *   thread, at least 4 overlaps), overlap (m each side; default max(2.5, reliefRadius + 1.5): wider than the
- *   largest rock, and the watershed's relief radius), onProgress(done, total) (tiles).
+ *   largest rock, and the watershed's relief radius), onProgress(done, total) (points, the tiles weighed by their
+ *   points), signal (an AbortSignal: the workers end and the run rejects with ABORTED), normals (pointNormals for
+ *   the whole cloud: each tile gets its cut).
  * @returns {Promise<object>} findFragments' result (fragment, fragments, surfaceArea, unassignedArea, method,
  *   spacing, floor, resolution, warnings, cell, fromWatershed / fromFacets for the hybrid), plus tiles and threads;
  *   facets is null (facet ids are each tile's own).
@@ -47,7 +50,9 @@ export async function findFragmentsParallel(cols, opts) {
 	var method = opts.method === undefined ? "facets" : opts.method;
 	var spacing = pointSpacing(cols);
 	// precomputed normals are per point of the whole cloud; too few points or one thread: findFragments as it is
-	if (opts.normals !== undefined || !(spacing > 0) || n < 2 * MIN_TILE_POINTS && opts.tile === undefined) return Object.assign(findFragments(cols, strip(opts)), { tiles: 1, threads: 1 });
+	if (opts.normals !== undefined) checkNormals(opts.normals, n);
+	if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the run was stopped");
+	if (!(spacing > 0) || n < 2 * MIN_TILE_POINTS && opts.tile === undefined) return Object.assign(findFragments(cols, opts.normals ? Object.assign(strip(opts), { normals: opts.normals }) : strip(opts)), { tiles: 1, threads: 1 });
 
 	var rr = opts.reliefRadius === undefined ? 1 : opts.reliefRadius;
 	var M = opts.overlap === undefined ? Math.max(2.5, rr + 1.5) : opts.overlap;
@@ -55,12 +60,13 @@ export async function findFragmentsParallel(cols, opts) {
 	if (opts.tile !== undefined && !(typeof opts.tile === "number" && opts.tile > 0 && isFinite(opts.tile))) throw bad("tile must be a positive distance, not " + JSON.stringify(opts.tile));
 	var plan = planTiles(cols, opts.tile !== undefined ? opts.tile : function (du, dv) { return Math.max(4 * M, Math.sqrt(du * dv / (2 * threads))); }, M, "findFragmentsParallel");
 	var NT = plan.NT, members = plan.members, order = plan.order, U = plan.U, V = plan.V, u0 = plan.u0, v0 = plan.v0, du = plan.du, dv = plan.dv, i, k;
-	if (NT === 1 || threads === 1 && opts.tile === undefined) return Object.assign(findFragments(cols, Object.assign(strip(opts), { spacing: spacing })), { tiles: 1, threads: 1 });
+	if (NT === 1 || threads === 1 && opts.tile === undefined) return Object.assign(findFragments(cols, Object.assign(strip(opts), { spacing: spacing }, opts.normals ? { normals: opts.normals } : {})), { tiles: 1, threads: 1 });
 
 	// run them: the pool, or here
 	var tileOpts = Object.assign(strip(opts), { spacing: spacing });
-	var ran = await runTiles(plan, threads, function (pool, task) { return pool.fragments(Object.assign(task, { opts: tileOpts })); },
-		function (tc) { return findFragments(tc, tileOpts); }, opts.onProgress);
+	var ran = await runTiles(plan, { threads: threads, onProgress: opts.onProgress, normals: opts.normals, signal: opts.signal,
+		remote: function (pool, task, onShare) { return pool.fragments(Object.assign(task, { opts: tileOpts }), onShare); },
+		local: function (tc, nm, onTile) { return findFragments(tc, Object.assign({}, tileOpts, nm ? { normals: nm } : {}, { onProgress: onTile })); } });
 	var results = ran.results;
 
 	// stitch: keep each tile's fragments whose centroid is in its core; the first claim on a point holds
@@ -115,9 +121,10 @@ export async function findFragmentsParallel(cols, opts) {
 	return Object.assign(resultFields(out, spacing, given), { tiles: NT, threads: ran.threads });
 }
 
-// findFragments' own options: no function (it cannot go to a worker) and none of this module's
+// findFragments' own options: no function or signal (they cannot go to a worker), no normals (each tile gets its own cut) and none of this module's
+var STRIP = ["onProgress", "signal", "threads", "tile", "overlap", "normals"];
 function strip(opts) {
 	var o = {};
-	Object.keys(opts).forEach(function (key) { if (key !== "onProgress" && key !== "threads" && key !== "tile" && key !== "overlap") o[key] = opts[key]; });
+	Object.keys(opts).forEach(function (key) { if (STRIP.indexOf(key) < 0) o[key] = opts[key]; });
 	return o;
 }

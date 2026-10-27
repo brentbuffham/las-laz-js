@@ -65,3 +65,37 @@ test("shortcuts and bad options", async function () {
 	}
 	assert.equal(lib.findFacetsParallel, findFacetsParallel);
 });
+
+test("precomputed normals run on the tiles too", async function () {
+	var nm = lib.pointNormals(ROOF, { k: 16, maxDistance: OPTS.maxDistance });
+	var o = Object.assign({ normals: nm, tile: 2.5, overlap: 0.5 }, OPTS);
+	var a = await findFacetsParallel(ROOF, Object.assign({ threads: 2 }, o)), b = await findFacetsParallel(ROOF, Object.assign({ threads: 1 }, o));
+	assert.ok(a.tiles >= 9 && a.threads === 2, a.tiles + " tiles, " + a.threads + " threads");
+	assert.deepEqual(a.facet, b.facet);
+	var big = a.facets.filter(function (f) { return f.area > 10; });
+	assert.equal(big.length, 2);
+});
+
+test("keepNormals hands the normals back for a quick re-run", async function () {
+	var o = Object.assign({ tile: 2.5, overlap: 0.5, threads: 2, keepNormals: true }, OPTS);
+	var first = await findFacetsParallel(ROOF, o);
+	assert.ok(first.normals && first.normals.normal.length === 3 * ROOF.count && first.normals.residual.length === ROOF.count);
+	var again = await findFacetsParallel(ROOF, Object.assign({}, o, { normals: first.normals }));
+	assert.equal(again.normals, first.normals);
+	assert.deepEqual(again.facets.filter(function (f) { return f.area > 10; }).map(function (f) { return Math.round(f.area); }), first.facets.filter(function (f) { return f.area > 10; }).map(function (f) { return Math.round(f.area); }));
+	var one = await findFacetsParallel(ROOF, Object.assign({ keepNormals: true }, OPTS));   // the small-cloud path keeps them too
+	assert.equal(one.tiles, 1); assert.equal(one.normals.residual.length, ROOF.count);
+});
+
+test("progress within the tiles, and a run stopped", async function () {
+	var calls = [];
+	var r = await findFacetsParallel(ROOF, Object.assign({ tile: 2.5, overlap: 0.5, threads: 2, onProgress: function (d, t) { calls.push([d, t]); } }, OPTS));
+	assert.ok(r.tiles >= 9);
+	assert.ok(calls.length > r.tiles, calls.length + " calls for " + r.tiles + " tiles");
+	for (var i = 1; i < calls.length; i++) assert.ok(calls[i][0] >= calls[i - 1][0]);
+	assert.equal(calls[calls.length - 1][0], calls[calls.length - 1][1]);
+	var before = new AbortController(); before.abort();
+	await assert.rejects(findFacetsParallel(ROOF, Object.assign({ tile: 2.5, threads: 2, signal: before.signal }, OPTS)), /stopped/);
+	var during = new AbortController();
+	await assert.rejects(findFacetsParallel(ROOF, Object.assign({ tile: 2.5, threads: 2, signal: during.signal, onProgress: function (d) { if (d > 0) during.abort(); } }, OPTS)), /stopped/);
+});

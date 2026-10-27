@@ -91,3 +91,24 @@ test("bad options", async function () {
 test("exports", function () {
 	assert.equal(lib.findFragmentsParallel, findFragmentsParallel);
 });
+
+test("precomputed normals: the hybrid takes them, and so do the tiles", async function () {
+	var nm = lib.pointNormals(PILE.cols, { k: 16, maxDistance: 0.08 });
+	var plain = findFragments(PILE.cols, { method: "hybrid", maxDistance: 0.08 });
+	var given = findFragments(PILE.cols, { method: "hybrid", maxDistance: 0.08, normals: nm });
+	// the rest takes the whole cloud's normals (not ones fitted on the rest alone): about the same, not the same
+	assert.ok(Math.abs(given.fragments.length - plain.fragments.length) <= 0.1 * plain.fragments.length, given.fragments.length + " vs " + plain.fragments.length);
+	assert.equal(given.fromWatershed, plain.fromWatershed);
+	var par = await findFragmentsParallel(PILE.cols, { method: "hybrid", maxDistance: 0.08, normals: nm, threads: 2, tile: 4, overlap: 1.5 });
+	assert.ok(par.tiles > 1 && par.threads === 2, par.tiles + " tiles, " + par.threads + " threads");
+	assert.ok(Math.abs(par.fragments.length - plain.fragments.length) <= 0.1 * plain.fragments.length + 2, par.fragments.length + " vs " + plain.fragments.length);
+});
+
+test("fragments: progress within the tiles, and a run stopped", async function () {
+	var calls = [];
+	var r = await findFragmentsParallel(PILE.cols, { method: "watershed", threads: 2, tile: 3, overlap: 1.5, onProgress: function (d, t) { calls.push([d, t]); } });
+	assert.ok(calls.length > r.tiles, calls.length + " calls for " + r.tiles + " tiles");
+	assert.equal(calls[calls.length - 1][0], calls[calls.length - 1][1]);
+	var c = new AbortController();
+	await assert.rejects(findFragmentsParallel(PILE.cols, { method: "hybrid", threads: 2, tile: 3, overlap: 1.5, signal: c.signal, onProgress: function (d) { if (d > 0) c.abort(); } }), /stopped/);
+});
