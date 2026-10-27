@@ -113,9 +113,9 @@ test("localOrigin on write adds the origin back to every coordinate", async func
 	assert.ok(Math.abs(back.y[0] - 6770010.5) < 0.0005);
 });
 
-test("chooseScaleOffset: centre offset; 0.001 scale, coarsened past the int32 range (Kirra's rule)", function () {
+test("chooseScaleOffset: the centre snapped to 100 m at 0.001; 0.001 scale, coarsened past the int32 range (Kirra's rule)", function () {
 	var so = chooseScaleOffset({ minX: 0, maxX: 1000, minY: 0, maxY: 500, minZ: 0, maxZ: 100 });
-	assert.deepEqual(so.offset, { x: 500, y: 250, z: 50 });
+	assert.deepEqual(so.offset, { x: 500, y: 300, z: 100 });   // centres 500, 250, 50 to multiples of 100 m
 	assert.deepEqual(so.scale, { x: 0.001, y: 0.001, z: 0.001 });
 	assert.equal(chooseScaleOffset({ minX: 0, maxX: 5e6, minY: 0, maxY: 1, minZ: 0, maxZ: 1 }).scale.x, 0.01);
 });
@@ -284,4 +284,18 @@ test("point formats 6-10 set the WKT bit with or without a CRS (LAS 1.4 R15); fo
 	assert.equal(old.header.globalEncoding & 16, 0);
 	var laz = await openLas(await writeLas(c, { version: "1.4", pointFormat: 6, compress: true }));
 	assert.equal(laz.header.globalEncoding & 16, 16, "LAZ too");
+});
+
+test("the offset is a round number: a multiple of 100,000 x the scale, every point still within an int32", function () {
+	var b = { minX: 478123.4567, maxX: 478987.1234, minY: 6771234.5678, maxY: 6772001.0001, minZ: 212.3456, maxZ: 287.6543 };
+	var so = chooseScaleOffset(b);
+	assert.equal(so.scale.x, 0.001);
+	assert.deepEqual([so.offset.x, so.offset.y, so.offset.z], [478600, 6771600, 200]);
+	["x", "y", "z"].forEach(function (a) {
+		var lo = (b["min" + a.toUpperCase()] - so.offset[a]) / so.scale[a], hi = (b["max" + a.toUpperCase()] - so.offset[a]) / so.scale[a];
+		assert.ok(lo > -2147483648 && hi < 2147483647, a);
+	});
+	// a range at the int32 limit still fits after the snap
+	var wide = chooseScaleOffset({ minX: 0, maxX: 1.99e6, minY: 0, maxY: 1, minZ: 0, maxZ: 1 });
+	assert.ok((1.99e6 - wide.offset.x) / wide.scale.x < 2147483647 && (0 - wide.offset.x) / wide.scale.x > -2147483648);
 });

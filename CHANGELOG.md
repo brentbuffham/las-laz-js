@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.3 (2026-10-27)
+
+Changed:
+- `chooseScaleOffset` (the writer's default scale and offset, and the tile store's): the offset is the
+  bounds' centre snapped to a multiple of 100,000 x the scale (100 m at millimetres), as PDAL and
+  LAStools keep offsets round, so stored integers stay readable and files of one site share an offset.
+  Every point stays well inside an int32 (the snap moves at most 50,000 counts). The scale is
+  unchanged. (From an outside review.)
+
 ## 0.16.2 (2026-10-27)
 
 Fixed:
