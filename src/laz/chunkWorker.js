@@ -26,6 +26,7 @@ import { createChunkDecoder } from "./decompressChunk.js";
 import { createChunkCompressor } from "./compressChunk.js";
 import { chunkNodes } from "../tiles/chunkNodes.js";
 import { findFragments } from "../fragments/findFragments.js";
+import { findFacets } from "../facets/findFacets.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -57,6 +58,7 @@ function handle(m) {
 		if (m.op === "compress") compress(m);
 		else if (m.op === "octree") octree(m);
 		else if (m.op === "fragments") fragments(m);
+		else if (m.op === "facets") facets(m);
 		else decode(m);
 	} catch (err) {
 		port.post({ id: m.id, error: { code: err && err.code, message: err && err.message ? err.message : String(err), offset: err && err.offset } });
@@ -92,6 +94,15 @@ function fragments(m) {
 	var fragment = r.fragment.buffer;
 	r.fragment = null; r.facets = null;
 	port.post({ id: m.id, result: r, fragment: fragment }, [fragment]);
+}
+
+// one tile of findFacetsParallel: the result with its facet column sent as a buffer
+function facets(m) {
+	var A = m.f32 ? Float32Array : Float64Array;
+	var r = findFacets({ count: m.count, x: new A(m.x), y: new A(m.y), z: new A(m.z) }, m.opts);
+	var facet = r.facet.buffer;
+	r.facet = null;
+	port.post({ id: m.id, result: r, facet: facet }, [facet]);
 }
 
 function decode(m) {

@@ -73,7 +73,9 @@ export function checkFacetOptions(cols, opts) {
  *   minPoints 20; outlineCell 2 x the facet's median nearest-neighbour spacing; normals from
  *   pointNormals with the same k and maxDistance, to skip computing them.
  * @returns {{facet: Uint32Array, facets: Array<{id: number, count: number, normal: number[], centroid: number[],
- *   dip: number, dipDirection: number, area: number, rms: number, outline: Float64Array}>, planeDistance: number}}
+ *   dip: number, dipDirection: number, area: number, rms: number, outline: Float64Array}>, planeDistance: number,
+ *   outlineCell: number}} outlineCell: the median of the facets' outline cells (each 2 x its median
+ *   nearest-neighbour spacing), the one given, or NaN with no facet.
  * @throws {LasError} INVALID_ARGUMENT naming the bad option.
  */
 export function findFacets(cols, opts) {
@@ -106,7 +108,7 @@ export function findFacets(cols, opts) {
 	for (i = 0; i < n; i++) if (hasNormal(i)) seeds[counts[binOf(i)]++] = i;
 
 	var facet = new Uint32Array(n), seen = new Uint8Array(n), noSeed = new Uint8Array(n), out = new Uint8Array(n), released = new Uint8Array(n), queue = new Uint32Array(n);
-	var P = new Uint32Array(o.k), Dd = new Float64Array(o.k), eig = new Float64Array(5), cov = new Float64Array(6);
+	var P = new Uint32Array(o.k), Dd = new Float64Array(o.k), eig = new Float64Array(5), cov = new Float64Array(6), cellsUsed = [];
 	var found = [], id = 0, processed = 0, spacing = new Float64Array(SPACING_SAMPLE);
 
 	seeds.forEach(function (seed) {
@@ -160,6 +162,7 @@ export function findFacets(cols, opts) {
 		var shape = facetOutline(X, Y, Z, st, members, centroid, normal, cell);
 		if (shape.area < o.minArea) { release(); return; }
 		var or = orientationOf(normal);
+		cellsUsed.push(cell);
 		found.push({ tmp: id, count: len, normal: normal, centroid: centroid, dip: or.dip, dipDirection: or.dipDirection, area: shape.area, rms: Math.sqrt(Math.max(0, eig[3])), outline: shape.outline });
 	});
 
@@ -172,5 +175,6 @@ export function findFacets(cols, opts) {
 	});
 	for (i = 0; i < n; i++) if (facet[i]) facet[i] = map[facet[i]];
 	tick(total);
-	return { facet: facet, facets: facets, planeDistance: pd };
+	cellsUsed.sort(function (a, b) { return a - b; });
+	return { facet: facet, facets: facets, planeDistance: pd, outlineCell: o.outlineCell || (cellsUsed.length ? cellsUsed[Math.floor((cellsUsed.length - 1) / 2)] : NaN) };
 }

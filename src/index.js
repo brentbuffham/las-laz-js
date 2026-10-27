@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.12.0";
+export var VERSION = "0.14.0";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -36,6 +36,7 @@ export { parseControlPoints, matchControlPoints } from "./register/controlPoints
 export { alignCloud } from "./register/align.js";
 export { poleOf, orientationOf, poleFromOrientation } from "./facets/orientation.js";
 export { findFacets } from "./facets/findFacets.js";
+export { findFacetsParallel } from "./facets/parallel.js";
 export { jointSets } from "./facets/jointSets.js";
 export { findFragments } from "./fragments/findFragments.js";
 export { findFragmentsParallel } from "./fragments/parallel.js";

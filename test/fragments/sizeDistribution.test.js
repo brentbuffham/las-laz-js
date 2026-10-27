@@ -233,11 +233,14 @@ test("a lower limit above everything", function () {
 });
 
 test("lower under the floor", function () {
-	var r = result(); r.floor = 0.41;
+	var r = result(); r.floor = 0.41; r.resolution = "coarse";
 	var d = sizeDistribution(r, { lower: 0.115 }), w = d.warnings.filter(function (x) { return x.code === "LOWER_UNDER_FLOOR"; });
 	assert.equal(w.length, 1);
 	assert.ok(/0\.115/.test(w[0].message) && /0\.41/.test(w[0].message), w[0].message);
 	assert.equal(sizeDistribution(r).warnings.length, 0);
+	// a fine cloud (a 1.5 cm scan): a lower limit under the floor is the user's call, not a warning
+	r.resolution = "fine";
+	assert.equal(sizeDistribution(r, { lower: 0.115 }).warnings.length, 0);
 });
 
 test("bad limits", function () {

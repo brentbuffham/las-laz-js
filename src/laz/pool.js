@@ -173,6 +173,14 @@ export async function createLazPool(n, nodeUrl) {
 		fragments: function (task) {
 			return run(Object.assign({ op: "fragments" }, task), [task.x, task.y, task.z], function (m) { return Object.assign(m.result, { fragment: new Uint32Array(m.fragment) }); });
 		},
+		/**
+		 * findFacets on one tile's points (src/facets/parallel.js), the columns transferred.
+		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean, opts: object}} task
+		 * @returns {Promise<object>} findFacets' result, facet a Uint32Array
+		 */
+		facets: function (task) {
+			return run(Object.assign({ op: "facets" }, task), [task.x, task.y, task.z], function (m) { return Object.assign(m.result, { facet: new Uint32Array(m.facet) }); });
+		},
 		close: function () {
 			if (closed) return;
 			closed = true;

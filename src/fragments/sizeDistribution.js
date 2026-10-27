@@ -58,7 +58,7 @@ function options(input, opts) {
 		if ((weight === "area" || needArea) && !finite(f.area)) throw bad("fragments[" + i + "] needs a finite area " + (weight === "area" ? "to weigh by area" : "for the fines share"));
 	});
 	var warnings = [];
-	if (isResult && o.lower !== undefined && floor > 0 && lower < floor) warnings.push({ code: "LOWER_UNDER_FLOOR", message: "Lower limit " + lower + " is under this cloud's floor (" + floor.toFixed(2) + "): the curve between them is not measured." });
+	if (isResult && o.lower !== undefined && floor > 0 && lower < floor && input.resolution !== "fine") warnings.push({ code: "LOWER_UNDER_FLOOR", message: "Lower limit " + lower + " is under this cloud's floor (" + floor.toFixed(2) + "): the curve between them is not measured." });
 	return { fragments: fragments, unassigned: isResult && finite(input.unassignedArea) ? input.unassignedArea : 0, surface: isResult && finite(input.surfaceArea) ? input.surfaceArea : 0, needArea: needArea, lower: lower, upper: upper, finesSize: finesSize,
 		warnings: warnings, weight: weight, model: model, fitFrom: fitFrom, fines: fines, percents: percents };
 }

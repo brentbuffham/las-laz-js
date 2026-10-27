@@ -1,6 +1,6 @@
 // examples/browser/facets.js
 //==========================================================
-// The demo's Facets tab: findFacets on the selection (a polygon round
+// The demo's Facets tab: findFacetsParallel (tiles on every core) on the selection (a polygon round
 // the wall) or the whole cloud, then jointSets (automatic, a count, or
 // typed windows). Colours by facet or joint set (the Colour tab's list),
 // outlines on the cloud, the sets table with Select set (the set's
@@ -11,7 +11,7 @@
 // centroids are world coordinates.
 //==========================================================
 
-import { findFacets, jointSets } from "../../src/index.js";
+import { findFacetsParallel, jointSets } from "../../src/index.js";
 import { drawStereonet } from "./stereonet.js";
 
 // Set colours, then grey for points in no set
@@ -119,9 +119,9 @@ export function initFacets(ctx) {
 		status("finding facets in " + fmt(cols.count) + " points" + (idx ? " (the selection)" : "") + "…");
 		$("progress").value = 0;
 		opts.onProgress = function (d, t) { $("progress").value = t ? d / t : 1; };
-		requestAnimationFrame(function () { setTimeout(function () {
+		requestAnimationFrame(function () { setTimeout(async function () {
 			var t0 = performance.now(), f;
-			try { f = findFacets(cols, opts); } catch (err) { status(err.message, true); return; }
+			try { f = await findFacetsParallel(cols, opts); } catch (err) { status(err.message, true); return; }
 			var facet = new Uint32Array(cloud.count), inFacets = 0;
 			for (var i = 0; i < f.facet.length; i++) { var c = idx ? idx[i] : i; facet[c] = f.facet[i]; if (f.facet[i]) inFacets++; }
 			res = { f: f, idx: idx, facet: facet, sets: null, pointSet: null };

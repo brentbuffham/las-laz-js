@@ -232,7 +232,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-facets">
-				<p class="muted small">Splits the selection (draw a polygon round the wall, Inside polygon) or the whole cloud into facets, flat patches, with <code>findFacets</code>, and groups them into joint sets with <code>jointSets</code>. Dip 90 is vertical; dip direction is a bearing from north. The page pauses while it runs.</p>
+				<p class="muted small">Splits the selection (draw a polygon round the wall, Inside polygon) or the whole cloud into facets, flat patches, with <code>findFacetsParallel</code> (tiles of the cloud on every core), and groups them into joint sets with <code>jointSets</code>. Dip 90 is vertical; dip direction is a bearing from north.</p>
 				<h3>Facets</h3>
 				<div class="form-grid">
 					<label>Max distance (m) <input type="number" id="facMaxDist" value="0.3" min="0.01" step="0.05" title="Neighbours: the k nearest within this distance (as Denoise)"></label>

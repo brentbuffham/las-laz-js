@@ -1,8 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.14.0 (2026-10-27)
+
+Every core, on tiles. (No 0.13.0.)
 
 New:
+- `findFacetsParallel(cols, opts)`: `findFacets` on every core, on the same work tiles (overlap
+  default max(0.5, 5 x maxDistance) m) with one planeDistance for all. A face wider than a tile is
+  found in pieces; pieces sharing points in an overlap, within maxAngle, are joined into one facet
+  and measured again. Ultra corner (10.9 M points, maxDistance 0.08): 104 s to 14 s, 20 facets and
+  37 m² against 20 and 36 m². The demo's Facets tab runs it.
+- `findFacets` returns `outlineCell`, the median of its facets' outline cells.
 - `findFragmentsParallel(cols, opts)`: `findFragments` on every core. The cloud is cut into tiles on
   its two widest axes, each grown by an overlap wider than a rock (default max(2.5, reliefRadius +
   1.5) m), run in workers (browser or Node) with the whole cloud's spacing, and stitched: a fragment
@@ -12,6 +20,10 @@ New:
 - `findFragments` takes `spacing` when it is known (else it is measured).
 - Demo: Fragments runs `findFragmentsParallel`, and on a read thinned by Max points it reads every
   point (inside the polygon) for the run and puts the labels back on the points shown.
+
+Changed:
+- `sizeDistribution` no longer warns `LOWER_UNDER_FLOOR` on a `fine` cloud: on a 1.5 cm scan a
+  lower limit under the floor is the user's call.
 
 Faster:
 - Column-only tile edits (`addColumn`, `removeColumn`, `setColumn` of an added column) keep each

@@ -16,7 +16,8 @@
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
-import { createLazPool, defaultThreads } from "../laz/pool.js";
+import { defaultThreads } from "../laz/pool.js";
+import { planTiles, runTiles } from "../index/planTiles.js";
 import { findFragments } from "./findFragments.js";
 import { pointSpacing } from "./spacing.js";
 import { resultFields } from "./resolution.js";
@@ -40,7 +41,7 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  */
 export async function findFragmentsParallel(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFragmentsParallel needs options: { method?, … }");
-	var co = coordsOf(cols, "findFragmentsParallel"), n = cols.count, st = co.stride;
+	var n = cols.count, st = coordsOf(cols, "findFragmentsParallel").stride;
 	var threads = opts.threads === undefined ? await defaultThreads() : opts.threads;
 	if (!Number.isInteger(threads) || threads < 1) throw bad("threads must be a whole number >= 1, not " + JSON.stringify(opts.threads));
 	var method = opts.method === undefined ? "facets" : opts.method;
@@ -48,73 +49,31 @@ export async function findFragmentsParallel(cols, opts) {
 	// precomputed normals are per point of the whole cloud; too few points or one thread: findFragments as it is
 	if (opts.normals !== undefined || !(spacing > 0) || n < 2 * MIN_TILE_POINTS && opts.tile === undefined) return Object.assign(findFragments(cols, strip(opts)), { tiles: 1, threads: 1 });
 
-	// the two widest axes of the box: the tiles' plane
-	var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity], C = [co.x, co.y, co.z], i, a, k;
-	for (i = 0; i < n; i++) for (a = 0; a < 3; a++) { var v = C[a][i * st]; if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v; }
-	var order = [0, 1, 2].sort(function (p, q) { return (hi[q] - lo[q]) - (hi[p] - lo[p]); }), U = C[order[0]], V = C[order[1]];
-	var u0 = lo[order[0]], v0 = lo[order[1]], du = hi[order[0]] - u0, dv = hi[order[1]] - v0;
-
 	var rr = opts.reliefRadius === undefined ? 1 : opts.reliefRadius;
 	var M = opts.overlap === undefined ? Math.max(2.5, rr + 1.5) : opts.overlap;
 	if (!(typeof M === "number" && M >= 0 && isFinite(M))) throw bad("overlap must be a distance >= 0, not " + JSON.stringify(opts.overlap));
-	var T = opts.tile;
-	if (T === undefined) T = Math.max(4 * M, Math.sqrt(du * dv / (2 * threads)));
-	if (!(typeof T === "number" && T > 0 && isFinite(T))) throw bad("tile must be a positive distance, not " + JSON.stringify(opts.tile));
-	var NU = Math.max(1, Math.ceil(du / T)), NV = Math.max(1, Math.ceil(dv / T)), NT = NU * NV;
+	if (opts.tile !== undefined && !(typeof opts.tile === "number" && opts.tile > 0 && isFinite(opts.tile))) throw bad("tile must be a positive distance, not " + JSON.stringify(opts.tile));
+	var plan = planTiles(cols, opts.tile !== undefined ? opts.tile : function (du, dv) { return Math.max(4 * M, Math.sqrt(du * dv / (2 * threads))); }, M, "findFragmentsParallel");
+	var NT = plan.NT, members = plan.members, order = plan.order, U = plan.U, V = plan.V, u0 = plan.u0, v0 = plan.v0, du = plan.du, dv = plan.dv, i, k;
 	if (NT === 1 || threads === 1 && opts.tile === undefined) return Object.assign(findFragments(cols, Object.assign(strip(opts), { spacing: spacing })), { tiles: 1, threads: 1 });
 
-	// each tile's points: its core grown by M (a point is in up to four tiles while M < T / 2)
-	function span(t, d0, N) { var a0 = Math.max(0, Math.floor((t - d0 - M) / T)), a1 = Math.min(N - 1, Math.floor((t - d0 + M) / T)); return [a0, a1]; }
-	var counts = new Uint32Array(NT);
-	for (i = 0; i < n; i++) {
-		var su = span(U[i * st], u0, NU), sv = span(V[i * st], v0, NV);
-		for (var b = sv[0]; b <= sv[1]; b++) for (a = su[0]; a <= su[1]; a++) counts[b * NU + a]++;
-	}
-	var members = [];
-	for (k = 0; k < NT; k++) members.push(new Uint32Array(counts[k]));
-	counts.fill(0);
-	for (i = 0; i < n; i++) {
-		var pu = span(U[i * st], u0, NU), pv = span(V[i * st], v0, NV);
-		for (var b2 = pv[0]; b2 <= pv[1]; b2++) for (a = pu[0]; a <= pu[1]; a++) { var t = b2 * NU + a; members[t][counts[t]++] = i; }
-	}
-
 	// run them: the pool, or here
-	var tileOpts = Object.assign(strip(opts), { spacing: spacing }), prog = opts.onProgress, done = 0;
-	var Arr = co.x instanceof Float32Array ? Float32Array : Float64Array;
-	function columns(idx) {
-		var m = idx.length, x = new Arr(m), y = new Arr(m), z = new Arr(m);
-		for (var j = 0; j < m; j++) { var o = idx[j] * st; x[j] = co.x[o]; y[j] = co.y[o]; z[j] = co.z[o]; }
-		return { count: m, x: x, y: y, z: z };
-	}
-	var pool = threads > 1 ? await createLazPool(Math.min(threads, NT)) : null;
-	var results;
-	try {
-		results = await Promise.all(members.map(function (idx) {
-			if (idx.length < 9) return Promise.resolve(null);
-			var tc = columns(idx);
-			var job = pool ? pool.fragments({ count: tc.count, x: tc.x.buffer, y: tc.y.buffer, z: tc.z.buffer, f32: Arr === Float32Array, opts: tileOpts })
-				: Promise.resolve().then(function () { return findFragments(tc, tileOpts); });
-			return job.then(function (r) { done++; if (prog) prog(done, NT); return r; });
-		}));
-	} finally {
-		if (pool) pool.close();
-	}
+	var tileOpts = Object.assign(strip(opts), { spacing: spacing });
+	var ran = await runTiles(plan, threads, function (pool, task) { return pool.fragments(Object.assign(task, { opts: tileOpts })); },
+		function (tc) { return findFragments(tc, tileOpts); }, opts.onProgress);
+	var results = ran.results;
 
 	// stitch: keep each tile's fragments whose centroid is in its core; the first claim on a point holds
 	var label = new Uint32Array(n), kept = [], planeDistances = [], sideOn = false, cell = NaN;
 	results.forEach(function (r, ti) {
 		if (!r) return;
-		var tu = ti % NU, tv = Math.floor(ti / NU), cu0 = u0 + tu * T, cv0 = v0 + tv * T, idx = members[ti];
-		var cu1 = tu === NU - 1 ? Infinity : cu0 + T, cv1 = tv === NV - 1 ? Infinity : cv0 + T;
-		if (tu === 0) cu0 = -Infinity;
-		if (tv === 0) cv0 = -Infinity;
+		var idx = members[ti];
 		if (r.planeDistance > 0) planeDistances.push(r.planeDistance);
 		if (r.warnings.some(function (w) { return w.code === "SIDE_ON"; })) sideOn = true;
 		if (r.cell > 0) cell = r.cell;
 		var gid = new Uint32Array(r.fragments.length + 1);
 		r.fragments.forEach(function (f) {
-			var c = f.centroid, cu = c[order[0]], cv = c[order[1]];
-			if (cu >= cu0 && cu < cu1 && cv >= cv0 && cv < cv1) { kept.push(f); gid[f.id] = kept.length; }
+			if (plan.inCore(ti, f.centroid[order[0]], f.centroid[order[1]])) { kept.push(f); gid[f.id] = kept.length; }
 		});
 		for (var j = 0; j < idx.length; j++) { var g = gid[r.fragment[j]]; if (g && !label[idx[j]]) label[idx[j]] = g; }
 	});
@@ -153,7 +112,7 @@ export async function findFragmentsParallel(cols, opts) {
 	var given = { sideOn: sideOn };
 	if (method !== "watershed" && opts.maxDistance !== undefined) given.maxDistance = opts.maxDistance;
 	if (method === "watershed") given.ignored = FACET_ONLY.filter(function (key) { return opts[key] !== undefined; });
-	return Object.assign(resultFields(out, spacing, given), { tiles: NT, threads: pool ? Math.min(threads, NT) : 1 });
+	return Object.assign(resultFields(out, spacing, given), { tiles: NT, threads: ran.threads });
 }
 
 // findFragments' own options: no function (it cannot go to a worker) and none of this module's
