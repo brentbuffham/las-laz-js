@@ -15,7 +15,7 @@ function locked(name) {
 	return new DOMException("locked: " + name, "NoModificationAllowedError");
 }
 
-function createFileEntry(name) {
+function createFileEntry(name, space) {
 	var entry = { kind: "file", name: name, data: new Uint8Array(0), lastModified: Date.now(), locked: false };
 	entry.handle = {
 		kind: "file",
@@ -35,6 +35,8 @@ function createFileEntry(name) {
 				write: function (buf, opts) {
 					var at = (opts && opts.at) || 0;
 					var bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf.buffer || buf);
+					if (space && at + bytes.length - entry.data.length > space.left) { var q = new Error("the quota is used up"); q.name = "QuotaExceededError"; throw q; }
+					if (space && at + bytes.length > entry.data.length) space.left -= at + bytes.length - entry.data.length;
 					if (at + bytes.length > entry.data.length) {
 						var grown = new Uint8Array(at + bytes.length);
 						grown.set(entry.data);
@@ -61,8 +63,11 @@ function createFileEntry(name) {
 /**
  * @returns {object} directory handle with getDirectoryHandle, getFileHandle,
  *   removeEntry, values(), plus test hooks setLastModified(name, ms) and fileBytes(name).
+ * @param {string} [name]
+ * @param {{left: number}} [space] - a quota shared by the root and its folders: a write past it throws
+ *   QuotaExceededError, as OPFS does
  */
-export function createFakeRoot(name) {
+export function createFakeRoot(name, space) {
 	var entries = new Map();
 	var dir = {
 		kind: "directory",
@@ -70,14 +75,14 @@ export function createFakeRoot(name) {
 		getDirectoryHandle: async function (name, opts) {
 			if (!entries.has(name)) {
 				if (!(opts && opts.create)) throw notFound(name);
-				entries.set(name, { kind: "directory", handle: createFakeRoot(name) });
+				entries.set(name, { kind: "directory", handle: createFakeRoot(name, space) });
 			}
 			return entries.get(name).handle;
 		},
 		getFileHandle: async function (name, opts) {
 			if (!entries.has(name)) {
 				if (!(opts && opts.create)) throw notFound(name);
-				entries.set(name, createFileEntry(name));
+				entries.set(name, createFileEntry(name, space));
 			}
 			return entries.get(name).handle;
 		},

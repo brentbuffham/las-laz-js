@@ -12,7 +12,7 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { removeScratchFile } from "../io/ScratchBinaryFile.js";
+import { removeScratchFile, isQuotaError, noSpace } from "../io/ScratchBinaryFile.js";
 
 /** The OPFS folder holding every tile store. */
 export var TILES_DIR = "las-tiles";
@@ -105,7 +105,13 @@ function opfsBackend(where) {
 		var fh = await (await dirFor(p[0])).getFileHandle(p[1], { create: true }), h = await fh.createSyncAccessHandle();
 		h.truncate(0);
 		var at = 0;
-		return { write: function (bytes) { h.write(bytes, { at: at }); at += bytes.length; }, close: function () { h.flush(); h.close(); } };
+		return {
+			write: function (bytes) {
+				try { h.write(bytes, { at: at }); } catch (e) { throw isQuotaError(e) ? noSpace("writing tile store " + where.opfs + " (" + p[1] + ")") : e; }
+				at += bytes.length;
+			},
+			close: function () { h.flush(); h.close(); }
+		};
 	}
 	function missing(e) { return e && e.name === "NotFoundError"; }
 	// a write refused before a byte went in: the empty file it made goes too

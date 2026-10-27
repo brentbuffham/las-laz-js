@@ -28,6 +28,7 @@ import { keyOf, parseKey, childKey, sampleParent, compareKeys as keyOrder, MAX_D
 import { chunkNodes, rawBox } from "./chunkNodes.js";
 import { TileStore, tileName, toBase64, HEAD_NAME, EVLRS_NAME } from "./TileStore.js";
 
+var SPACE_FACTOR = 1.15;   // the raw records once (distribute) and the tiles as they are written
 var PUTS = 8;   // node files written at once (OPFS: about 12 ms a file one by one, 4 ms eight at a time)
 var GRID = 128, GRID_DEPTH = 7;
 var BUFFER_BYTES = 65536;
@@ -202,6 +203,7 @@ export async function buildTiles(las, opts) {
 	var threads = wholeOption(opts, "threads", 0);   // 0 = automatic
 	var h = las.header, len = h.recordLength, signal = opts.signal, onProgress = opts.onProgress;
 	var laz = opts.compress ? lazVlrFor(h.pointFormat, len, 0).vlr : null;   // UNSUPPORTED for formats 4, 5, 9, 10
+	await roomFor(opts.where, h.pointCount * len * SPACE_FACTOR, h.pointCount);
 	var backend = await openBackend(opts.where);
 	var existing = await readManifest(backend);
 	if (existing && !opts.replace) throw bad("a tile store already exists at that where; pass replace: true to rebuild it");
@@ -310,6 +312,18 @@ export async function buildTiles(las, opts) {
 	} finally {
 		if (pool) pool.close();
 	}
+}
+
+// OPFS: refuse up front when the browser says the build will not fit (the distribute pass holds every record
+// raw before the tiles are written); a write past the quota later is NO_SPACE too, and the partial store goes
+async function roomFor(where, need, points) {
+	if (!where || where.opfs === undefined || typeof navigator === "undefined" || !navigator.storage || typeof navigator.storage.estimate !== "function") return;
+	var e;
+	try { e = await navigator.storage.estimate(); } catch (x) { return; }
+	if (!(e && e.quota > 0)) return;
+	var free = e.quota - (e.usage || 0);
+	function mb(n) { return Math.round(n / 1048576).toLocaleString("en") + " MB"; }
+	if (free < need) throw new LasError(ERROR_CODES.NO_SPACE, "the tile store needs about " + mb(need) + " of browser storage for " + points.toLocaleString("en") + " points; " + mb(Math.max(0, free)) + " is free (of " + mb(e.quota) + "): remove other tile stores or site data, or build from fewer points");
 }
 
 function sortedNodes(nodes) {

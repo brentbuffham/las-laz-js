@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.4 (2026-10-27)
+
+New:
+- Browser storage running out is a clear `LasError` with the new code `NO_SPACE`, not a raw
+  `QuotaExceededError`: `buildTiles` into OPFS checks `navigator.storage.estimate()` first and refuses
+  up front when the build will not fit (about 1.15 x the raw records, held once by the distribute pass),
+  naming the space needed and free; a write that still hits the quota (tile store or scratch file) is
+  NO_SPACE naming what was being written, and a failed build removes its partial store, as before.
+  (From an outside review.)
+
 ## 0.16.3 (2026-10-27)
 
 Changed:

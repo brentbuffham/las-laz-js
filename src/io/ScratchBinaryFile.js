@@ -42,6 +42,14 @@ async function getScratchDir(options) {
  * @returns {Promise<{write(bytes: Uint8Array): void, writeAt(bytes: Uint8Array, pos: number): void,
  *   truncate(n: number): void, bytesWritten(): number, close(): void}>}
  */
+/** Whether an error is the browser's storage quota running out. */
+export function isQuotaError(e) { return !!e && (e.name === "QuotaExceededError" || e.code === 22); }
+
+/** The NO_SPACE error for a write that hit the storage quota. */
+export function noSpace(what) {
+	return new LasError(ERROR_CODES.NO_SPACE, "out of browser storage (OPFS) " + what + ": free some space (remove other tile stores or site data) or let the browser grant more");
+}
+
 export async function openScratchSyncWriter(id, options) {
 	var dir = await getScratchDir(options);
 	var fileHandle = await dir.getFileHandle(id, { create: true });
@@ -49,14 +57,18 @@ export async function openScratchSyncWriter(id, options) {
 	handle.truncate(0);
 	var position = 0;
 	var end = 0;
+	// a write past the browser's storage quota: NO_SPACE, naming the file
+	function put(bytes, at) {
+		try { handle.write(bytes, { at: at }); } catch (e) { throw isQuotaError(e) ? noSpace("writing " + id) : e; }
+	}
 	return {
 		write: function (bytes) {
-			handle.write(bytes, { at: position });
+			put(bytes, position);
 			position += bytes.length;
 			end = Math.max(end, position);
 		},
 		writeAt: function (bytes, pos) {
-			handle.write(bytes, { at: pos });
+			put(bytes, pos);
 			end = Math.max(end, pos + bytes.length);
 		},
 		truncate: function (n) {
