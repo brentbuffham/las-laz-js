@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.15.1 (2026-10-27)
 
 Faster (found from Kirra's 160 M / 177 M imports):
 - **OPFS tile stores** look each folder up once, not on every file: a walk from the OPFS root was
