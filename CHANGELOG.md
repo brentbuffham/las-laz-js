@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+New:
+- `resolutionOf(spacing)` and `FLOOR_SPACINGS` (30) are exported, so an app can say what a scan
+  resolves (and its floor, 30 x `pointSpacing`) before a run.
+
 ## 0.14.2 (2026-10-27)
 
 Fixed (found from Kirra's Facets dialog):

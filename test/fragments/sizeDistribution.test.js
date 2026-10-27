@@ -266,7 +266,7 @@ test("limits: edge paths", function () {
 	assert.ok(v.over > 0 && v.over < 50);
 	// a sheet in an array needs areas
 	assert.throws(function () { sizeDistribution([{ size: 1, axes: [1, 1, 0.1], sheet: true }], { weight: "count" }); }, /area/);
-	assert.equal(lib.resolutionOf, undefined);   // internal
+	assert.equal(typeof lib.resolutionOf, "function"); assert.equal(lib.resolutionOf(0.016), "fine"); assert.equal(lib.FLOOR_SPACINGS, 30);   // Kirra classifies a scan before a run
 });
 
 test("finesSize must sit under the smallest size measured", function () {

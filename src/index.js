@@ -42,6 +42,7 @@ export { findFragments } from "./fragments/findFragments.js";
 export { findFragmentsParallel } from "./fragments/parallel.js";
 export { sizeDistribution } from "./fragments/sizeDistribution.js";
 export { pointSpacing } from "./fragments/spacing.js";
+export { resolutionOf, FLOOR_SPACINGS } from "./fragments/resolution.js";
 export { MemorySource } from "./io/MemorySource.js";
 export { BlobSource } from "./io/BlobSource.js";
 export { NodeFileSource } from "./io/NodeFileSource.js";
