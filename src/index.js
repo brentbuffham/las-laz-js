@@ -38,6 +38,7 @@ export { poleOf, orientationOf, poleFromOrientation } from "./facets/orientation
 export { findFacets } from "./facets/findFacets.js";
 export { jointSets } from "./facets/jointSets.js";
 export { findFragments } from "./fragments/findFragments.js";
+export { findFragmentsParallel } from "./fragments/parallel.js";
 export { sizeDistribution } from "./fragments/sizeDistribution.js";
 export { pointSpacing } from "./fragments/spacing.js";
 export { MemorySource } from "./io/MemorySource.js";

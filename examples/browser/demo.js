@@ -962,7 +962,23 @@ var fragments = initFragments({
 		setStatus(name);
 	},
 	get cloud() { return cloud; }, get origin() { return origin; }, get selection() { return selection; },
-	get thinned() { return readThinned && cloud && info ? { total: info.header.pointCount, loaded: cloud.count } : null; }
+	get thinned() { return readThinned && cloud && info ? { total: info.header.pointCount, loaded: cloud.count } : null; },
+	// every point of the file (inside the Edit polygon when there is a selection), with the read's filters, for a run
+	// on a thinned read: x y z and index (to match the points shown) in the read's frame; null when that cannot stand
+	// for what is shown (an edited or moved cloud, or a selection with no closed polygon)
+	readEvery: function (onProgress) {
+		if (!file || !cloud || !cloud.index || edited || transformed) return Promise.resolve(null);
+		var crop = null;
+		if (selection) {
+			if (!(polyClosed && poly.length >= 6)) return Promise.resolve(null);
+			crop = { polygon: poly.map(function (v, i) { return v + (i % 2 ? origin.y : origin.x); }), boundary: $("boundary").value, tolerance: Number($("tolerance").value) || 0 };
+		} else if (readCrop) crop = readCrop;
+		var tol = Number($("dedupe").value) || 0;
+		return call("readPoints", Object.assign({
+			fields: ["x", "y", "z", "index"], classes: list($("classes").value), returns: list($("returns").value), bounds: boundsFilter(),
+			maxPoints: 0, dedupe: tol > 0 ? tol : undefined, localOrigin: readOrigin, float32: true
+		}, crop || {}), function (m) { if (m.type === "progress" && onProgress) onProgress(m.fraction); }).promise;
+	}
 });
 // The Tiles tab: builds and edits go through the Worker; selectTiles runs here
 var tiles = initTiles({

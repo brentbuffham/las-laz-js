@@ -71,6 +71,13 @@ var FACE_DEFAULTS = { maxAngle: 20, minArea: 0, minPoints: 10 };
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 function finite(v) { return typeof v === "number" && isFinite(v); }
 
+// the point spacing: given (findFragmentsParallel passes the whole cloud's to each tile), or measured
+function spacingOf(cols, opts) {
+	if (opts.spacing === undefined) return pointSpacing(cols);
+	if (!finite(opts.spacing) || !(opts.spacing > 0)) throw bad("spacing must be a positive distance, not " + JSON.stringify(opts.spacing));
+	return opts.spacing;
+}
+
 function options(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFragments needs options: { maxDistance, … }");
 	var o = opts;
@@ -130,7 +137,7 @@ function groupBy(label, m) {
  *   maxDistance defaults to 4 x the point spacing, the rest as facetFragments), "watershed" (a muckpile seen from
  *   above: cell 1.5 spacings, reliefRadius 1 (about the largest rock), seedHeight 0.005, clipBelow 0, minPoints 50;
  *   watershed.js) or "hybrid" (the watershed, then the facet options on what it left; its rock-shaped fragments
- *   are rocks too).
+ *   are rocks too). spacing: the point spacing when it is known (default measured by pointSpacing).
  * @returns {object} the method's result (fragment, fragments, surfaceArea, unassignedArea; facets and planeDistance,
  *   null and NaN for the watershed; cell for the grid methods; from on each fragment and fromWatershed /
  *   fromFacets for the hybrid) plus method, spacing, floor (30 spacings), resolution ("fine", "coarse",
@@ -146,7 +153,7 @@ export function findFragments(cols, opts) {
 	if (method === "watershed") return watershedRun(cols, opts);
 	if (method === "hybrid") return hybridRun(cols, opts);
 	if (opts.maxDistance !== undefined) options(cols, opts);   // a bad option is refused before the spacing is measured
-	var spacing = pointSpacing(cols), given = {}, o = opts;
+	var spacing = spacingOf(cols, opts), given = {}, o = opts;
 	if (opts.maxDistance === undefined) {
 		if (!(spacing > 0)) throw bad("maxDistance is needed: too few points to measure the spacing");
 		o = Object.assign({}, opts, { maxDistance: MD_SPACINGS * spacing });
@@ -159,7 +166,7 @@ export function findFragments(cols, opts) {
 // method "watershed": a muckpile seen from above (watershed.js)
 function watershedRun(cols, opts) {
 	if (opts.cell !== undefined || opts.reliefRadius !== undefined) watershedOptions(opts, NaN);   // a bad option is refused before the spacing is measured
-	var spacing = pointSpacing(cols), o = watershedOptions(opts, spacing);
+	var spacing = spacingOf(cols, opts), o = watershedOptions(opts, spacing);
 	var ignored = FACET_ONLY.filter(function (key) { return opts[key] !== undefined; });
 	var fr = o.cell > 0 ? watershedFragments(cols, o, spacing) : { fragment: new Uint32Array(cols.count), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: NaN, sideOn: false };
 	var sideOn = fr.sideOn;
@@ -173,7 +180,7 @@ function watershedRun(cols, opts) {
 // size over both, each with from; plan areas as the watershed's
 function hybridRun(cols, opts) {
 	if (opts.cell !== undefined || opts.reliefRadius !== undefined) watershedOptions(opts, NaN);
-	var spacing = pointSpacing(cols), wo = watershedOptions(opts, spacing), n = cols.count, given = {}, i, j, k;
+	var spacing = spacingOf(cols, opts), wo = watershedOptions(opts, spacing), n = cols.count, given = {}, i, j, k;
 	var prog = opts.onProgress;
 	wo.keepLabels = true;
 	wo.onProgress = prog ? function (d, t) { prog(0.15 * d / t, 1); } : undefined;
@@ -189,7 +196,7 @@ function hybridRun(cols, opts) {
 	var rc = { count: m, x: new Arr(m), y: new Arr(m), z: new Arr(m) };
 	for (j = 0; j < m; j++) { var o = rest[j] * st; rc.x[j] = co.x[o]; rc.y[j] = co.y[o]; rc.z[j] = co.z[o]; }
 	var fo = {};
-	Object.keys(opts).forEach(function (key) { if (key !== "method" && key !== "onProgress" && WS_ONLY.indexOf(key) < 0) fo[key] = opts[key]; });
+	Object.keys(opts).forEach(function (key) { if (key !== "method" && key !== "onProgress" && key !== "spacing" && WS_ONLY.indexOf(key) < 0) fo[key] = opts[key]; });
 	if (fo.maxDistance === undefined) fo.maxDistance = MD_SPACINGS * spacing; else given.maxDistance = fo.maxDistance;
 	if (prog) fo.onProgress = function (d, t) { prog(0.15 + 0.85 * (t ? d / t : 1), 1); };
 	var fr = facetFragments(rc, fo);

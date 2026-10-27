@@ -272,7 +272,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-fragments">
-				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragments</code>. <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; what is not a rock (gaps, flat patches, rocks under the floor) is fines. The line under Find fragments says what the cloud can resolve. The page pauses while it runs.</p>
+				<p class="muted small">Splits the selection (draw a polygon round the muckpile, Inside polygon) or the whole cloud into fragments, rocks, with <code>findFragmentsParallel</code> (tiles of the cloud on every core). <em>Size</em> is a fragment's intermediate axis b, the sieve-size estimate. Only the visible surface is measured; what is not a rock (gaps, flat patches, rocks under the floor) is fines. The line under Find fragments says what the cloud can resolve. When the read was thinned by Max points, the run reads every point (inside the polygon) itself, so it measures the full density while the view stays light.</p>
 				<details class="small">
 					<summary>What a cloud can resolve</summary>
 					<table class="grid-table">

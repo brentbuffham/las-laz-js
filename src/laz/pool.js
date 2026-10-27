@@ -165,6 +165,14 @@ export async function createLazPool(n, nodeUrl) {
 				return m.nodes.map(function (n) { return { key: n.key, count: n.count, records: new Uint8Array(n.records), packed: n.packed, box: n.box }; });
 			});
 		},
+		/**
+		 * findFragments on one tile's points (src/fragments/parallel.js), the columns transferred.
+		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean, opts: object}} task
+		 * @returns {Promise<object>} findFragments' result, fragment a Uint32Array
+		 */
+		fragments: function (task) {
+			return run(Object.assign({ op: "fragments" }, task), [task.x, task.y, task.z], function (m) { return Object.assign(m.result, { fragment: new Uint32Array(m.fragment) }); });
+		},
 		close: function () {
 			if (closed) return;
 			closed = true;

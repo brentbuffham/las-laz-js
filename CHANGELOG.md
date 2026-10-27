@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+New:
+- `findFragmentsParallel(cols, opts)`: `findFragments` on every core. The cloud is cut into tiles on
+  its two widest axes, each grown by an overlap wider than a rock (default max(2.5, reliefRadius +
+  1.5) m), run in workers (browser or Node) with the whole cloud's spacing, and stitched: a fragment
+  is kept from the tile whose core holds its centroid, and a copy across a seam is dropped. Options
+  `threads`, `tile`, `overlap`. On the 10.9 M-point ultra corner the hybrid went from 64 s to 17 s
+  (20 tiles, 16 threads), matching the same drawn rocks (38 / 60, 38 / 58).
+- `findFragments` takes `spacing` when it is known (else it is measured).
+- Demo: Fragments runs `findFragmentsParallel`, and on a read thinned by Max points it reads every
+  point (inside the polygon) for the run and puts the labels back on the points shown.
+
 Faster:
 - Column-only tile edits (`addColumn`, `removeColumn`, `setColumn` of an added column) keep each
   tile's records as stored: on a compressed store they are copied packed, never decompressed and

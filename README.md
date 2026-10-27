@@ -636,7 +636,7 @@ rock showing its top and a side reads larger than its true b; on the synthetic p
 ran a median 13 % above the boxes' true b. Two rocks pressed flush whose tops form one convex
 surface merge, as they would for any method without a crack to go on.
 
-**Speed** (Node, 10.9 M points): facets about 11 s a million points (`findFacets` most of it), the watershed about 0.5 s, the hybrid about 6 s (its facet pass on the rest).
+**Speed** (Node, 10.9 M points): facets about 11 s a million points (`findFacets` most of it), the watershed about 0.5 s, the hybrid about 6 s (its facet pass on the rest). `findFragmentsParallel` (the same options, plus `threads`, `tile` and `overlap`) runs tiles of the cloud in workers: the hybrid on 10.9 M points in 17 s on 16 threads, against 64 s on one.
 
 ### In the demo
 

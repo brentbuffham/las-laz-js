@@ -12,11 +12,11 @@
 // LWPOLYLINE entities, in the cloud's world coordinates. A sample id
 // (s1, s2 …, test/helpers/samples.js) is printed instead of a path, so
 // the output never names a private file.
-// Usage: node _dev/scoreFragments.mjs <sample id | path> <drawings.json | rocks.dxf> [method=facets] [options JSON]
+// Usage: node _dev/scoreFragments.mjs <sample id | path> <drawings.json | rocks.dxf> [method=facets] [options JSON; "parallel": true runs findFragmentsParallel]
 //==========================================================
 
 import { readFileSync } from "node:fs";
-import { openLas, findFragments, sizeDistribution } from "../src/index.js";
+import { openLas, findFragments, findFragmentsParallel, sizeDistribution } from "../src/index.js";
 import { fragmentAxes } from "../src/fragments/axes.js";
 import { findSamples } from "../test/helpers/samples.js";
 
@@ -59,7 +59,7 @@ var boxes = polys.map(function (P) { var bx = [Infinity, Infinity, -Infinity, -I
 var rocks = polys.map(function () { return []; });
 for (var i = 0; i < n; i++) for (var r = 0; r < polys.length; r++) { var bx = boxes[r]; if (c.x[i] < bx[0] || c.x[i] > bx[2] || c.y[i] < bx[1] || c.y[i] > bx[3]) continue; if (inside(polys[r], c.x[i], c.y[i])) { rocks[r].push(i); break; } }
 
-var opts = Object.assign({ method: method }, JSON.parse(extra)), t0 = performance.now(), fr = findFragments(c, opts), ms = performance.now() - t0;
+var opts = Object.assign({ method: method }, JSON.parse(extra)), t0 = performance.now(), fr = opts.parallel ? await findFragmentsParallel(c, (delete opts.parallel, opts)) : findFragments(c, opts), ms = performance.now() - t0;
 var cnt = new Map();
 for (i = 0; i < n; i++) if (fr.fragment[i]) cnt.set(fr.fragment[i], (cnt.get(fr.fragment[i]) || 0) + 1);
 var out = rocks.map(function (pts) {

@@ -1,13 +1,13 @@
 // examples/browser/fragments.js
 //==========================================================
-// The demo's Fragments tab: findFragments on the selection (a polygon
+// The demo's Fragments tab: findFragmentsParallel on the selection (a polygon
 // round the muckpile) or the whole cloud, by method: facets (any
 // orientation; the camera's position is the viewpoint only when asked,
 // as a camera below the pile would turn every face inside out), the
 // watershed (a muckpile seen from above) or the hybrid (the watershed,
 // then facets on what it left). What the cloud can resolve (spacing,
 // floor, resolution) and every warning show on a line under the run;
-// a thinned read (Max points) is named there too. Colours by fragment or
+// a thinned read (Max points) is read again in full for the run. Colours by fragment or
 // by size range (bins from the lower to the upper limit, sheets grey as
 // fines), outlines on the cloud, a hover line, Select fragment (the one
 // last hovered) and Select oversize. The size curve (sizeDistribution on
@@ -18,7 +18,20 @@
 // CSV centroids are world coordinates.
 //==========================================================
 
-import { findFragments, sizeDistribution } from "../../src/index.js";
+import { findFragmentsParallel, sizeDistribution } from "../../src/index.js";
+
+// labels of a full read (by file record index) onto the points shown (their indices); both reads keep the
+// file's order, so one walk matches them
+function byIndex(fullIndex, labels, shownIndex) {
+	var out = new Uint32Array(shownIndex.length), j = 0, n = fullIndex.length;
+	for (var i = 0; i < shownIndex.length; i++) {
+		var want = shownIndex[i];
+		if (j < n && fullIndex[j] > want) j = 0;   // out of order (never in a plain read): start the walk again
+		while (j < n && fullIndex[j] < want) j++;
+		if (j < n && fullIndex[j] === want) out[i] = labels[j];
+	}
+	return out;
+}
 import { writeDxf } from "./facets.js";
 import { drawSizeChart } from "./sizeChart.js";
 
@@ -75,25 +88,33 @@ export function initFragments(ctx) {
 		status("finding fragments (" + $("fraMethod").selectedOptions[0].textContent + ") in " + fmt(cols.count) + " points" + (idx ? " (the selection)" : "") + "…");
 		$("progress").value = 0;
 		opts.onProgress = function (d, t) { $("progress").value = t ? d / t : 1; };
-		requestAnimationFrame(function () { setTimeout(function () {
-			var t0 = performance.now(), fr;
-			try { fr = findFragments(cols, opts); } catch (err) { status(err.message, true); return; }
+		requestAnimationFrame(function () { setTimeout(async function () {
+			var t0 = performance.now(), fr, full = null, i;
+			// a thinned read: the run reads every point (inside the polygon) itself, and its labels go back onto the points shown
+			if (ctx.thinned && ctx.readEvery) {
+				status("reading every point" + (idx ? " inside the polygon" : "") + " for the run (the view is thinned to Max points)…");
+				try { full = await ctx.readEvery(function (f) { $("progress").value = f; }); } catch (err) { status(err.message, true); return; }
+				if (full) { cols = { count: full.count, x: full.x, y: full.y, z: full.z }; status("finding fragments in every point: " + fmt(full.count) + " on every core…"); $("progress").value = 0; }
+			}
+			try { fr = await findFragmentsParallel(cols, opts); } catch (err) { status(err.message, true); return; }
 			if (fr.spacing > 0) {
 				if (method !== "watershed") $("fraMaxDist").placeholder = "auto (" + sp(4 * fr.spacing) + ")";
 				if (method !== "facets") $("fraWsCell").placeholder = "auto (" + sp(fr.cell) + ")";
 			}
-			var fragment = new Uint32Array(cloud.count), inFragments = 0;
-			for (var i = 0; i < fr.fragment.length; i++) { var c = idx ? idx[i] : i; fragment[c] = fr.fragment[i]; if (fr.fragment[i]) inFragments++; }
-			var inRun = null;
+			var fragment = new Uint32Array(cloud.count), inFragments = 0, inRun = null;
+			for (i = 0; i < fr.fragment.length; i++) if (fr.fragment[i]) inFragments++;
+			if (full) fragment = byIndex(full.index, fr.fragment, cloud.index);
+			else for (i = 0; i < fr.fragment.length; i++) fragment[idx ? idx[i] : i] = fr.fragment[i];
 			if (idx) { inRun = new Uint8Array(cloud.count); for (i = 0; i < idx.length; i++) inRun[idx[i]] = 1; }
-			res = { fr: fr, idx: idx, fragment: fragment, inRun: inRun, note: thinnedNote(fr) };
+			res = { fr: fr, idx: idx, fragment: fragment, inRun: inRun, note: full ? null : thinnedNote(fr), every: !!full };
 			hovered = 0;
 			showOutlines();
 			$("colourBy").value = $("fraColour").value;
 			curve();   // before the colours: the bins follow the curve's limits
 			ctx.recolour();   // it writes its own status line
 			var share = fr.surfaceArea ? fr.unassignedArea / fr.surfaceArea : 0;
-			var text = fr.fragments.length + " fragments holding " + fmt(inFragments) + " of " + fmt(cols.count) + " points; " +
+			var text = fr.fragments.length + " fragments holding " + fmt(inFragments) + " of " + fmt(cols.count) + " points" + (full ? " (every point read for the run)" : "") +
+				(fr.threads > 1 ? ", " + fr.tiles + " tiles on " + fr.threads + " threads" : "") + "; " +
 				fr.unassignedArea.toFixed(1) + " m² of " + fr.surfaceArea.toFixed(1) + " m² in none (" + (100 * share).toFixed(0) + " %), in " + ctx.since(t0) + " ms" +
 				(fr.spacing > 0 ? "; point spacing " + sp(fr.spacing) + " m, floor " + fr.floor.toFixed(2) + " m, resolution " + fr.resolution : "") +
 				(method === "hybrid" ? "; " + fmt(fr.fromWatershed) + " from the watershed, " + fmt(fr.fromFacets) + " from facets on the rest" : "");
