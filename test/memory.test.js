@@ -70,7 +70,7 @@ test("writeLas peaks at under 1.5x the file it returns", { timeout: 120000 }, fu
 	assert.ok(r.peakDelta < 1.5 * r.outBytes, "peak rose " + Math.round(r.peakDelta / 1048576) + " MB for a " + Math.round(r.outBytes / 1048576) + " MB file");
 });
 
-test("a cropped read peaks below a full read", { timeout: 180000 }, function () {
+test("a cropped read peaks below a full read", { timeout: 180000 }, function (t) {
 	var dir = mkdtempSync(join(tmpdir(), "las-mem-"));
 	try {
 		var pts = new Array(N);
@@ -87,6 +87,9 @@ test("a cropped read peaks below a full read", { timeout: 180000 }, function () 
 		// Measured 0.44 of the full peak (34 MB against 77 MB for 7 MB of columns): a fixed overhead (window
 		// buffer, decoder, the columns' doubling growth) dominates the cropped peak and does not shrink with the
 		// crop, so 0.75 leaves room for machine variation while still failing a crop that decodes everything.
+		// where the process peak never rises for a full read (a CI runner whose start-up peak is higher), peak
+		// memory cannot be compared here: say so rather than fail on 0 < 0
+		if (!(full.peakDelta > 0)) { t.skip("maxRSS did not rise for a full read: peak memory is not measurable here"); return; }
 		assert.ok(cropped.peakDelta < 0.75 * full.peakDelta, "cropped peak rose " + Math.round(cropped.peakDelta / 1048576) + " MB, a full read's " + Math.round(full.peakDelta / 1048576) + " MB");
 	} finally {
 		rmSync(dir, { recursive: true, force: true });

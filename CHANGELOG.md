@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.7 (2026-10-27)
+
+CI:
+- The first CI run failed one test on both Node versions, "a cropped read peaks below a full read":
+  on GitHub's Linux runners maxRSS never rose for either read (the process's start-up peak was already
+  higher), so it compared 0 with 0. Where a full read's peak does not rise, peak memory cannot be
+  measured, and the test now skips saying so; it still runs where it can measure (locally: passes).
+  Every other test passed on Node 22 and 24.
+
 ## 0.16.6 (2026-10-27)
 
 CI:
