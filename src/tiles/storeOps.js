@@ -223,3 +223,117 @@ export async function roughnessStore(store, opts) {
 	}
 	return { byTile: byTile, tiles: L.tiles.length, threads: ran };
 }
+
+// the chunks' points grouped by node, ascending by index: one { index, x, y, z, dz, dom } per node number (null when empty)
+function groupByNode(L, chunks) {
+	var counts = new Uint32Array(L.nodes.keys.length), out = [];
+	chunks.forEach(function (c) { for (var q = 0; q < c.node.length; q++) counts[c.node[q]]++; });
+	counts.forEach(function (m) {
+		out.push(m ? { index: new Uint32Array(m), x: new Float32Array(m), y: new Float32Array(m), z: new Float32Array(m), dz: new Float32Array(m), dom: new Float32Array(m) } : null);
+	});
+	var at = new Uint32Array(counts.length);
+	chunks.forEach(function (c) {
+		for (var q = 0; q < c.node.length; q++) {
+			var g = out[c.node[q]], w = at[c.node[q]]++;
+			g.index[w] = c.index[q]; g.x[w] = c.x[q]; g.y[w] = c.y[q]; g.z[w] = c.z[q]; g.dz[w] = c.dz[q]; g.dom[w] = c.dom[q];
+		}
+	});
+	return out.map(function (g) {
+		if (!g) return g;
+		var m = g.index.length, perm = new Uint32Array(m), s = {};
+		for (var i = 0; i < m; i++) perm[i] = i;
+		perm.sort(function (a, b) { return g.index[a] - g.index[b]; });
+		Object.keys(g).forEach(function (k) { var src = g[k], dst = new src.constructor(m); for (var j = 0; j < m; j++) dst[j] = src[perm[j]]; s[k] = dst; });
+		return s;
+	});
+}
+
+/**
+ * selectDoubleLayer over a whole tile store. Cells sit on one grid anchored at the store's corner, and each tile reads an
+ * overlap of (smooth + 2) cells, so the result is the one a single run over the whole cloud gives. The points that
+ * would move are kept here (about 24 bytes a ghost point, and as many more for partner), for snapToLayerStore.
+ * @param {object} store - an open TileStore.
+ * @param {{cell: number, minGap: number, maxGap?: number, keep?: string, minPoints?: number, smooth?: number, partner?: boolean,
+ *   threads?: number, tile?: number, tilePoints?: number, onProgress?: function(number, number), signal?: AbortSignal}} opts -
+ *   selectDoubleLayer's options; partner: also keep the kept-layer points beside a ghost, which the "average" mode moves.
+ * @returns {Promise<{selection: object, count: number, stats: object, ghost: Array, partner: Array|null, keys: string[], origin: object, tiles: number, threads: number}>}
+ *   selection: the store's own ({ deletes, count, tiles }); stats: selected, kept (with partner), min, p05, median, p95, max of dz.
+ */
+export async function selectDoubleLayerStore(store, opts) {
+	var o = opts || {}, smooth = o.smooth === undefined ? 1 : o.smooth;
+	if (!(typeof o.cell === "number" && o.cell > 0 && isFinite(o.cell))) throw bad("cell must be a distance > 0, not " + JSON.stringify(o.cell));
+	if (!(typeof o.minGap === "number" && o.minGap > 0 && isFinite(o.minGap))) throw bad("minGap must be a distance > 0, not " + JSON.stringify(o.minGap));
+	if (!(Number.isInteger(smooth) && smooth >= 0)) throw bad("smooth must be a whole number >= 0, not " + JSON.stringify(o.smooth));
+	var threads = await common(store, o, "selectDoubleLayerStore"), partner = !!o.partner;
+	var L = await layout(store, o, threads, o.cell * (smooth + 2));
+	if (!L.n) return { selection: { deletes: store.manifest.deletes, count: 0, tiles: {} }, count: 0, ghost: [], partner: null, keys: [], origin: { x: 0, y: 0, z: 0 }, tiles: 0, threads: 1,
+		stats: { selected: 0, kept: 0, min: NaN, p05: NaN, median: NaN, p95: NaN, max: NaN } };
+	var ax = Infinity, ay = Infinity;
+	L.nodes.boxes.forEach(function (b) { ax = Math.min(ax, b.minX); ay = Math.min(ay, b.minY); });
+	var dbl = { cell: o.cell, minGap: o.minGap, maxGap: o.maxGap, keep: o.keep, minPoints: o.minPoints, smooth: smooth };
+	var ghosts = [], partners = [];
+	var ran = await runAll(store, L, o, threads, "doubleRegion", function (t) {
+		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, double: dbl, anchor: { x: ax - L.origin.x, y: ay - L.origin.y }, partner: partner };
+	}, function (r) {
+		if (!r.node.length) return;
+		var q, ng = 0;
+		for (q = 0; q < r.kind.length; q++) if (r.kind[q] === 1) ng++;
+		if (ng === r.kind.length) { ghosts.push(r); return; }
+		var gh = [], pa = [];
+		for (q = 0; q < r.kind.length; q++) (r.kind[q] === 1 ? gh : pa).push(q);
+		[[gh, ghosts], [pa, partners]].forEach(function (e) {
+			if (!e[0].length) return;
+			var c = { node: new Uint32Array(e[0].length) }, names = ["index", "x", "y", "z", "dz", "dom"];
+			names.forEach(function (n) { c[n] = new r[n].constructor(e[0].length); });
+			e[0].forEach(function (src, i) { c.node[i] = r.node[src]; names.forEach(function (n) { c[n][i] = r[n][src]; }); });
+			e[1].push(c);
+		});
+	});
+	var g = groupByNode(L, ghosts), p = partner ? groupByNode(L, partners) : null;
+	var sel = { deletes: store.manifest.deletes, count: 0, tiles: {} }, all = [], kept = 0;
+	g.forEach(function (n, i) { if (!n) return; sel.tiles[L.nodes.keys[i]] = n.index; sel.count += n.index.length; all.push(n.dz); });
+	if (p) p.forEach(function (n) { if (n) kept += n.index.length; });
+	var dz = new Float32Array(sel.count), at = 0;
+	all.forEach(function (a) { dz.set(a, at); at += a.length; });
+	dz.sort();
+	function pct(f) { return dz.length ? dz[Math.min(dz.length - 1, Math.floor(f * (dz.length - 1) + 0.5))] : NaN; }
+	var stats = { selected: sel.count, kept: kept, min: dz.length ? dz[0] : NaN, p05: pct(0.05), median: pct(0.5), p95: pct(0.95), max: dz.length ? dz[dz.length - 1] : NaN };
+	return { selection: sel, count: sel.count, stats: stats, ghost: g, partner: p, keys: L.nodes.keys, origin: L.origin, tiles: L.tiles.length, threads: ran };
+}
+
+/**
+ * snapToLayer over a whole tile store: move the ghost points selectDoubleLayerStore found (setPositions).
+ * @param {object} store - the open TileStore the run was on, not edited since.
+ * @param {object} found - selectDoubleLayerStore's result.
+ * @param {{mode?: string, blend?: number, batchPoints?: number}} [opts] - as snapToLayer; "average" needs the run's partner: true;
+ *   batchPoints (10 M): moved points a write.
+ * @returns {Promise<{moved: number, batches: number}>}
+ */
+export async function snapToLayerStore(store, found, opts) {
+	var o = opts || {}, mode = o.mode === undefined ? "offset" : o.mode, blend = o.blend === undefined ? 0.5 : o.blend;
+	if (mode !== "offset" && mode !== "surface" && mode !== "average") throw bad("mode must be \"offset\", \"surface\" or \"average\", not " + JSON.stringify(o.mode));
+	if (!(typeof blend === "number" && blend >= 0 && blend <= 1)) throw bad("blend must be a number from 0 to 1, not " + JSON.stringify(o.blend));
+	if (!found || !found.ghost || !found.keys || !found.origin) throw bad("snapToLayerStore needs the result of selectDoubleLayerStore");
+	if (mode === "average" && blend > 0 && !found.partner) throw bad("mode \"average\" needs selectDoubleLayerStore to run with partner: true");
+	var batch = o.batchPoints || BATCH_POINTS, org = found.origin, move = mode === "average" ? 1 - blend : 1;
+	var moved = 0, batches = 0, held = 0, value = {};
+	async function flush() {
+		if (!held) return;
+		var v = value; value = {}; held = 0; batches++;
+		await store.setPositions(v);
+	}
+	for (var i = 0; i < found.keys.length; i++) {
+		var g = found.ghost[i], p = mode === "average" && blend > 0 && found.partner ? found.partner[i] : null;
+		if (!g && !p) continue;
+		var m = (g ? g.index.length : 0) + (p ? p.index.length : 0), entries = [], a;
+		if (g) for (a = 0; a < g.index.length; a++) entries.push([g.index[a], g.x[a], g.y[a], mode === "surface" ? g.dom[a] : g.z[a] + g.dz[a] * move]);
+		if (p) for (a = 0; a < p.index.length; a++) entries.push([p.index[a], p.x[a], p.y[a], p.z[a] - p.dz[a] * blend]);
+		entries.sort(function (u, w) { return u[0] - w[0]; });
+		var v = { index: new Uint32Array(m), x: new Float64Array(m), y: new Float64Array(m), z: new Float64Array(m) };
+		entries.forEach(function (e, q) { v.index[q] = e[0]; v.x[q] = e[1] + org.x; v.y[q] = e[2] + org.y; v.z[q] = e[3] + org.z; });
+		value[found.keys[i]] = v; held += m; moved += m;
+		if (held >= batch) await flush();
+	}
+	await flush();
+	return { moved: moved, batches: batches };
+}

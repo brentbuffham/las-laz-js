@@ -268,6 +268,31 @@ cost of thin features. It works on columns in memory (x / y / z, or a k = 3 `pos
 points take about 2 s in Node. With PDAL's `filters.outlier` (`method=radius`), `min_k` is the same
 as `minNeighbours`, but PDAL does not count a point exactly `radius` away.
 
+### Double layers
+
+```js
+import { selectDoubleLayer, snapToLayer, removePoints } from "las-laz-js";
+
+var found = selectDoubleLayer(pts, { cell: 0.2, minGap: 0.15 });   // keep: "auto" | "upper" | "lower"
+found.stats;                                                       // { selected, kept, cellsDouble, min, p05, median, p95, max } of dz
+var flat = snapToLayer(pts, found);                                // "offset": each ghost point moves by its cell's offset
+var meet = snapToLayer(pts, found, { mode: "average", blend: 0.5 });   // both layers move half way
+var clean = removePoints(pts, found.selection);                    // or just drop the ghost
+```
+
+A surface matched twice (ODM does it where two image sets disagree) leaves a second sheet a little above or
+below the real one. The points go into XY cells of `cell`; in a cell the heights split into layers where they
+jump by more than `minGap`, and a layer needs `minPoints` (5) points. A cell with two layers keeps one
+(`keep`: `"auto"` the one with most points, the upper on a tie) and the rest are ghosts, unless further than
+`maxGap`. A ghost point's `dz` is its cell's offset to the kept layer, averaged over `smooth` (1) rings of
+cells, so a sheet that drifts away is followed. `snapToLayer` modes: `"offset"` (add `dz`; keeps the ghost's
+own relief), `"surface"` (z becomes the kept layer's height: flattens it), `"average"` (the ghost moves
+`1 - blend` of the way, the kept layer in those cells `blend` of the way back; blend 0.5 default).
+`selectDoubleLayerStore(store, opts)` and `snapToLayerStore(store, found, { mode, blend })` do it over a tile
+store (`partner: true` for `"average"`). Layers are vertical: terrain, benches, floors. Choose `cell` so the
+real surface's own rise across it is less than `minGap`: on a slope of 1 in 2, a 1 m cell spans 0.5 m of
+height and hides a ghost 0.3 m away.
+
 ### Denoise
 
 ```js

@@ -33,6 +33,9 @@
 //   addColumn           { name, type, fill? }         -> { manifest }
 //   removeColumn        { name }                      -> { manifest }
 //   transform           { transform: { m, t } }       -> { manifest }
+//   findDoubleLayer    { cell, minGap, ...selectDoubleLayerStore opts } -> { count, stats, tiles, threads } (kept in the Worker)
+//   classifyDoubleLayer { value }                     -> { manifest } (the found points' class)
+//   snapDoubleLayer     { mode?, blend? }             -> { moved, batches, manifest } (the found points moved)
 //   writeTiles          { scratchId, root?, dir?, ...writeLas opts } -> { scratchId, count }
 //                                                        (an OPFS scratch file: getScratchFile)
 //   closeTiles                                        -> { closed: true }
@@ -48,6 +51,7 @@ import { checkTransform, transformBounds } from "../ops/transform.js";
 import { buildTiles } from "../tiles/build.js";
 import { openTiles } from "../tiles/TileStore.js";
 import { openScratchSyncWriter } from "../io/ScratchBinaryFile.js";
+import { selectDoubleLayerStore, snapToLayerStore } from "../tiles/storeOps.js";
 
 function buffersOf(cols) {
 	var out = [];
@@ -61,7 +65,7 @@ function buffersOf(cols) {
  *   its promise settles once the job's final message is posted
  */
 export function createWorkerHandler(post) {
-	var reader = null, store = null;
+	var reader = null, store = null, doubleFound = null;   // doubleFound: the last findDoubleLayer, until the store changes
 	var jobs = new Map();
 
 	function needStore() {
@@ -80,7 +84,12 @@ export function createWorkerHandler(post) {
 		return { result: sel, transfer: transfer };
 	}
 
-	function changed(extra) { return { result: Object.assign({ manifest: store.manifest }, extra || {}) }; }
+	function changed(extra) { doubleFound = null; return { result: Object.assign({ manifest: store.manifest }, extra || {}) }; }
+
+	function needDouble() {
+		if (!doubleFound) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "no double layer is found for this store; send \"findDoubleLayer\" first (an edit clears it)");
+		return doubleFound;
+	}
 
 	function needReader() {
 		if (!reader) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "no LAS file is open; send \"open\" first");
@@ -173,6 +182,26 @@ export function createWorkerHandler(post) {
 		addColumn: async function (id, payload) { await needStore().addColumn(payload.name, payload.type, payload.fill); return changed(); },
 		removeColumn: async function (id, payload) { await needStore().removeColumn(payload.name); return changed(); },
 		transform: async function (id, payload) { await needStore().transform(payload.transform); return changed(); },
+		findDoubleLayer: async function (id, payload, controller) {
+			var o = Object.assign({}, payload, {
+				signal: controller.signal,
+				onProgress: function (done, total) { post({ id: id, type: "progress", fraction: total ? done / total : 1, label: "double layer" }); }
+			});
+			doubleFound = await selectDoubleLayerStore(needStore(), o);
+			return { result: { count: doubleFound.count, stats: doubleFound.stats, tiles: doubleFound.tiles, threads: doubleFound.threads, partner: !!doubleFound.partner } };
+		},
+		classifyDoubleLayer: async function (id, payload) {
+			var found = needDouble();
+			await needStore().setColumn(found.selection, "classification", payload.value);
+			var keep = doubleFound;   // a class does not move an index
+			var out = changed();
+			doubleFound = keep;
+			return out;
+		},
+		snapDoubleLayer: async function (id, payload) {
+			var r = await snapToLayerStore(needStore(), needDouble(), payload);
+			return changed({ moved: r.moved, batches: r.batches });
+		},
 		writeTiles: async function (id, payload) {
 			var s = needStore(), o = Object.assign({}, payload);
 			if (typeof o.scratchId !== "string" || !o.scratchId) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "writeTiles needs a scratchId (the OPFS scratch file to write)");

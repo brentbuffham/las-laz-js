@@ -23,6 +23,7 @@ import { dedupeSelection } from "../filter/dedupe.js";
 import { denoisePoints } from "../ops/denoise.js";
 import { meanDistances } from "../ops/outliers.js";
 import { selectSparse } from "../ops/sparse.js";
+import { selectDoubleLayer } from "../ops/doubleLayer.js";
 import { pointNormals } from "../ops/normals.js";
 
 // the core points of a region, in region order, and a per-point value of them (Float32) as { node, index, value }
@@ -166,9 +167,34 @@ export async function smoothRegion(store, t) {
 	return r;
 }
 
+
+/**
+ * One tile of selectDoubleLayerStore: selectDoubleLayer on the region (the overlap gives the core's cells their
+ * neighbours; the anchor keeps every tile on one grid). The ghost points in the core and, with partner, the kept-layer
+ * points beside them, together: node, index, local x, y, z, the offset dz, the kept layer's height dom (local), and kind
+ * (1 a ghost point, 2 a kept-layer point).
+ * @returns {Promise<{count: number, node: Uint32Array, index: Uint32Array, x: Float32Array, y: Float32Array, z: Float32Array, dz: Float32Array, dom: Float32Array, kind: Uint8Array}>}
+ */
+export async function doubleRegion(store, t) {
+	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t), a = t.axes;
+	var U = reg[AXES[a[0]]], V = reg[AXES[a[1]]], keep = [];
+	var f = reg.count >= 2 * (t.double.minPoints || 5) ? selectDoubleLayer({ count: reg.count, x: reg.x, y: reg.y, z: reg.z }, Object.assign({}, t.double, { anchor: t.anchor })) : null;
+	if (t.onProgress) t.onProgress(1, 1);
+	function take(sel, dz, dom, kind) {
+		for (var q = 0; q < sel.length; q++) if (inCore(L.core, U[sel[q]], V[sel[q]])) keep.push({ p: sel[q], dz: dz[q], dom: dom ? dom[q] : NaN, kind: kind });
+	}
+	if (f) { take(f.selection, f.dz, f.dominantZ, 1); if (t.partner) take(f.partner.selection, f.partner.dz, null, 2); }
+	var m = keep.length, r = { count: reg.count, node: new Uint32Array(m), index: new Uint32Array(m), x: new Float32Array(m), y: new Float32Array(m), z: new Float32Array(m),
+		dz: new Float32Array(m), dom: new Float32Array(m), kind: new Uint8Array(m) };
+	keep.forEach(function (k, i) {
+		r.node[i] = reg.node[k.p]; r.index[i] = reg.index[k.p]; r.x[i] = reg.x[k.p]; r.y[i] = reg.y[k.p]; r.z[i] = reg.z[k.p]; r.dz[i] = k.dz; r.dom[i] = k.dom; r.kind[i] = k.kind;
+	});
+	return r;
+}
+
 /** The region jobs by name (the worker's op). */
 export var REGION_JOBS = { fragmentsRegion: fragmentsRegion, facetsRegion: facetsRegion, dedupeRegion: dedupeRegion, smoothRegion: smoothRegion,
-	outlierRegion: outlierRegion, sparseRegion: sparseRegion, roughRegion: roughRegion };
+	outlierRegion: outlierRegion, sparseRegion: sparseRegion, roughRegion: roughRegion, doubleRegion: doubleRegion };
 
 /**
  * One tile of findFacetsParallel on a store.

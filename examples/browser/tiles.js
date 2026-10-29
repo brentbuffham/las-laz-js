@@ -30,7 +30,8 @@ export function initTiles(ctx) {
 		active = on;
 		ctx.setMainVisible(!on);
 		ctx.polygonTools(on);
-		["tilesDelete", "tilesClassify", "tilesSave", "tilesClose"].forEach(function (id) { $(id).disabled = !on; });
+		["tilesDelete", "tilesClassify", "tilesSave", "tilesClose", "dlFind"].forEach(function (id) { $(id).disabled = !on; });
+		dlFound(false);
 		if (!on) { viewer.clearTiles(); loaded.clear(); manifest = null; info("No tiles shown."); }
 	}
 
@@ -167,7 +168,7 @@ export function initTiles(ctx) {
 	}
 
 	// one edit at a time: the edit buttons wait for it (the library queues edits too)
-	function busy(on) { ["tilesDelete", "tilesClassify", "tilesSave"].forEach(function (id) { $(id).disabled = on || !active; }); }
+	function busy(on) { ["tilesDelete", "tilesClassify", "tilesSave", "dlFind"].forEach(function (id) { $(id).disabled = on || !active; }); $("dlClassify").disabled = $("dlSnap").disabled = on || !active || !found; }
 
 	async function edit(label, run) {
 		var t0 = performance.now();
@@ -178,6 +179,39 @@ export function initTiles(ctx) {
 			var r = await run(sel);
 			manifest = r.manifest;
 			ctx.setStatus(label + ": " + ctx.fmt(sel.count) + " points in " + ctx.fmt(ctx.since(t0)) + " ms; the store now holds " + ctx.fmt(Object.keys(manifest.nodes).reduce(function (s, k) { return s + manifest.nodes[k].count; }, 0)) + " points");
+			schedule();
+		} catch (err) { ctx.setStatus(label + ": " + err.message, true); } finally { busy(false); }
+	}
+
+	// Double layer: find in the Worker (it keeps the points), then classify or snap them
+	var found = null;
+	function dlFound(f) { found = f; $("dlClassify").disabled = $("dlSnap").disabled = !f; if (!f) $("dlInfo").textContent = "Nothing found yet."; }
+
+	async function dlFind() {
+		var t0 = performance.now(), mode = $("dlMode").value, gap = $("dlMaxGap").value;
+		var opts = { cell: Number($("dlCell").value), minGap: Number($("dlGap").value), keep: $("dlKeep").value, minPoints: Number($("dlMin").value), smooth: Number($("dlSmooth").value), partner: mode === "average" };
+		if (gap !== "") opts.maxGap = Number(gap);
+		busy(true);
+		try {
+			ctx.setStatus("Finding the double layer…");
+			var r = await ctx.call("findDoubleLayer", opts, function (m) { if (m.type === "progress") $("progress").value = m.fraction; }).promise;
+			dlFound(r.count ? r : null);
+			var s = r.stats, d = function (v) { return v.toFixed(3); };
+			$("dlInfo").textContent = r.count ? ctx.fmt(r.count) + " ghost points; offset to the kept layer: median " + d(s.median) + " m, 5-95 % " + d(s.p05) + " to " + d(s.p95) + ", range " + d(s.min) + " to " + d(s.max) + " (" + r.tiles + " work tiles, " + ctx.fmt(ctx.since(t0)) + " ms)" : "No double layer found: try a smaller gap or a larger cell.";
+			ctx.setStatus("Double layer: " + ctx.fmt(r.count) + " points in " + ctx.fmt(ctx.since(t0)) + " ms");
+			console.log("[tiles] double layer", { opts: opts, count: r.count, stats: r.stats, ms: ctx.since(t0) });
+		} catch (err) { dlFound(null); ctx.setStatus("Double layer: " + err.message, true); } finally { busy(false); }
+	}
+
+	async function dlApply(label, type, payload) {
+		var t0 = performance.now();
+		busy(true);
+		try {
+			var r = await ctx.call(type, payload).promise;
+			manifest = r.manifest;
+			if (type === "snapDoubleLayer") dlFound(null);
+			ctx.setStatus(label + ": " + ctx.fmt(found ? found.count : r.moved) + " points in " + ctx.fmt(ctx.since(t0)) + " ms");
+			viewer.clearTiles(); loaded.clear();
 			schedule();
 		} catch (err) { ctx.setStatus(label + ": " + err.message, true); } finally { busy(false); }
 	}
@@ -209,6 +243,10 @@ export function initTiles(ctx) {
 		var cls = Number($("tilesClass").value);
 		edit("Classify inside polygon as " + cls, function (sel) { return ctx.call("setColumn", { selection: sel, name: "classification", value: cls }).promise; });
 	});
+	$("dlFind").addEventListener("click", dlFind);
+	$("dlClassify").addEventListener("click", function () { dlApply("Classify the double layer", "classifyDoubleLayer", { value: Number($("dlClass").value) }); });
+	$("dlSnap").addEventListener("click", function () { dlApply("Snap the double layer", "snapDoubleLayer", { mode: $("dlMode").value, blend: Number($("dlBlend").value) }); });
+	$("dlMode").addEventListener("change", function () { if (found && $("dlMode").value === "average" && !found.partner) { dlFound(null); ctx.setStatus("Average needs the kept layer's points too: find again", true); } });
 	$("tilesSave").addEventListener("click", save);
 	$("tilesClose").addEventListener("click", async function () { await ctx.call("closeTiles", {}).promise; storeId = null; showing(false); ctx.setStatus("Tiles closed"); });
 	refreshList();
