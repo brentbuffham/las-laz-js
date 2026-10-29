@@ -128,6 +128,12 @@ test("smoothStore moves the points as denoisePoints does in memory, across the t
 	await assert.rejects(smoothStore(s, {}), /maxDistance/);
 });
 
+test("smoothStore refuses a batchPoints of 0 instead of taking the default", async function () {
+	var s = await store();
+	await assert.rejects(smoothStore(s, { maxDistance: 0.2, batchPoints: 0 }), /batchPoints must be a whole number >= 1, not 0/);
+	await assert.rejects(smoothStore(s, { maxDistance: 0.2, batchPoints: 2.5 }), /batchPoints/);
+});
+
 test("a smoothing run stopped mid-way leaves the store untouched", async function () {
 	var s = await store(), key = Object.keys(s.manifest.nodes).filter(function (k) { return s.manifest.nodes[k].count; })[0];
 	var before = await s.readTile(key, { fields: ["z"] }), c = new AbortController();

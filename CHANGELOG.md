@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.18.2 (2026-10-29)
+
+- A 0 you pass is refused, not replaced by a default (`x || default`): `smoothStore` `batchPoints` of 0 would have run with the default 10,000,000; it now throws "batchPoints must be a whole number >= 1". The same for `openScratchReader`'s `windowSize` (the browser scratch-file path).
+
 ## 0.18.1 (2026-10-29)
 
 - `dedupe` is about 2.5x faster when it thins a lot: it no longer finds the nearest kept point for every dropped point, a result only `dedupeSelection` returns. WALL.las (4.3M points, thinned to 0.1 m, 1.44M kept): 5.9 s to 2.4 s. The points kept are identical. `dedupeSelection(cols, tol, { map: false })` does the same for a caller that needs only `keep`; its `map` is then `null`.

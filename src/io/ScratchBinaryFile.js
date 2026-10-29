@@ -177,7 +177,12 @@ export async function openScratchReader(id, options) {
 	var handle = await fileHandle.createSyncAccessHandle();
 	var size = handle.getSize();
 	var length = typeof opts.byteLength === "number" ? Math.min(opts.byteLength, size) : size;
-	return new ScratchSource(handle, length, opts.windowSize || DEFAULT_WINDOW_SIZE);
+	var windowSize = opts.windowSize === undefined ? DEFAULT_WINDOW_SIZE : opts.windowSize;
+	if (!(Number.isInteger(windowSize) && windowSize >= 1)) {
+		handle.close();
+		throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "windowSize must be a whole number of bytes >= 1, not " + JSON.stringify(opts.windowSize));
+	}
+	return new ScratchSource(handle, length, windowSize);
 }
 
 /**

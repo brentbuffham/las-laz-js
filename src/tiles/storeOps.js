@@ -76,7 +76,8 @@ export async function dedupeStore(store, tolerance, opts) {
 export async function smoothStore(store, opts) {
 	var o = opts || {};
 	if (!(typeof o.maxDistance === "number" && o.maxDistance > 0 && isFinite(o.maxDistance))) throw bad("maxDistance must be a distance > 0, not " + JSON.stringify(o.maxDistance));
-	var iterations = o.iterations === undefined ? 1 : o.iterations, k = o.k === undefined ? 16 : o.k, batch = o.batchPoints || BATCH_POINTS;
+	var iterations = o.iterations === undefined ? 1 : o.iterations, k = o.k === undefined ? 16 : o.k, batch = o.batchPoints === undefined ? BATCH_POINTS : o.batchPoints;
+	if (!(Number.isInteger(batch) && batch >= 1)) throw bad("batchPoints must be a whole number >= 1, not " + JSON.stringify(o.batchPoints));
 	if (!(Number.isInteger(iterations) && iterations >= 1)) throw bad("iterations must be a whole number >= 1, not " + JSON.stringify(o.iterations));
 	var threads = await common(store, o, "smoothStore");
 	var L = await layout(store, o, threads, (iterations + 1) * o.maxDistance);
