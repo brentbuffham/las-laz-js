@@ -8,4 +8,5 @@ import { openLas } from "../../../src/LasReader.js";
 
 var las = await openLas(fileURLToPath(new URL("../laz/f7.laz", import.meta.url)), { threads: 2, windowSize: 1000 });
 var first = await las.chunks({ fields: ["x"] }).next();
-console.log(first.value.count);
+// a string, not console.log(number): with FORCE_COLOR set (some terminals do) a logged number is wrapped in colour codes
+process.stdout.write(String(first.value.count) + "\n");

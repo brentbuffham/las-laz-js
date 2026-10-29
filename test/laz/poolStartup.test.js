@@ -45,5 +45,6 @@ test("node --input-type=module -e: the pool starts and a parallel read decodes",
 
 test("a script that drops a parallel read part way (pool never closed) still exits", function () {
 	var out = execFileSync(process.execPath, [DROP], { encoding: "utf8", timeout: 20000 });
-	assert.equal(Number(out.trim()), 50000);
+	// any colour codes a terminal's FORCE_COLOR would add are not part of the count
+	assert.equal(Number(out.replace(/\u001b\[[0-9;]*m/g, "").trim()), 50000, "the script printed " + JSON.stringify(out));
 });
