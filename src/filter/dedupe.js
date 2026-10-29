@@ -21,12 +21,15 @@ import { hash32 } from "../index/grid.js";
  * (lowest number on a tie); a kept point maps to itself.
  * @param {object} cols - PointColumns ({ count, x, y, z?, ... }).
  * @param {number} tolerance - distance below which points merge (> 0).
- * @param {{z?: boolean}} [opts] - z: compare in 3D.
- * @returns {{keep: Uint32Array, map: Uint32Array}}
+ * @param {{z?: boolean, map?: boolean}} [opts] - z: compare in 3D. map: false skips the map
+ *   (the nearest-kept-point search for every dropped point, as costly as the keep itself on a
+ *   cloud that thins to a third) and returns map: null; dedupe() needs only the keep.
+ * @returns {{keep: Uint32Array, map: (Uint32Array|null)}}
  */
 export function dedupeSelection(cols, tolerance, opts) {
 	if (!(tolerance > 0)) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "dedupe tolerance must be > 0");
 	var use3d = !!(opts && opts.z && cols.z);
+	var wantMap = !(opts && opts.map === false);
 	var tol2 = tolerance * tolerance;
 	var n = cols.count;
 	var x = cols.x, y = cols.y, z = cols.z;
@@ -80,7 +83,7 @@ export function dedupeSelection(cols, tolerance, opts) {
 	}
 	var next = new Int32Array(n);
 	var kept = new Uint32Array(n);
-	var map = new Uint32Array(n);
+	var map = wantMap ? new Uint32Array(n) : null;
 	var nKept = 0;
 	for (var i = 0; i < n; i++) {
 		var cx = Math.floor(x[i] / tolerance) - lo[0] + 1, cy = Math.floor(y[i] / tolerance) - lo[1] + 1;
@@ -108,13 +111,13 @@ export function dedupeSelection(cols, tolerance, opts) {
 		}
 		next[i] = table[h];
 		table[h] = i;
-		map[i] = nKept;
+		if (wantMap) map[i] = nKept;
 		kept[nKept++] = i;
 	}
 
 	// Each dropped point (every point not in kept) maps to its nearest kept point;
 	// the cell lists hold kept points only
-	for (i = 0, p = 0; i < n; i++) {
+	for (i = 0, p = 0; wantMap && i < n; i++) {
 		if (p < nKept && kept[p] === i) { p++; continue; }
 		var cx = Math.floor(x[i] / tolerance) - lo[0] + 1, cy = Math.floor(y[i] / tolerance) - lo[1] + 1;
 		var cz = use3d ? Math.floor(z[i] / tolerance) - lo[2] + 1 : 1;
@@ -145,7 +148,7 @@ export function dedupeSelection(cols, tolerance, opts) {
  * @returns {object} PointColumns with only the kept points
  */
 export function dedupe(cols, tolerance, opts) {
-	var sel = dedupeSelection(cols, tolerance, opts).keep, nKept = sel.length;
+	var sel = dedupeSelection(cols, tolerance, Object.assign({}, opts, { map: false })).keep, nKept = sel.length;
 
 	// Every column (k values per point) follows the kept points; anything else passes through
 	var ks = Object.create(null);   // a column may be named like an Object.prototype member

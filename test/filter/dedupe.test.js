@@ -154,6 +154,16 @@ test("dedupeSelection.map: kept points map to themselves, dropped to their neare
 	});
 });
 
+test("map: false skips the map and keeps exactly the same points", function () {
+	[false, true].forEach(function (use3d) {
+		var c = cloud(3000, 13, 500000, 7000000, 3);
+		var full = dedupeSelection(c, 0.01, { z: use3d }), keepOnly = dedupeSelection(c, 0.01, { z: use3d, map: false });
+		assert.equal(keepOnly.map, null);
+		assert.deepEqual(Array.from(keepOnly.keep), Array.from(full.keep));
+		assert.deepEqual(Array.from(keepOnly.keep), bruteForce(c, 0.01, use3d));
+	});
+});
+
 test("map names the nearest kept point, not the one that caused the drop", function () {
 	// 0 kept; 1 dropped (0.9 from 0); 2 kept (1.7 from 0, and 1 is dropped so it does not block)
 	var c = { count: 3, x: new Float64Array([0, 0.9, 1.7]), y: new Float64Array(3) };

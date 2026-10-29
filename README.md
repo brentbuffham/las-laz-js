@@ -345,6 +345,8 @@ import { dedupeSelection } from "las-laz-js";
 var { keep, map } = dedupeSelection(pts, 0.01);   // { z: true } for 3D
 var unique = keepPoints(pts, keep);               // what dedupe(pts, 0.01) returns
 // map[i]: where input point i went in unique — a dropped point maps to its nearest kept point
+
+dedupeSelection(pts, 0.01, { map: false });       // keep only, about 2.5x faster on a cloud that thins a lot; map is null
 ```
 
 ## Register
