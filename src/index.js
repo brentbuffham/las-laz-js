@@ -27,6 +27,7 @@ export { keepPoints, removePoints, splitPoints, mergePoints } from "./ops/apply.
 export { makeTransform, transformPoints } from "./ops/transform.js";
 export { interleavePositions } from "./ops/interleave.js";
 export { selectSparse } from "./ops/sparse.js";
+export { selectDoubleLayer, snapToLayer } from "./ops/doubleLayer.js";
 export { selectOutliers } from "./ops/outliers.js";
 export { pointNormals, estimateNoise } from "./ops/normals.js";
 export { denoisePoints } from "./ops/denoise.js";
@@ -35,7 +36,7 @@ export { fitTransform } from "./register/fit.js";
 export { parseControlPoints, matchControlPoints } from "./register/controlPoints.js";
 export { alignCloud } from "./register/align.js";
 export { alignStores, storeSample } from "./tiles/align.js";
-export { dedupeStore, smoothStore, selectOutliersStore, selectSparseStore, roughnessStore } from "./tiles/storeOps.js";
+export { dedupeStore, smoothStore, selectOutliersStore, selectSparseStore, roughnessStore, selectDoubleLayerStore, snapToLayerStore } from "./tiles/storeOps.js";
 export { mergeStores, splitStore } from "./tiles/merge.js";
 export { cloneStore } from "./tiles/clone.js";
 export { poleOf, orientationOf, poleFromOrientation } from "./facets/orientation.js";

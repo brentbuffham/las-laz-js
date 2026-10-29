@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+New (double layers: a surface matched twice leaves a second sheet above or below the real one):
+- `selectDoubleLayer(cols, { cell, minGap, maxGap, keep, minPoints, smooth, anchor })`: points go into XY cells; in
+  a cell the heights split into layers where they jump by more than `minGap`; a cell with two layers keeps one
+  (`keep`: `"auto"` the one with most points, `"upper"`, `"lower"`) and the other is the ghost. Returns the ghost
+  points as a selection, `dz` (what to add to each one's z to land on the kept layer; the cell's offset, averaged
+  over `smooth` rings of cells so a drifting sheet is followed), `dominantZ`, `partner` (the kept layer's points in
+  those cells) and `stats`.
+- `snapToLayer(cols, found, { mode, blend, inPlace })`: `"offset"` (add dz, keeps the ghost's relief), `"surface"`
+  (flatten onto the kept layer) or `"average"` (the ghost and the kept layer meet part of the way; `blend`).
+- `selectDoubleLayerStore(store, opts)` and `snapToLayerStore(store, found, opts)`: the same over a tile store, on
+  the work tiles (every tile on one grid anchored at the store's corner, an overlap of `smooth + 2` cells).
+- Worker messages `findDoubleLayer`, `classifyDoubleLayer` and `snapDoubleLayer`; the demo's Tiles tab has a
+  Double layer section.
+- Layers are vertical: this is for terrain, benches and floors, not a near-upright face. The cell must be small
+  enough that the real surface's own slope across it is less than `minGap`.
+
 ## 0.18.2 (2026-10-29)
 
 - A 0 you pass is refused, not replaced by a default (`x || default`): `smoothStore` `batchPoints` of 0 would have run with the default 10,000,000; it now throws "batchPoints must be a whole number >= 1". The same for `openScratchReader`'s `windowSize` (the browser scratch-file path).

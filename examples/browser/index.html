@@ -381,6 +381,28 @@
 				<p class="muted small">Draw and close a polygon on the Edit tab, then:</p>
 				<div class="row"><button class="button" id="tilesDelete" disabled>Delete inside polygon</button></div>
 				<div class="row"><label class="field">Class <input type="number" id="tilesClass" value="6" min="0" max="255"></label><button class="button" id="tilesClassify" disabled>Classify inside polygon</button></div>
+				<h3>Double layer</h3>
+				<p class="muted small">A surface matched twice (ODM) leaves a second sheet a little above or below the real one. <b>Find</b> splits each cell's heights where they jump by the gap and calls the layers beyond the kept one ghosts (<code>selectDoubleLayerStore</code>); <b>Classify</b> marks them to look at; <b>Snap</b> moves them onto the kept layer (<code>snapToLayerStore</code>).</p>
+				<div class="row">
+					<label class="field">Cell (m) <input type="number" id="dlCell" value="1" min="0.05" step="0.25" title="XY cell: about 1-2 point spacings"></label>
+					<label class="field">Gap (m) <input type="number" id="dlGap" value="0.3" min="0.01" step="0.05" title="A vertical jump this big between a cell's heights starts a new layer"></label>
+				</div>
+				<div class="row">
+					<label class="field">Max gap (m) <input type="number" id="dlMaxGap" value="" min="0.01" step="0.5" placeholder="none" title="A layer further than this is not a ghost (a real overhang)"></label>
+					<label class="field">Min points <input type="number" id="dlMin" value="5" min="1" step="1" title="A smaller layer in a cell is ignored"></label>
+				</div>
+				<div class="row">
+					<label class="field">Keep <select id="dlKeep"><option value="auto">Auto (most points)</option><option value="upper">Upper</option><option value="lower">Lower</option></select></label>
+					<label class="field">Smooth (cells) <input type="number" id="dlSmooth" value="1" min="0" step="1" title="Rings of cells the offset is averaged over"></label>
+				</div>
+				<div class="row"><button class="button" id="dlFind" disabled>Find double layer</button></div>
+				<div id="dlInfo" class="muted small">Nothing found yet.</div>
+				<div class="row"><label class="field">Class <input type="number" id="dlClass" value="7" min="0" max="255"></label><button class="button" id="dlClassify" disabled>Classify found</button></div>
+				<div class="row">
+					<label class="field">Snap <select id="dlMode"><option value="offset">Offset (keep relief)</option><option value="surface">Surface (flatten)</option><option value="average">Average (meet half way)</option></select></label>
+					<label class="field">Blend <input type="number" id="dlBlend" value="0.5" min="0" max="1" step="0.1" title="Average: how far the kept layer moves towards the ghost (0 leaves it, 1 puts it on the ghost)"></label>
+				</div>
+				<div class="row"><button class="button" id="dlSnap" disabled>Snap found onto the kept layer</button></div>
 				<label class="field">Save as LAZ
 					<input type="checkbox" id="tilesSaveCompress" checked>
 				</label>
