@@ -161,7 +161,7 @@ test("progress climbs once per phase", async function () {
 	await buildTiles(await openLas(bytes, { windowSize: 8192 }), { where: { memory: true }, tilePoints: 500, chunkPoints: 3000, compress: true, onProgress: function (p) { calls.push(p); } });
 	var phases = [];
 	calls.forEach(function (c) { if (phases[phases.length - 1] !== c.phase) phases.push(c.phase); });
-	assert.deepEqual(phases, ["count", "distribute", "tiles"]);   // compression is part of the tiles phase
+	assert.deepEqual(phases, ["count", "distribute", "tiles", "pack"]);   // "pack": the chunk roots and the levels above, compressed last
 	phases.forEach(function (ph) {
 		var mine = calls.filter(function (c) { return c.phase === ph; });
 		for (var i = 1; i < mine.length; i++) assert.ok(mine[i].done > mine[i - 1].done, ph + " does not climb");

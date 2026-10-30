@@ -33,6 +33,7 @@ import { TileStore, tileName, toBase64, HEAD_NAME, EVLRS_NAME } from "./TileStor
 
 var SPACE_FACTOR = 1.15;   // the raw records once (distribute) and the tiles as they are written
 var PUTS = 8;   // node files written at once (OPFS: about 12 ms a file one by one, 4 ms eight at a time)
+var PACK_WAIT = 30000;   // ms a pool may take over one node's compression (about 0.3 s of work) before it is packed on this thread
 var GRID = 128;
 var BUFFER_BYTES = 65536;
 var BUCKETS = 4;   // distribute windows grouped in the pool at once
@@ -156,7 +157,8 @@ function aborted(signal) { if (signal && signal.aborted) throw new LasError(ERRO
  * Build a tile store from a LAS / LAZ file.
  * @param {object} las - a LasReader (openLas)
  * @param {object} opts - where (required); compress (false); tilePoints (50,000); chunkPoints
- *   (2,000,000); threads; signal; onProgress({ phase, done, total }); replace (false); name
+ *   (2,000,000); threads; signal; onProgress({ phase, done, total }) (phases "count", "distribute", "tiles", and with
+ *   compress also "pack"); replace (false); name
  * @returns {Promise<TileStore>}
  * @throws {LasError} INVALID_ARGUMENT (options, an existing store), UNSUPPORTED (compress for
  *   formats 4, 5, 9, 10), ABORTED
@@ -245,21 +247,35 @@ export async function buildTiles(las, opts) {
 		}
 		await chain;
 		await upperLevels(chunks, cube, len, backend, put);
+		tiles.finish();
 		// 5. compress what is still raw: the chunk roots and the levels above them (few nodes)
 		if (laz) {
-			var pack = pool ? null : createChunkCompressor(laz, len), rest = Array.from(rawKeys).sort(keyOrder);
+			// A pool that does not answer (a lost reply stalled a 177 M point build in Chrome for good) must not hold the
+			// build: after PACK_WAIT with no reply, or on any pool failure, this and every later node is packed on this thread.
+			var pack = createChunkCompressor(laz, len), rest = Array.from(rawKeys).sort(keyOrder);
+			var wait = opts._packWait === undefined ? PACK_WAIT : opts._packWait, poolDown = !pool;
+			var viaPool = function (t) {
+				return new Promise(function (resolve) {
+					var timer = setTimeout(function () { resolve(null); }, wait);
+					pool.compress({ vlr: laz, recordLength: len, records: t.records.slice().buffer, counts: [t.count] }).then(
+						function (r) { clearTimeout(timer); resolve(r.bytes); },
+						function () { clearTimeout(timer); resolve(null); });
+				});
+			};
 			var packOne = async function (key) {
-				var t = decodeTile(await backend.get(tileName(key, 0)), [], key), box = rawBox(t.records, len), packed;
-				if (pack) packed = pack(t.records, 0, t.count);
-				else packed = (await pool.compress({ vlr: laz, recordLength: len, records: t.records.slice().buffer, counts: [t.count] })).bytes;
+				var t = decodeTile(await backend.get(tileName(key, 0)), [], key), box = rawBox(t.records, len), packed = null;
+				if (!poolDown) { packed = await viaPool(t); if (!packed) poolDown = true; }
+				if (!packed) packed = pack(t.records, 0, t.count);
 				await put(key, { count: t.count, records: packed, packed: true, box: box });
 			};
-			for (var k = 0; k < rest.length; k += pool ? 2 * pool.size : 1) {
+			var step = pool ? 2 * pool.size : 1, packing = phase(onProgress, "pack", rest.length);   // its own phase: "tiles" ends at the last chunk
+			for (var k = 0; k < rest.length; k += step) {
 				aborted(signal);
-				await Promise.all(rest.slice(k, k + (pool ? 2 * pool.size : 1)).map(packOne));
+				await Promise.all(rest.slice(k, k + step).map(packOne));
+				packing.tick(Math.min(rest.length, k + step));
 			}
+			packing.finish();
 		}
-		tiles.finish();
 		// 6. the source's header and VLRs, then the manifest
 		var head = new Uint8Array(await las._src.read(0, h.offsetToPointData));
 		await backend.put(HEAD_NAME, head);

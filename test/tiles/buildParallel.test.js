@@ -56,3 +56,17 @@ test("pool.octree builds a chunk as buildChunkOctree does", { timeout: 60000 }, 
 		pool.close();
 	}
 });
+
+test("a pool that does not answer step 5 in time: the nodes are packed on this thread, the same store", { timeout: 120000 }, async function () {
+	var bytes = tileLas({ pointFormat: 3, n: 120000, seed: 23, span: 500 });
+	var base = { where: { memory: true }, tilePoints: 2000, chunkPoints: 20000, compress: true };
+	var ok = await buildTiles(await openLas(bytes), Object.assign({}, base, { threads: 4 }));
+	var seen = [];
+	// _packWait 0: every pool answer comes after the wait, as a lost reply would never come at all
+	var late = await buildTiles(await openLas(bytes), Object.assign({}, base, { threads: 4, _packWait: 0, onProgress: function (p) { seen.push(p); } }));
+	assert.deepEqual(late.manifest.nodes, ok.manifest.nodes);
+	var a = await blobs(ok), b = await blobs(late);
+	Object.keys(a).forEach(function (k) { assert.deepEqual(b[k], a[k], "node " + k); });
+	var packs = seen.filter(function (p) { return p.phase === "pack"; });
+	assert.ok(packs.length >= 2 && packs[packs.length - 1].done === packs[packs.length - 1].total, "the pack phase ends");
+});

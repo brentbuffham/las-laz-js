@@ -63,12 +63,15 @@ async function spawn(onMessage, onFail, nodeUrl) {
 		var w = new Worker(new URL("./chunkWorker.js", import.meta.url), { type: "module" });
 		w.onmessage = function (e) { message(e.data); };
 		w.onerror = function (e) { if (e && e.preventDefault) e.preventDefault(); error(new Error(e && e.message ? e.message : "LAZ worker failed")); };
+		// a reply that cannot be read raises no message event: without this its task would wait for ever
+		w.onmessageerror = function () { error(new Error("a LAZ worker sent a reply that could not be read")); };
 		handle = { post: function (m, t) { w.postMessage(m, t); }, close: function () { w.terminate(); } };
 	} else {
 		var wt = await import(/* webpackIgnore: true */ /* @vite-ignore */ NODE_WORKER_THREADS);
 		var nw = new wt.Worker(nodeUrl || new URL("./chunkWorker.js", import.meta.url), nodeWorkerOptions(process.execArgv));
 		nw.on("message", message);
 		nw.on("error", error);
+		nw.on("messageerror", error);
 		nw.on("exit", function (code) { if (!started) failed(new Error("LAZ worker exited (" + code + ") before it started")); });
 		// Node runs while a worker has a task and not while it is idle, so a forgotten
 		// pool never keeps it running (unref after the "message" listener, which refs again)
@@ -105,7 +108,14 @@ export async function createLazPool(n, nodeUrl) {
 			job.worker = w;
 			waiting.set(job.msg.id, job);
 			if (w.hold) w.hold();
-			w.post(job.msg, job.transfer);
+			try { w.post(job.msg, job.transfer); } catch (e) {
+				// a task that cannot be sent (a buffer already transferred away): it fails alone, and the worker stays free
+				// (the throw used to leave the task in waiting for ever and the worker out of idle)
+				waiting.delete(job.msg.id);
+				if (w.release) w.release();
+				idle.push(w);
+				job.reject(new LasError(ERROR_CODES.UNSUPPORTED, "could not send a task to a LAZ worker: " + (e && e.message ? e.message : String(e))));
+			}
 		}
 	}
 

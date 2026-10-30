@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+Fixed (a tile build that stalled for good at 98% in Chrome, with a 177 M point cloud on 16 workers):
+- `buildTiles` with `compress`: the last step (packing the chunk roots and the levels above them) waits at most 30 s
+  for the worker pool to answer one node, then packs that node and every later one on the calling thread. A pool that
+  loses a reply, or fails, no longer holds the build; the store is byte for byte the one the pool makes.
+- `buildTiles` reports that last step as its own `onProgress` phase, `"pack"` (after `"tiles"`, which now ends when the
+  last chunk is done). It sent nothing before, so a healthy pack looked frozen.
+- The worker pool: a worker's `messageerror` (a reply that cannot be read) fails the pool's waiting tasks, as an
+  `error` does; and a task that cannot be sent (`postMessage` throws, for a buffer already transferred) fails alone and
+  the worker goes back to idle. Both used to leave the task waiting for ever and, for a failed send, the worker lost.
+
 ## 0.19.0 (2026-10-30)
 
 New (double layers: a surface matched twice leaves a second sheet above or below the real one):

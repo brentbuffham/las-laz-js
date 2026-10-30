@@ -120,6 +120,23 @@ test("pool.compress: groups of chunks come back as the single-threaded chunks, a
 	await assert.rejects(pool.compress({ vlr: made.vlr, recordLength: len, records: new ArrayBuffer(len), counts: [1] }), { code: "ABORTED" });
 });
 
+test("pool: a task that cannot be sent fails alone and leaves every worker free", { timeout: 20000 }, async function () {
+	var pool = await createLazPool(2);
+	try {
+		var made = lazVlrFor(3, 34, 1000);
+		// a buffer that was transferred away: postMessage throws, as it did on the main thread in a stalled build
+		var gone = function () { var b = new ArrayBuffer(340); structuredClone(b, { transfer: [b] }); return b; };
+		for (var i = 0; i < 2; i++)
+			await assert.rejects(pool.compress({ vlr: made.vlr, recordLength: 34, records: gone(), counts: [10] }), { name: "LasError", message: /could not send/ });
+		// both workers still take work (with the leak, a pool of 2 had none left and this waited for ever)
+		var good = [0, 1, 2].map(function () { return pool.compress({ vlr: made.vlr, recordLength: 34, records: new ArrayBuffer(340), counts: [10] }); });
+		var got = await Promise.all(good);
+		assert.ok(got.every(function (g) { return g.bytes.length > 0 && g.sizes.length === 1; }));
+	} finally {
+		pool.close();
+	}
+});
+
 test("pool.compress: a worker's error comes back as a LasError", async function () {
 	var pool = await createLazPool(2);
 	try {
