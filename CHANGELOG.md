@@ -32,7 +32,7 @@ New (double layers: a surface matched twice leaves a second sheet above or below
   402 test window it took one pass to join 93% of a ghost that touching cells left in pieces under the patch size.
 - `suggestDoubleLayer(cols, { strength })` works the options out from the points: cell from the density, gap from the
   roughness of the ordinary cells, patch and bridge from the cell. `doubleLayerStats` and `addDoubleLayerStats` are
-  the measurement it is built on (a cloud read in pieces adds up). `strength`: `"gentle"`, `"normal"`, `"thorough"`.
+  the measurement it is built on (a cloud read in pieces adds up). `strength`: `"gentle"`, `"normal"`, `"thorough"`, `"aggressive"`.
 - `suggestDoubleLayerStore(store, { box, strength })` and `fixDoubleLayerStore(store, { box, strength, mode, keep,
   maxPasses, settings, dryRun, onPass })`: measure, find, snap and repeat until nothing is left, in one call. Worker
   messages `suggestDoubleLayer`, `fixDoubleLayer` and `doubleLayerPoints` (the found points, for a highlight).

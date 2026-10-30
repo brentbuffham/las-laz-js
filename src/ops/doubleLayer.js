@@ -306,7 +306,9 @@ function histQuantile(h, total, q) {
  * @param {object|{points: number, area: number, cells: number[], hist: Uint32Array[]}} source - point columns, or doubleLayerStats' result
  *   (for a cloud read in pieces).
  * @param {{strength?: string}} [opts] - strength: "gentle" (a larger gap, 4 points, twice the area: only clear ghosts), "normal"
- *   (default) or "thorough" (a smaller gap, 2 points, half the area: fainter ghosts, and a little real texture with them).
+ *   (default), "thorough" (a smaller gap, 2 points, half the area: fainter ghosts, and a little real texture with them) or
+ *   "aggressive" (half the gap, 2 points, a quarter of the area, a wider bridge and reach: the thin and scattered ghosts too,
+ *   and more of the real texture with them; look at it with Show before fixing).
  * @returns {{ok: boolean, reason?: string, cell?: number, minGap?: number, minPoints?: number, minArea?: number, bridge?: number, maxGap?: number,
  *   density?: number, splitFraction?: number, texture?: {p25: number, p50: number, p95: number}}} ok false (with a reason) when the
  *   points are too few or too thin to say. cell: about 150 points to a cell (0.05 to 1 m); minGap: 12 times the lower quartile of
@@ -317,7 +319,7 @@ function histQuantile(h, total, q) {
  */
 export function suggestDoubleLayer(source, opts) {
 	var strength = opts && opts.strength !== undefined ? opts.strength : "normal";
-	if (strength !== "gentle" && strength !== "normal" && strength !== "thorough") throw bad("suggestDoubleLayer strength must be \"gentle\", \"normal\" or \"thorough\", not " + JSON.stringify(strength));
+	if (strength !== "gentle" && strength !== "normal" && strength !== "thorough" && strength !== "aggressive") throw bad("suggestDoubleLayer strength must be \"gentle\", \"normal\", \"thorough\" or \"aggressive\", not " + JSON.stringify(strength));
 	var stats = source && source.hist ? source : doubleLayerStats(source);
 	if (stats.points < 2000 || !(stats.area > 0)) return { ok: false, reason: "too few points to measure (" + stats.points + ")" };
 	var density = stats.points / stats.area, ideal = Math.sqrt(POINTS_PER_CELL / density), ci = 0, i;
@@ -325,11 +327,12 @@ export function suggestDoubleLayer(source, opts) {
 	var cell = STAT_CELLS[ci], total = stats.cells[ci];
 	if (total < 30) return { ok: false, reason: "too few cells with enough points (" + total + " of " + cell + " m)", density: density };
 	var h = stats.hist[ci], p25 = histQuantile(h, total, 0.25), p50 = histQuantile(h, total, 0.5), p95 = histQuantile(h, total, 0.95);
-	var minGap = Math.min(0.15, Math.max(0.06, 12 * p25)), over = 0, minPoints = 3, minArea = Math.max(1, 25 * cell * cell);
+	var minGap = Math.min(0.15, Math.max(0.06, 12 * p25)), over = 0, minPoints = 3, minArea = Math.max(1, 25 * cell * cell), reach = 3, maxGap = 0.5;
 	for (var b = 0; b < h.length; b++) if (binValue(b) > minGap) over += h[b];
 	var splitFraction = over / total;
 	if (strength === "gentle") { minGap = Math.min(0.2, minGap * 1.5); minPoints = 4; minArea *= 2; }
 	else if (strength === "thorough") { minGap = Math.max(0.04, minGap * 0.75); minPoints = 2; minArea /= 2; }
+	else if (strength === "aggressive") { minGap = Math.max(0.03, minGap * 0.5); minPoints = 2; minArea /= 4; reach = 5; maxGap = 1; }
 	return { ok: true, cell: cell, minGap: Math.round(minGap * 1000) / 1000, minPoints: minPoints, minArea: Math.round(minArea * 100) / 100,
-		bridge: Math.round(3 * cell * 1000) / 1000, maxGap: 0.5, density: density, splitFraction: splitFraction, texture: { p25: p25, p50: p50, p95: p95 } };
+		bridge: Math.round(reach * cell * 1000) / 1000, maxGap: maxGap, density: density, splitFraction: splitFraction, texture: { p25: p25, p50: p50, p95: p95 } };
 }

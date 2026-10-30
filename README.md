@@ -305,7 +305,7 @@ each cell of the distance. Rocks stay out: a bridged field of rocks still needs 
 ```js
 import { suggestDoubleLayer, selectDoubleLayerStore, fixDoubleLayerStore } from "las-laz-js";
 
-var s = suggestDoubleLayer(pts, { strength: "normal" });     // "gentle" | "normal" | "thorough"
+var s = suggestDoubleLayer(pts, { strength: "normal" });     // "gentle" | "normal" | "thorough" | "aggressive"
 // { ok, cell, minGap, minPoints, minArea, bridge, maxGap, density, splitFraction, texture }
 var found = selectDoubleLayer(pts, s);                       // the settings are selectDoubleLayer's options
 
@@ -320,7 +320,10 @@ the lower quartile, 0.06 to 0.15 m), `minPoints` 3, `minArea` the larger of 1 mÂ
 `maxGap` 0.5 m (a layer further off is structure, not a ghost). `ok: false` says why when the points are too few or
 too thin to tell. `splitFraction` is the share of cells whose stretch passes the gap: a clean surface has well under
 1%. `strength` trades certainty for reach: `"gentle"` (larger gap, 4 points, twice the area) takes clear ghosts only,
-`"thorough"` (smaller gap, 2 points, half the area) takes fainter ones and a little real texture with them.
+`"thorough"` (smaller gap, 2 points, half the area) takes fainter ones and a little real texture with them, and
+`"aggressive"` (half the gap, 2 points, a quarter of the area, a bridge of 5 cells, `maxGap` 1 m) takes the thin and
+scattered ghosts too, at the price of stray cells on a clean surface (a few hundred points in a box of tens of
+thousands on the 402 and 403 samples): look at it with Show ghosting before fixing.
 Measured on ODM clouds of about 7,000 points a square metre, the suggestion matched settings tuned by hand, found the
 ghosts in two boxes and nothing in four clean ones, at every strength.
 

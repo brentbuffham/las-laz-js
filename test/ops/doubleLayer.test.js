@@ -273,6 +273,15 @@ test("strength: gentle asks for more, thorough for less", function () {
 	assert.throws(function () { suggestDoubleLayer(d.cols, { strength: "strong" }); }, { code: "INVALID_ARGUMENT" });
 });
 
+test("strength: aggressive reaches further than thorough", function () {
+	var d = sparseGhost(0.5, 5), t = suggestDoubleLayer(d.cols, { strength: "thorough" }), a = suggestDoubleLayer(d.cols, { strength: "aggressive" });
+	assert.ok(a.minGap < t.minGap && a.minArea < t.minArea && a.bridge > t.bridge && a.maxGap > t.maxGap, JSON.stringify(a));
+	assert.equal(a.minPoints, 2);
+	var find = function (c, s) { return selectDoubleLayer(c, fromSuggestion(suggestDoubleLayer(c, { strength: s }))).stats.selected; };
+	assert.ok(find(d.cols, "aggressive") >= find(d.cols, "thorough"));
+	assert.equal(find(sparseGhost(0, 9).cols, "aggressive"), 0);
+});
+
 test("thorough finds at least what gentle finds and still leaves a clean surface alone", function () {
 	var d = sparseGhost(0.5, 5), find = function (c, s) { return selectDoubleLayer(c, fromSuggestion(suggestDoubleLayer(c, { strength: s }))).stats.selected; };
 	assert.ok(find(d.cols, "thorough") >= find(d.cols, "gentle"));
