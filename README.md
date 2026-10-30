@@ -268,13 +268,13 @@ cost of thin features. It works on columns in memory (x / y / z, or a k = 3 `pos
 points take about 2 s in Node. With PDAL's `filters.outlier` (`method=radius`), `min_k` is the same
 as `minNeighbours`, but PDAL does not count a point exactly `radius` away.
 
-### Double layers
+### Double layers (ghosting)
 
 ```js
 import { selectDoubleLayer, snapToLayer, removePoints } from "las-laz-js";
 
-var found = selectDoubleLayer(pts, { cell: 0.2, minGap: 0.15 });   // keep: "auto" | "upper" | "lower"
-found.stats;                                                       // { selected, kept, cellsDouble, min, p05, median, p95, max } of dz
+var found = selectDoubleLayer(pts, { cell: 0.25, minGap: 0.3, minArea: 4 });   // keep: "auto" | "upper" | "lower"
+found.stats;                                                       // { selected, kept, cellsDouble, cellsDropped, min, p05, median, p95, max } of dz
 var flat = snapToLayer(pts, found);                                // "offset": each ghost point moves by its cell's offset
 var meet = snapToLayer(pts, found, { mode: "average", blend: 0.5 });   // both layers move half way
 var clean = removePoints(pts, found.selection);                    // or just drop the ghost
@@ -288,8 +288,19 @@ jump by more than `minGap`, and a layer needs `minPoints` (5) points. A cell wit
 cells, so a sheet that drifts away is followed. `snapToLayer` modes: `"offset"` (add `dz`; keeps the ghost's
 own relief), `"surface"` (z becomes the kept layer's height: flattens it), `"average"` (the ghost moves
 `1 - blend` of the way, the kept layer in those cells `blend` of the way back; blend 0.5 default).
+
+A ghost is a sheet over an area, not a rock. A boulder's top is a double cell on its own, and rubble is a run
+of double cells at different heights. `minArea` (square metres, 0 = off) keeps a double cell only when it joins
+its neighbours (8-connected) into a patch of at least that area, and two neighbours join only when their
+offsets agree within `coherence` (default `minGap / 4`): a sheet follows the surface at a steady offset, rocks
+do not. `stats.cellsDropped` counts the cells a too-small patch lost. Set `coherence` near the sheet's own
+cell-to-cell noise: a loose value lets rubble of similar heights join up.
+
 `selectDoubleLayerStore(store, opts)` and `snapToLayerStore(store, found, { mode, blend })` do it over a tile
-store (`partner: true` for `"average"`). Layers are vertical: terrain, benches, floors. Choose `cell` so the
+store (`partner: true` for `"average"`). `box: { minX, maxX, minY, maxY, minZ, maxZ }` (file coordinates, any
+side left out is open) searches only inside it and reads only the tiles it meets, so tuning on one area takes
+seconds, not a pass over the store; a point inside the box gets the answer a run over the whole store gives
+it. A patch is judged inside one work tile, so keep `minArea` well under a tile's area. Layers are vertical: terrain, benches, floors. Choose `cell` so the
 real surface's own rise across it is less than `minGap`: on a slope of 1 in 2, a 1 m cell spans 0.5 m of
 height and hides a ghost 0.3 m away.
 
@@ -738,6 +749,8 @@ await store.matches(file);              // true when built from this file
 
 // every frame, on the main thread, from the manifest the Worker posts
 var pick = selectTiles(store.manifest, { viewProjection, width, height, pointBudget: 20e6, localOrigin });
+// clipBox (same coordinates as the view, any side may be left out): tiles wholly outside it are not picked,
+// so a crop box spends the point budget on what it shows
 // -> [{ key, depth, count, box }], most important first, a tile's parent always before it
 var keys = pick.map(function (n) { return n.key; });
 for await (var t of store.readTiles(keys, { fields: ["x", "y", "z", "red", "green", "blue"], localOrigin, float32: true })) {

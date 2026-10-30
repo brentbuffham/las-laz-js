@@ -9,6 +9,11 @@
 // ghosts. The offset from the kept layer is each cell's weighted mean,
 // smoothed over the cells around it, so a sheet that drifts away is
 // followed. snapToLayer then moves the ghost points by it.
+// A ghost is a sheet over an area, not a rock: a double cell counts only
+// when it joins its neighbours into a patch of at least minArea square
+// metres, and two neighbours join only when their offsets agree within
+// coherence. A boulder's top is a double cell on its own, and boulders
+// beside each other stand at different heights, so neither forms a patch.
 // Layers are vertical: this is for terrain, benches and floors, not for
 // a face that stands near upright.
 //==========================================================
@@ -32,16 +37,19 @@ function percentile(sorted, p) { return sorted.length ? sorted[Math.min(sorted.l
  * Find the ghost layer of a surface scanned twice.
  * @param {object} cols - point columns with x, y, z, or a k = 3 positions column.
  * @param {{cell: number, minGap: number, maxGap?: number, keep?: string, minPoints?: number, smooth?: number,
- *   anchor?: {x: number, y: number}}} opts - cell: XY cell size (required, about 1-2 point spacings); minGap: the
+ *   anchor?: {x: number, y: number}, minArea?: number, coherence?: number}} opts - cell: XY cell size (required, about 1-2 point spacings); minGap: the
  *   vertical jump that starts a new layer (required); maxGap (default no limit): a layer further than this from the
  *   kept one is not a ghost (a real overhang); keep: "auto" (default; the layer with most points, the upper on a tie),
  *   "upper" or "lower"; minPoints (default 5): a smaller layer is ignored; smooth (default 1): rings of cells the offset
- *   is averaged over (0: none); anchor: the grid's corner, so separate runs share one grid (default the data's minimum).
+ *   is averaged over (0: none); anchor: the grid's corner, so separate runs share one grid (default the data's minimum);
+ *   minArea (default 0, off): a patch of double cells smaller than this many square metres is not a ghost (rocks, single
+ *   cells); coherence (default minGap / 4): the most two neighbouring double cells' offsets may differ and still be one
+ *   patch (a sheet follows the surface at a steady offset; rocks do not).
  * @returns {{selection: Uint32Array, dz: Float64Array, dominantZ: Float64Array, partner: {selection: Uint32Array, dz: Float64Array},
  *   stats: object}} selection: the ghost points; dz: what to add to each one's z to land on the kept layer;
  *   dominantZ: the kept layer's median height in each one's cell; partner: the kept-layer points in cells that have a
  *   ghost, with dz the offset from the ghost to them (for the average mode of snapToLayer, which moves them too);
- *   stats: selected, kept, cellsTotal, cellsDouble, and min, p05, median, p95, max of dz.
+ *   stats: selected, kept, cellsTotal, cellsDouble, cellsDropped (double cells in patches under minArea), and min, p05, median, p95, max of dz.
  */
 export function selectDoubleLayer(cols, opts) {
 	var o = opts || {};
@@ -55,13 +63,17 @@ export function selectDoubleLayer(cols, opts) {
 	var smooth = o.smooth === undefined ? 1 : o.smooth;
 	if (!(Number.isInteger(smooth) && smooth >= 0)) throw bad("selectDoubleLayer smooth must be a whole number >= 0, not " + String(o.smooth));
 	if (o.anchor !== undefined && !(o.anchor && isFinite(o.anchor.x) && isFinite(o.anchor.y))) throw bad("selectDoubleLayer anchor must be { x, y }");
+	var minArea = o.minArea === undefined ? 0 : o.minArea;
+	if (!(typeof minArea === "number" && minArea >= 0 && isFinite(minArea))) throw bad("selectDoubleLayer minArea must be a number >= 0 (square metres), not " + String(o.minArea));
+	var coherence = o.coherence === undefined ? o.minGap / 4 : o.coherence;
+	if (!(typeof coherence === "number" && coherence > 0 && isFinite(coherence))) throw bad("selectDoubleLayer coherence must be a positive finite number, not " + String(o.coherence));
 
 	var coords = coordsOf(cols, "selectDoubleLayer"), n = cols.count;
 	checkPointCount(n);
 	var X = coords.x, Y = coords.y, Z = coords.z, st = coords.stride, cell = o.cell, inv = 1 / cell;
 	var empty = { selection: new Uint32Array(0), dz: new Float64Array(0), dominantZ: new Float64Array(0),
 		partner: { selection: new Uint32Array(0), dz: new Float64Array(0) },
-		stats: { selected: 0, kept: 0, cellsTotal: 0, cellsDouble: 0, min: NaN, p05: NaN, median: NaN, p95: NaN, max: NaN } };
+		stats: { selected: 0, kept: 0, cellsTotal: 0, cellsDouble: 0, cellsDropped: 0, min: NaN, p05: NaN, median: NaN, p95: NaN, max: NaN } };
 	if (n === 0) return empty;
 
 	var x0, y0, i;
@@ -116,6 +128,34 @@ export function selectDoubleLayer(cols, opts) {
 		off[s2] = sum / w; weight[s2] = w; keptZ[s2] = K.med; cellsDouble++;
 	}
 
+	// a ghost is a sheet over an area: drop the double cells whose patch (8-connected, offsets within coherence) is too small
+	var cellsDropped = 0;
+	if (minArea > 0 && cellsDouble > 0) {
+		var seen = new Uint8Array(cells), area = cell * cell, stack = [], members = [];
+		for (var s0 = 0; s0 < cells; s0++) {
+			if (seen[s0] || off[s0] !== off[s0]) continue;
+			members.length = 0; stack.length = 0; stack.push(s0); seen[s0] = 1;
+			while (stack.length) {
+				var cur = stack.pop();
+				members.push(cur);
+				for (var ex = -1; ex <= 1; ex++) {
+					for (var ey = -1; ey <= 1; ey++) {
+						if (!ex && !ey) continue;
+						var nb = map.get((cxs[cur] + ex + HALF) * SPAN + (cys[cur] + ey + HALF));
+						if (nb === undefined || seen[nb] || off[nb] !== off[nb] || Math.abs(off[nb] - off[cur]) > coherence) continue;
+						seen[nb] = 1; stack.push(nb);
+					}
+				}
+			}
+			if (members.length * area >= minArea) continue;
+			for (var mi = 0; mi < members.length; mi++) {
+				var dead = members[mi];
+				off[dead] = NaN; cellsDouble--; cellsDropped++;
+				for (var pp = start[dead]; pp < start[dead + 1]; pp++) roles[order[pp]] = 0;
+			}
+		}
+	}
+
 	// each double cell's offset, averaged with the double cells around it (by their ghost points)
 	var field = off;
 	if (smooth > 0 && cellsDouble > 1) {
@@ -145,7 +185,7 @@ export function selectDoubleLayer(cols, opts) {
 	}
 	var sorted = Float64Array.from(dz).sort();
 	return { selection: sel, dz: dz, dominantZ: dom, partner: { selection: psel, dz: pdz },
-		stats: { selected: nGhost, kept: nKept, cellsTotal: cells, cellsDouble: cellsDouble,
+		stats: { selected: nGhost, kept: nKept, cellsTotal: cells, cellsDouble: cellsDouble, cellsDropped: cellsDropped,
 			min: sorted.length ? sorted[0] : NaN, p05: percentile(sorted, 0.05), median: percentile(sorted, 0.5), p95: percentile(sorted, 0.95),
 			max: sorted.length ? sorted[sorted.length - 1] : NaN } };
 }

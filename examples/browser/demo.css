@@ -310,3 +310,11 @@ progress { width: 160px; height: 8px; accent-color: var(--accent); }
 .size-chart .size-measured { stroke: var(--accent); }
 .size-chart .size-mark { fill: var(--accent); }
 .size-chart .size-mark-fit { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+
+/* Ghosting tab: the top-down overview with its draggable box */
+.overview-wrap { position: relative; width: 100%; height: 260px; background: #14171c; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+#gOverview { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.overview-note { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 12px; text-align: center; color: #9aa3ad; font-size: 12px; pointer-events: none; }
+.overview-note:empty { display: none; }
+.field.inline { margin: 0; gap: 6px; font-size: 12px; }
+.mono { font-family: var(--mono); }

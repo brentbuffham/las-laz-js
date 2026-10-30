@@ -136,3 +136,35 @@ test("bad views are refused", function () {
 		assert.throws(function () { selectTiles(STORE, v); }, function (e) { return e.code === "INVALID_ARGUMENT"; });
 	});
 });
+
+test("clipBox: tiles wholly outside it are not picked, so the budget goes to what it shows", function () {
+	var origin = { x: 478000, y: 6772000, z: 0 };
+	var vp = multiply(orthographic(-250, 250, 150, -150, 0.1, 10000), lookAt([CX - origin.x, CY - origin.y, CZ - origin.z + 500], [CX - origin.x, CY - origin.y, CZ - origin.z], [0, 1, 0]));
+	var base = { viewProjection: vp, width: 1600, height: 960, pointBudget: 40000, minPixels: 20, localOrigin: origin };
+	var box = { minX: CX - origin.x - 40, maxX: CX - origin.x + 40, minY: CY - origin.y - 40, maxY: CY - origin.y + 40 };   // no Z limit
+	function overlaps(key) {
+		var b = subtreeBox(M, key);
+		return !(b[3] - origin.x < box.minX || b[0] - origin.x > box.maxX || b[4] - origin.y < box.minY || b[1] - origin.y > box.maxY);
+	}
+	var plain = selectTiles(STORE, base), cropped = selectTiles(STORE, Object.assign({}, base, { clipBox: box }));
+	cropped.forEach(function (n) { assert.ok(n.key === "0-0-0-0" || overlaps(n.key), n.key + " is outside the crop box"); });
+	var inside = function (list) { return list.filter(function (n) { return overlaps(n.key); }).reduce(function (s, n) { return s + n.count; }, 0); };
+	assert.ok(inside(cropped) > inside(plain), "the crop picked " + inside(cropped) + " points inside the box, no crop " + inside(plain));
+	assert.ok(cropped.length > 1);
+	// a box that holds everything changes nothing; one far away leaves the root only
+	var all = { minX: -1e9, maxX: 1e9, minY: -1e9, maxY: 1e9, minZ: -1e9, maxZ: 1e9 };
+	assert.deepEqual(selectTiles(STORE, Object.assign({}, base, { clipBox: all })), plain);
+	assert.deepEqual(selectTiles(STORE, Object.assign({}, base, { clipBox: { minX: 1e7, maxX: 1e7 + 5 } })).map(function (n) { return n.key; }), ["0-0-0-0"]);
+	// Z counts too
+	var flat = selectTiles(STORE, Object.assign({}, base, { clipBox: Object.assign({}, box, { minZ: 5000, maxZ: 6000 }) }));
+	assert.deepEqual(flat.map(function (n) { return n.key; }), ["0-0-0-0"]);
+});
+
+test("clipBox is checked", function () {
+	var vp = multiply(orthographic(-250, 250, 150, -150, 0.1, 10000), lookAt([CX, CY, CZ + 500], [CX, CY, CZ], [0, 1, 0]));
+	var v = { viewProjection: vp, width: 800, height: 400 };
+	[{ minX: 5, maxX: 1 }, { minY: NaN }, { maxZ: "3" }, { minZ: 2, maxZ: 1 }].forEach(function (b) { assert.throws(function () { selectTiles(STORE, Object.assign({}, v, { clipBox: b })); }, { code: "INVALID_ARGUMENT" }); });
+	assert.throws(function () { selectTiles(STORE, Object.assign({}, v, { clipBox: 5 })); }, { code: "INVALID_ARGUMENT" });
+	assert.doesNotThrow(function () { selectTiles(STORE, Object.assign({}, v, { clipBox: {} })); });
+	assert.doesNotThrow(function () { selectTiles(STORE, Object.assign({}, v, { clipBox: null })); });
+});

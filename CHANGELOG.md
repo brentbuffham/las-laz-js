@@ -3,7 +3,7 @@
 ## Unreleased
 
 New (double layers: a surface matched twice leaves a second sheet above or below the real one):
-- `selectDoubleLayer(cols, { cell, minGap, maxGap, keep, minPoints, smooth, anchor })`: points go into XY cells; in
+- `selectDoubleLayer(cols, { cell, minGap, maxGap, keep, minPoints, smooth, anchor, minArea, coherence })`: points go into XY cells; in
   a cell the heights split into layers where they jump by more than `minGap`; a cell with two layers keeps one
   (`keep`: `"auto"` the one with most points, `"upper"`, `"lower"`) and the other is the ghost. Returns the ghost
   points as a selection, `dz` (what to add to each one's z to land on the kept layer; the cell's offset, averaged
@@ -13,8 +13,18 @@ New (double layers: a surface matched twice leaves a second sheet above or below
   (flatten onto the kept layer) or `"average"` (the ghost and the kept layer meet part of the way; `blend`).
 - `selectDoubleLayerStore(store, opts)` and `snapToLayerStore(store, found, opts)`: the same over a tile store, on
   the work tiles (every tile on one grid anchored at the store's corner, an overlap of `smooth + 2` cells).
-- Worker messages `findDoubleLayer`, `classifyDoubleLayer` and `snapDoubleLayer`; the demo's Tiles tab has a
-  Double layer section.
+- A ghost is a sheet over an area, not a rock: `minArea` (m², default 0 = off) keeps a double cell only when it joins
+  its neighbours into a patch that large, and neighbours join only when their offsets agree within `coherence`
+  (default `minGap / 4`). Isolated boulders and rubble at different heights are dropped; `stats.cellsDropped`
+  counts the cells lost.
+- `selectDoubleLayerStore` takes `box` (file coordinates): it searches only inside it and reads only the tiles it
+  meets, with the same answer inside the box as a run over the whole store.
+- `selectTiles` takes `view.clipBox` (any side may be left out): tiles wholly outside it are not picked, so a crop
+  box spends the point budget on what it shows.
+- Worker messages `findDoubleLayer`, `classifyDoubleLayer` and `snapDoubleLayer`; the demo has a Ghosting tab:
+  a top-down overview of what is loaded (drawn once on a 2D canvas), a draggable crop box on it (draw, move,
+  resize by edge or corner, or type the corners) that cuts the 3D view to a slab, side views of the box, and
+  the double-layer controls, searching only inside the box. The box outline is drawn in the 3D view.
 - Layers are vertical: this is for terrain, benches and floors, not a near-upright face. The cell must be small
   enough that the real surface's own slope across it is less than `minGap`.
 

@@ -33,6 +33,7 @@ export function initTiles(ctx) {
 		["tilesDelete", "tilesClassify", "tilesSave", "tilesClose", "dlFind"].forEach(function (id) { $(id).disabled = !on; });
 		dlFound(false);
 		if (!on) { viewer.clearTiles(); loaded.clear(); manifest = null; info("No tiles shown."); }
+		document.dispatchEvent(new Event("las:source"));   // the Ghosting overview redraws
 	}
 
 	// a store is open in the Worker: draw it from its manifest
@@ -74,6 +75,8 @@ export function initTiles(ctx) {
 		var view = viewer.viewState(), t0 = performance.now();
 		view.pointBudget = budget();
 		view.localOrigin = tileOrigin;
+		var crop = ctx.clipBox ? ctx.clipBox() : null;   // the Ghosting tab's box, in this frame: tiles outside it cost no budget
+		if (crop) view.clipBox = crop;
 		var pick = selectTiles(manifest, view);
 		lastSelectMs = performance.now() - t0;
 		lastPick = pick;
@@ -178,6 +181,7 @@ export function initTiles(ctx) {
 			if (!sel.count) { ctx.setStatus(label + ": no points inside the polygon", true); return; }
 			var r = await run(sel);
 			manifest = r.manifest;
+			document.dispatchEvent(new Event("las:source"));
 			ctx.setStatus(label + ": " + ctx.fmt(sel.count) + " points in " + ctx.fmt(ctx.since(t0)) + " ms; the store now holds " + ctx.fmt(Object.keys(manifest.nodes).reduce(function (s, k) { return s + manifest.nodes[k].count; }, 0)) + " points");
 			schedule();
 		} catch (err) { ctx.setStatus(label + ": " + err.message, true); } finally { busy(false); }
@@ -191,13 +195,17 @@ export function initTiles(ctx) {
 		var t0 = performance.now(), mode = $("dlMode").value, gap = $("dlMaxGap").value;
 		var opts = { cell: Number($("dlCell").value), minGap: Number($("dlGap").value), keep: $("dlKeep").value, minPoints: Number($("dlMin").value), smooth: Number($("dlSmooth").value), partner: mode === "average" };
 		if (gap !== "") opts.maxGap = Number(gap);
+		if ($("dlArea").value !== "") opts.minArea = Number($("dlArea").value);
+		if ($("dlCoh").value !== "") opts.coherence = Number($("dlCoh").value);
+		var limit = ctx.findBox ? ctx.findBox() : null;
+		if (limit) opts.box = limit;   // file coordinates: only the tiles the box meets are read
 		busy(true);
 		try {
 			ctx.setStatus("Finding the double layer…");
 			var r = await ctx.call("findDoubleLayer", opts, function (m) { if (m.type === "progress") $("progress").value = m.fraction; }).promise;
 			dlFound(r.count ? r : null);
 			var s = r.stats, d = function (v) { return v.toFixed(3); };
-			$("dlInfo").textContent = r.count ? ctx.fmt(r.count) + " ghost points; offset to the kept layer: median " + d(s.median) + " m, 5-95 % " + d(s.p05) + " to " + d(s.p95) + ", range " + d(s.min) + " to " + d(s.max) + " (" + r.tiles + " work tiles, " + ctx.fmt(ctx.since(t0)) + " ms)" : "No double layer found: try a smaller gap or a larger cell.";
+			$("dlInfo").textContent = r.count ? ctx.fmt(r.count) + " ghost points" + (limit ? " in the box" : "") + "; offset to the kept layer: median " + d(s.median) + " m, 5-95 % " + d(s.p05) + " to " + d(s.p95) + ", range " + d(s.min) + " to " + d(s.max) + " (" + r.tiles + " work tiles, " + ctx.fmt(ctx.since(t0)) + " ms)" : "No ghost found: try a smaller gap, a smaller minimum patch or a different cell.";
 			ctx.setStatus("Double layer: " + ctx.fmt(r.count) + " points in " + ctx.fmt(ctx.since(t0)) + " ms");
 			console.log("[tiles] double layer", { opts: opts, count: r.count, stats: r.stats, ms: ctx.since(t0) });
 		} catch (err) { dlFound(null); ctx.setStatus("Double layer: " + err.message, true); } finally { busy(false); }
@@ -212,6 +220,7 @@ export function initTiles(ctx) {
 			if (type === "snapDoubleLayer") dlFound(null);
 			ctx.setStatus(label + ": " + ctx.fmt(found ? found.count : r.moved) + " points in " + ctx.fmt(ctx.since(t0)) + " ms");
 			viewer.clearTiles(); loaded.clear();
+			if (type === "snapDoubleLayer") document.dispatchEvent(new Event("las:source"));   // heights moved: the overview's colours
 			schedule();
 		} catch (err) { ctx.setStatus(label + ": " + err.message, true); } finally { busy(false); }
 	}
@@ -254,6 +263,10 @@ export function initTiles(ctx) {
 	return {
 		/** True while tiles are shown (the Edit tab's polygon tool works on them). */
 		active: function () { return active; },
+		/** The origin the shown tiles are local to ({ x, y, z }, file coordinates). */
+		origin: function () { return tileOrigin; },
+		/** Choose the tiles again now (the Ghosting box moved). */
+		reselect: function () { schedule(); },
 		/** The middle Z of the store, local: where the polygon is drawn. */
 		midZ: function () { var b = rootBox(); return (b[2] + b[5]) / 2 - tileOrigin.z; },
 		/** A file was opened: building is possible. */

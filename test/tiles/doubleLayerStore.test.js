@@ -84,3 +84,51 @@ test("bad options are refused", async function () {
 	await assert.rejects(snapToLayerStore(s, found, { mode: "x" }), { code: "INVALID_ARGUMENT" });
 	await assert.rejects(snapToLayerStore(s, {}), { code: "INVALID_ARGUMENT" });
 });
+
+// the points a store selection names, as "x,y" strings in the file's units
+async function placesOf(s, selection) {
+	var out = [];
+	for (var key of Object.keys(selection.tiles)) {
+		var pts = await s.readTile(key, { fields: ["x", "y", "z"] }), idx = selection.tiles[key];
+		for (var i = 0; i < idx.length; i++) out.push(pts.x[idx[i]].toFixed(3) + "," + pts.y[idx[i]].toFixed(3) + "," + pts.z[idx[i]].toFixed(3));
+	}
+	return out.sort();
+}
+
+test("box: only the points inside it are found, the same ones a run on the whole store finds there", async function () {
+	var s = await store(), whole = await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6 }, OPTS));
+	var box = { minX: E + 7, maxX: E + 17, minY: N + 7, maxY: N + 17 };
+	var part = await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6, box: box }, OPTS));
+	var inBox = function (p) { var q = p.split(",").map(Number); return q[0] >= box.minX && q[0] <= box.maxX && q[1] >= box.minY && q[1] <= box.maxY; };
+	var want = (await placesOf(s, whole.selection)).filter(inBox), got = await placesOf(s, part.selection);
+	assert.ok(got.length > 200, got.length + " points in the box");
+	assert.deepEqual(got, want);
+	assert.equal(part.tiles, 4, "tiles"); assert.ok(part.tiles < whole.tiles, part.tiles + " work tiles in the box, " + whole.tiles + " over the whole store");
+	assert.equal(part.count, got.length);
+	// workers agree
+	var again = await selectDoubleLayerStore(s, Object.assign({ threads: 2, tile: 6, box: box }, OPTS));
+	assert.equal(again.count, part.count);
+});
+
+test("box: Z limits count, a box off the store finds nothing, open sides are open", async function () {
+	var s = await store(), base = Object.assign({ threads: 1, tile: 6 }, OPTS);
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ box: { minX: E + 6, maxX: E + 18, minZ: H + 500 } }, base))).count, 0);
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ box: { minX: E + 1000, maxX: E + 1010 } }, base))).count, 0);
+	var whole = await selectDoubleLayerStore(s, base);
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ box: {} }, base))).count, whole.count);
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ box: { maxX: E + 1e6 } }, base))).count, whole.count);
+});
+
+test("minArea and coherence reach the store run", async function () {
+	var s = await store(), base = Object.assign({ threads: 1, tile: 12 }, OPTS);
+	var whole = await selectDoubleLayerStore(s, base);
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ minArea: 50 }, base))).count, whole.count);   // the sheet is a 24 x 24 m patch
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ minArea: 5000 }, base))).count, 0);
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ minArea: 50, coherence: 0.0001 }, base))).count, 0);   // offsets never agree that closely
+});
+
+test("bad box, minArea and coherence are refused", async function () {
+	var s = await store();
+	for (var o of [{ box: { minX: 5, maxX: 1 } }, { box: { minY: NaN } }, { box: 3 }, { box: { maxZ: "1" } }, { minArea: -1 }, { coherence: 0 }])
+		await assert.rejects(selectDoubleLayerStore(s, Object.assign({ threads: 1 }, OPTS, o)), { code: "INVALID_ARGUMENT" });
+});

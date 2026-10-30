@@ -46,6 +46,7 @@
 				<button class="tab" data-tab="facets" role="tab">Facets</button>
 				<button class="tab" data-tab="fragments" role="tab">Fragments</button>
 				<button class="tab" data-tab="tiles" role="tab">Tiles</button>
+				<button class="tab" data-tab="ghost" role="tab">Ghosting</button>
 				<button class="tab" data-tab="colour" role="tab">Colour</button>
 				<button class="tab" data-tab="stats" role="tab">Stats</button>
 				<button class="tab" data-tab="write" role="tab">Write</button>
@@ -381,11 +382,54 @@
 				<p class="muted small">Draw and close a polygon on the Edit tab, then:</p>
 				<div class="row"><button class="button" id="tilesDelete" disabled>Delete inside polygon</button></div>
 				<div class="row"><label class="field">Class <input type="number" id="tilesClass" value="6" min="0" max="255"></label><button class="button" id="tilesClassify" disabled>Classify inside polygon</button></div>
-				<h3>Double layer</h3>
-				<p class="muted small">A surface matched twice (ODM) leaves a second sheet a little above or below the real one. <b>Find</b> splits each cell's heights where they jump by the gap and calls the layers beyond the kept one ghosts (<code>selectDoubleLayerStore</code>); <b>Classify</b> marks them to look at; <b>Snap</b> moves them onto the kept layer (<code>snapToLayerStore</code>).</p>
+				<label class="field">Save as LAZ
+					<input type="checkbox" id="tilesSaveCompress" checked>
+				</label>
+				<div class="row"><button class="button" id="tilesSave" disabled>Save the store</button><button class="button" id="tilesClose" disabled>Close tiles</button></div>
+			</div>
+
+			<div class="tab-body hidden" id="tab-ghost">
+				<p class="muted small">Ghosting: a surface matched twice (ODM) leaves a second sheet a little above or below the real one. Drag a box on the overview to cut a slice out of the 3D view, look at it side-on, then <b>Find</b>. The box is also the area Find searches. A ghost is a sheet that follows the surface over an area, so single rocks and rubble are left alone.</p>
+				<div class="overview-wrap"><canvas id="gOverview"></canvas><div id="gOverviewNote" class="overview-note">Open a file, or open a tile store on the Tiles tab.</div></div>
+				<div class="row wrap">
+					<button class="button small" id="gRefresh" title="Draw the top-down picture again from what is loaded">Refresh overview</button>
+					<button class="button small" id="gReset" title="Remove the box">Whole area</button>
+					<label class="field inline">Cut the 3D view to the box <input type="checkbox" id="gClipOn" checked></label>
+				</div>
+				<div id="gBoxInfo" class="muted small mono">No box yet: drag on the overview, or type the corners below.</div>
 				<div class="row">
-					<label class="field">Cell (m) <input type="number" id="dlCell" value="1" min="0.05" step="0.25" title="XY cell: about 1-2 point spacings"></label>
+					<label class="field">X from <input type="number" id="gXMin" step="1"></label>
+					<label class="field">to <input type="number" id="gXMax" step="1"></label>
+				</div>
+				<div class="row">
+					<label class="field">Y from <input type="number" id="gYMin" step="1"></label>
+					<label class="field">to <input type="number" id="gYMax" step="1"></label>
+				</div>
+				<div class="row">
+					<label class="field">Z from <input type="number" id="gZMin" step="0.5"></label>
+					<label class="field">to <input type="number" id="gZMax" step="0.5"></label>
+				</div>
+				<label class="field">Z low <input type="range" id="gZMinR" min="0" max="1000" value="0"></label>
+				<label class="field">Z high <input type="range" id="gZMaxR" min="0" max="1000" value="1000"></label>
+				<div class="row wrap">
+					<span class="muted small">Look at the box from</span>
+					<button class="button small" data-gview="top">Above</button>
+					<button class="button small" data-gview="south">South</button>
+					<button class="button small" data-gview="east">East</button>
+					<button class="button small" data-gview="north">North</button>
+					<button class="button small" data-gview="west">West</button>
+					<button class="button small" id="gCopy" title="Copy the box's corners and heights, to paste into a message">Copy corners</button>
+				</div>
+				<h3>Find the ghost</h3>
+				<p class="muted small"><b>Find</b> splits each cell's heights where they jump by the gap and calls the layers beyond the kept one ghosts (<code>selectDoubleLayerStore</code>); <b>Classify</b> marks them to look at; <b>Snap</b> moves them onto the kept layer (<code>snapToLayerStore</code>). It needs a tile store (Tiles tab).</p>
+				<label class="field">Search only inside the box <input type="checkbox" id="dlLimit" checked title="Find reads only the tiles the box meets: seconds, not the whole store"></label>
+				<div class="row">
+					<label class="field">Cell (m) <input type="number" id="dlCell" value="0.25" min="0.05" step="0.05" title="XY cell: about 1-2 point spacings. On a slope the real surface climbs this much times the slope inside a cell, so keep it small"></label>
 					<label class="field">Gap (m) <input type="number" id="dlGap" value="0.3" min="0.01" step="0.05" title="A vertical jump this big between a cell's heights starts a new layer"></label>
+				</div>
+				<div class="row">
+					<label class="field">Min patch (m²) <input type="number" id="dlArea" value="4" min="0" step="1" title="A ghost must cover at least this much ground in one piece: rocks and single cells are smaller. 0 turns the test off"></label>
+					<label class="field">Steady (m) <input type="number" id="dlCoh" value="" min="0.001" step="0.01" placeholder="gap / 4" title="Neighbouring cells join one patch only when their offsets agree this closely: a sheet follows the surface at a steady offset, rocks do not"></label>
 				</div>
 				<div class="row">
 					<label class="field">Max gap (m) <input type="number" id="dlMaxGap" value="" min="0.01" step="0.5" placeholder="none" title="A layer further than this is not a ghost (a real overhang)"></label>
@@ -395,7 +439,7 @@
 					<label class="field">Keep <select id="dlKeep"><option value="auto">Auto (most points)</option><option value="upper">Upper</option><option value="lower">Lower</option></select></label>
 					<label class="field">Smooth (cells) <input type="number" id="dlSmooth" value="1" min="0" step="1" title="Rings of cells the offset is averaged over"></label>
 				</div>
-				<div class="row"><button class="button" id="dlFind" disabled>Find double layer</button></div>
+				<div class="row"><button class="button" id="dlFind" disabled>Find ghosts</button></div>
 				<div id="dlInfo" class="muted small">Nothing found yet.</div>
 				<div class="row"><label class="field">Class <input type="number" id="dlClass" value="7" min="0" max="255"></label><button class="button" id="dlClassify" disabled>Classify found</button></div>
 				<div class="row">
@@ -403,10 +447,6 @@
 					<label class="field">Blend <input type="number" id="dlBlend" value="0.5" min="0" max="1" step="0.1" title="Average: how far the kept layer moves towards the ghost (0 leaves it, 1 puts it on the ghost)"></label>
 				</div>
 				<div class="row"><button class="button" id="dlSnap" disabled>Snap found onto the kept layer</button></div>
-				<label class="field">Save as LAZ
-					<input type="checkbox" id="tilesSaveCompress" checked>
-				</label>
-				<div class="row"><button class="button" id="tilesSave" disabled>Save the store</button><button class="button" id="tilesClose" disabled>Close tiles</button></div>
 			</div>
 
 			<div class="tab-body hidden" id="tab-colour">

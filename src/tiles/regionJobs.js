@@ -180,8 +180,12 @@ export async function doubleRegion(store, t) {
 	var U = reg[AXES[a[0]]], V = reg[AXES[a[1]]], keep = [];
 	var f = reg.count >= 2 * (t.double.minPoints || 5) ? selectDoubleLayer({ count: reg.count, x: reg.x, y: reg.y, z: reg.z }, Object.assign({}, t.double, { anchor: t.anchor })) : null;
 	if (t.onProgress) t.onProgress(1, 1);
+	var lim = t.limit, o = t.origin;
+	function inLimit(p) {
+		return !lim || (reg.x[p] + o.x >= lim.minX && reg.x[p] + o.x <= lim.maxX && reg.y[p] + o.y >= lim.minY && reg.y[p] + o.y <= lim.maxY && reg.z[p] + o.z >= lim.minZ && reg.z[p] + o.z <= lim.maxZ);
+	}
 	function take(sel, dz, dom, kind) {
-		for (var q = 0; q < sel.length; q++) if (inCore(L.core, U[sel[q]], V[sel[q]])) keep.push({ p: sel[q], dz: dz[q], dom: dom ? dom[q] : NaN, kind: kind });
+		for (var q = 0; q < sel.length; q++) if (inCore(L.core, U[sel[q]], V[sel[q]]) && inLimit(sel[q])) keep.push({ p: sel[q], dz: dz[q], dom: dom ? dom[q] : NaN, kind: kind });
 	}
 	if (f) { take(f.selection, f.dz, f.dominantZ, 1); if (t.partner) take(f.partner.selection, f.partner.dz, null, 2); }
 	var m = keep.length, r = { count: reg.count, node: new Uint32Array(m), index: new Uint32Array(m), x: new Float32Array(m), y: new Float32Array(m), z: new Float32Array(m),

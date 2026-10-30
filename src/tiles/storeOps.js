@@ -249,14 +249,34 @@ function groupByNode(L, chunks) {
 	});
 }
 
+var MIN_KEYS = ["minX", "minY", "minZ"], MAX_KEYS = ["maxX", "maxY", "maxZ"];
+
+// a limit box { minX, maxX, ... } (world coordinates, any side may be left out) checked, with the missing sides open
+function limitBox(b) {
+	if (b === undefined || b === null) return null;
+	if (typeof b !== "object") throw bad("box must be { minX, maxX, minY, maxY, minZ, maxZ } (any may be left out)");
+	var out = {};
+	MIN_KEYS.concat(MAX_KEYS).forEach(function (k) {
+		var v = b[k];
+		if (v === undefined) { out[k] = k[1] === "i" ? -Infinity : Infinity; return; }
+		if (typeof v !== "number" || Number.isNaN(v)) throw bad("box." + k + " must be a number, not " + JSON.stringify(v));
+		out[k] = v;
+	});
+	if (out.minX > out.maxX || out.minY > out.maxY || out.minZ > out.maxZ) throw bad("box has a minimum above its maximum");
+	return out;
+}
+
 /**
- * selectDoubleLayer over a whole tile store. Cells sit on one grid anchored at the store's corner, and each tile reads an
- * overlap of (smooth + 2) cells, so the result is the one a single run over the whole cloud gives. The points that
+ * selectDoubleLayer over a whole tile store, or over the part of it inside opts.box. Cells sit on one grid anchored at the store's corner, and each tile reads an
+ * overlap of (smooth + 2) cells, so the cells give the answer a single run over the whole cloud gives (minArea judges
+ * a patch inside one work tile: keep it well under a tile's area, a few hundred square metres at most). The points that
  * would move are kept here (about 24 bytes a ghost point, and as many more for partner), for snapToLayerStore.
  * @param {object} store - an open TileStore.
  * @param {{cell: number, minGap: number, maxGap?: number, keep?: string, minPoints?: number, smooth?: number, partner?: boolean,
+ *   minArea?: number, coherence?: number, box?: {minX?, maxX?, minY?, maxY?, minZ?, maxZ?},
  *   threads?: number, tile?: number, tilePoints?: number, onProgress?: function(number, number), signal?: AbortSignal}} opts -
- *   selectDoubleLayer's options; partner: also keep the kept-layer points beside a ghost, which the "average" mode moves.
+ *   selectDoubleLayer's options; box: only points inside it (world coordinates, any side open) are found, and only the
+ *   tiles it meets are read; partner: also keep the kept-layer points beside a ghost, which the "average" mode moves.
  * @returns {Promise<{selection: object, count: number, stats: object, ghost: Array, partner: Array|null, keys: string[], origin: object, tiles: number, threads: number}>}
  *   selection: the store's own ({ deletes, count, tiles }); stats: selected, kept (with partner), min, p05, median, p95, max of dz.
  */
@@ -271,10 +291,16 @@ export async function selectDoubleLayerStore(store, opts) {
 		stats: { selected: 0, kept: 0, min: NaN, p05: NaN, median: NaN, p95: NaN, max: NaN } };
 	var ax = Infinity, ay = Infinity;
 	L.nodes.boxes.forEach(function (b) { ax = Math.min(ax, b.minX); ay = Math.min(ay, b.minY); });
-	var dbl = { cell: o.cell, minGap: o.minGap, maxGap: o.maxGap, keep: o.keep, minPoints: o.minPoints, smooth: smooth };
+	var dbl = { cell: o.cell, minGap: o.minGap, maxGap: o.maxGap, keep: o.keep, minPoints: o.minPoints, smooth: smooth, minArea: o.minArea, coherence: o.coherence };
+	var limit = limitBox(o.box);
+	if (limit) {
+		// only the work tiles whose core meets the box run; the cells stay on the store's grid, so a point inside the box
+		// gets the same answer as in a run over the whole store
+		L.tiles = L.tiles.filter(function (t) { return [0, 1].every(function (q) { var lo = limit[MIN_KEYS[L.axes[q]]], hi = limit[MAX_KEYS[L.axes[q]]]; return !(t.core[2 * q + 1] < lo || t.core[2 * q] > hi); }); });
+	}
 	var ghosts = [], partners = [];
 	var ran = await runAll(store, L, o, threads, "doubleRegion", function (t) {
-		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, double: dbl, anchor: { x: ax - L.origin.x, y: ay - L.origin.y }, partner: partner };
+		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, double: dbl, anchor: { x: ax - L.origin.x, y: ay - L.origin.y }, partner: partner, limit: limit };
 	}, function (r) {
 		if (!r.node.length) return;
 		var q, ng = 0;

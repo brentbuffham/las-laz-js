@@ -12,6 +12,9 @@
 // picking on one layer (pick(..., layer)). The Tiles tab draws a tile
 // store's tiles as a layer of their own (setTile / removeTile), and
 // reads the camera's view-projection for selectTiles (viewState).
+// The Ghosting tab crops with a box (setClip: clip planes on the points'
+// material, so the main cloud, the tiles and the reference are cut alike,
+// and a magenta outline of the box) and looks at it from a side (lookAtBox).
 //==========================================================
 
 import * as THREE from "three";
@@ -19,6 +22,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 export function createViewer(container) {
 	var renderer = new THREE.WebGLRenderer({ antialias: true });
+	renderer.localClippingEnabled = true;
 	renderer.setPixelRatio(window.devicePixelRatio || 1);
 	container.appendChild(renderer.domElement);
 	var scene = new THREE.Scene();
@@ -57,6 +61,12 @@ export function createViewer(container) {
 	scene.add(tileGroup);
 	var tileMap = new Map(), tileBox = new THREE.Box3(), cameraListeners = [];
 	controls.addEventListener("change", function () { cameraListeners.forEach(function (fn) { fn(); }); });
+	// the crop box: six planes on the shared points material (the kept side faces inward) and an outline of it
+	var clipPlanes = [new THREE.Plane(new THREE.Vector3(1, 0, 0), 0), new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0), new THREE.Plane(new THREE.Vector3(0, 1, 0), 0),
+		new THREE.Plane(new THREE.Vector3(0, -1, 0), 0), new THREE.Plane(new THREE.Vector3(0, 0, 1), 0), new THREE.Plane(new THREE.Vector3(0, 0, -1), 0)];
+	var clipBox = null;   // { minX, maxX, minY, maxY, minZ, maxZ } local, open sides Infinity; null: no crop
+	var clipHelper = null;
+	var OPEN = 1e12;
 	var labelLayer = document.createElement("div");
 	labelLayer.className = "pick-labels";
 	container.appendChild(labelLayer);
@@ -173,6 +183,66 @@ export function createViewer(container) {
 			if (n >= 2) outline.add(closed ? new THREE.LineLoop(geom, lineMaterial) : new THREE.Line(geom, lineMaterial));
 			outline.children.forEach(function (o) { o.renderOrder = 1; });
 			scene.add(outline);
+		},
+		/**
+		 * Show only the points inside a box given in the local frame ({ minX, maxX, minY, maxY, minZ, maxZ }, a missing
+		 * side open); setClip(null) shows everything. Cuts the main cloud, the tiles and the reference alike.
+		 */
+		setClip: function (b) {
+			if (clipHelper) { scene.remove(clipHelper); clipHelper.geometry.dispose(); clipHelper = null; }
+			var was = !!clipBox;
+			if (!b) clipBox = null;
+			else {
+				clipBox = { minX: -Infinity, maxX: Infinity, minY: -Infinity, maxY: Infinity, minZ: -Infinity, maxZ: Infinity };
+				Object.keys(clipBox).forEach(function (k) { if (typeof b[k] === "number" && isFinite(b[k])) clipBox[k] = b[k]; });
+				var c = clipBox, v = function (x) { return isFinite(x) ? x : (x < 0 ? -OPEN : OPEN); };
+				clipPlanes[0].constant = -v(c.minX); clipPlanes[1].constant = v(c.maxX);
+				clipPlanes[2].constant = -v(c.minY); clipPlanes[3].constant = v(c.maxY);
+				clipPlanes[4].constant = -v(c.minZ); clipPlanes[5].constant = v(c.maxZ);
+				var all = box.clone().union(refBox).union(tileBox);
+				if (!all.isEmpty()) {
+					var lo = new THREE.Vector3(isFinite(c.minX) ? c.minX : all.min.x, isFinite(c.minY) ? c.minY : all.min.y, isFinite(c.minZ) ? c.minZ : all.min.z);
+					var hi = new THREE.Vector3(isFinite(c.maxX) ? c.maxX : all.max.x, isFinite(c.maxY) ? c.maxY : all.max.y, isFinite(c.maxZ) ? c.maxZ : all.max.z);
+					clipHelper = new THREE.Box3Helper(new THREE.Box3(lo, hi), 0xff2d95);
+					clipHelper.material.depthTest = false;
+					clipHelper.renderOrder = 1;
+					scene.add(clipHelper);
+				}
+			}
+			if (was !== !!clipBox) { material.clippingPlanes = clipBox ? clipPlanes : null; material.needsUpdate = true; }
+		},
+		/** The crop box now in force (local frame), or null. */
+		clip: function () { return clipBox ? Object.assign({}, clipBox) : null; },
+		/**
+		 * Put the camera on one side of a box (local frame; the crop box when none is given) looking at it: "top",
+		 * "south" (from the south, looking north), "north", "east", "west". Z is up, and a side view looks level.
+		 */
+		lookAtBox: function (side, b) {
+			var c = b || clipBox;
+			if (!c) return;
+			var all = box.clone().union(refBox).union(tileBox);
+			var f = function (lo, hi, a) { return [isFinite(lo) ? lo : (all.isEmpty() ? -1 : all.min[a]), isFinite(hi) ? hi : (all.isEmpty() ? 1 : all.max[a])]; };
+			var xr = f(c.minX, c.maxX, "x"), yr = f(c.minY, c.maxY, "y"), zr = f(c.minZ, c.maxZ, "z");
+			var centre = new THREE.Vector3((xr[0] + xr[1]) / 2, (yr[0] + yr[1]) / 2, (zr[0] + zr[1]) / 2);
+			var sx = xr[1] - xr[0], sy = yr[1] - yr[0], sz = zr[1] - zr[0], tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+			var wide = side === "south" || side === "north" ? sx : side === "top" ? Math.max(sx, sy * camera.aspect) : sy;
+			var high = side === "top" ? sy : sz;
+			var d = Math.max(wide / camera.aspect, high, 0.5) / 2 / tan * 1.15 + (side === "top" ? sz : (side === "south" || side === "north" ? sy : sx)) / 2;
+			var dir = { top: [0, -1e-4, 1], south: [0, -1, 0], north: [0, 1, 0], east: [1, 0, 0], west: [-1, 0, 0] }[side];
+			if (!dir) return;
+			controls.target.copy(centre);
+			camera.position.set(centre.x + dir[0] * d, centre.y + dir[1] * d, centre.z + dir[2] * d);
+			var size = Math.max(sx, sy, sz, 1);
+			camera.near = Math.max(size / 10000, 0.01); camera.far = Math.max(d * 4, size * 20);
+			camera.updateProjectionMatrix();
+			controls.update();
+		},
+		/** Every point set drawn, as Float32 x, y, z in the local frame, for the Ghosting overview: [{ positions, count }]. */
+		pointSets: function () {
+			var sets = chunks.map(function (c) { return { positions: c.positions, count: c.count }; });
+			if (ref) sets.push({ positions: ref.positions, count: ref.count });
+			tileMap.forEach(function (t) { sets.push({ positions: t.points.geometry.getAttribute("position").array, count: t.count }); });
+			return sets;
 		},
 		setPointSize: function (px) { material.size = px; },
 		/** New colours (r,g,b bytes per point, in the order the points were added), in place. */

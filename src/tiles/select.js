@@ -6,6 +6,8 @@
 //  - a node is judged by its subtree's box: its own points' tight box
 //    and every box below it (children reach past a parent's sample),
 //    moved by the store transform, then minus localOrigin
+//  - culled when wholly outside view.clipBox, when one is given (a crop box
+//    the caller shows only the inside of: its tiles cost no budget)
 //  - culled when wholly outside one of the six clip planes
 //    (Gribb-Hartmann, from the matrix; OpenGL clip z in [-w, w], as
 //    Three.js)
@@ -41,8 +43,20 @@ function checkView(view) {
 			origin[i] = o[k];
 		});
 	}
+	var cb = null;
+	if (view.clipBox !== undefined && view.clipBox !== null) {
+		if (typeof view.clipBox !== "object") throw bad("view.clipBox must be { minX, maxX, minY, maxY, minZ, maxZ } (any may be left out)");
+		cb = { minX: -Infinity, maxX: Infinity, minY: -Infinity, maxY: Infinity, minZ: -Infinity, maxZ: Infinity };
+		Object.keys(cb).forEach(function (k) {
+			var v = view.clipBox[k];
+			if (v === undefined) return;
+			if (typeof v !== "number" || Number.isNaN(v)) throw bad("view.clipBox." + k + " must be a number");
+			cb[k] = v;
+		});
+		if (cb.minX > cb.maxX || cb.minY > cb.maxY || cb.minZ > cb.maxZ) throw bad("view.clipBox has a minimum above its maximum");
+	}
 	return {
-		m: m, origin: origin,
+		m: m, origin: origin, clip: cb,
 		width: positive(view.width, "width"), height: positive(view.height, "height"),
 		budget: positive(view.pointBudget, "pointBudget", 10e6, true), minPixels: positive(view.minPixels, "minPixels", 100, true)
 	};
@@ -116,9 +130,11 @@ function prepare(man) {
  * The nodes to draw for a camera.
  * @param {object} storeOrManifest - a TileStore, or its manifest (e.g. posted from a Worker)
  * @param {{viewProjection: number[], width: number, height: number, pointBudget?: number,
- *   minPixels?: number, localOrigin?: {x, y, z}}} view - viewProjection: 16 numbers,
- *   column-major (Three.js camera.projectionMatrix × camera.matrixWorldInverse), in world
- *   coordinates minus localOrigin; pointBudget 10,000,000; minPixels 100
+ *   minPixels?: number, localOrigin?: {x, y, z}, clipBox?: {minX, maxX, minY, maxY, minZ, maxZ}}} view -
+ *   viewProjection: 16 numbers, column-major (Three.js camera.projectionMatrix ×
+ *   camera.matrixWorldInverse), in world coordinates minus localOrigin; pointBudget 10,000,000;
+ *   minPixels 100; clipBox (in the same coordinates, any side may be left out): nodes wholly
+ *   outside it are not picked, so a crop box spends the budget on what it shows
  * @returns {Array<{key: string, depth: number, count: number, box: {minX, minY, minZ, maxX, maxY, maxZ}}>}
  *   most important first, a node's parent always before it; boxes in the view's coordinates
  * @throws {LasError} INVALID_ARGUMENT naming the bad view field
@@ -126,11 +142,12 @@ function prepare(man) {
 export function selectTiles(storeOrManifest, view) {
 	var man = storeOrManifest && storeOrManifest.manifest ? storeOrManifest.manifest : storeOrManifest;
 	var v = checkView(view), m = v.m, pl = [].concat.apply([], planesOf(m)), P = prepare(man);
-	var o = v.origin, B = P.box, S = P.sub, W = v.width / 2, H = v.height / 2;
+	var o = v.origin, B = P.box, S = P.sub, W = v.width / 2, H = v.height / 2, cb = v.clip;
 	var cx = new Float64Array(8), cy = new Float64Array(8), cz = new Float64Array(8);
 	// -1 when culled, else the size on screen in pixels (Infinity when a corner is at or behind the eye)
 	function measure(i) {
 		var x0 = S[6 * i] - o[0], y0 = S[6 * i + 1] - o[1], z0 = S[6 * i + 2] - o[2], x1 = S[6 * i + 3] - o[0], y1 = S[6 * i + 4] - o[1], z1 = S[6 * i + 5] - o[2];
+		if (cb && (x1 < cb.minX || x0 > cb.maxX || y1 < cb.minY || y0 > cb.maxY || z1 < cb.minZ || z0 > cb.maxZ)) return -1;
 		for (var q = 0; q < 8; q++) { cx[q] = q % 2 ? x1 : x0; cy[q] = q % 4 >= 2 ? y1 : y0; cz[q] = q >= 4 ? z1 : z0; }
 		for (var p = 0; p < 24; p += 4) {
 			var any = false;

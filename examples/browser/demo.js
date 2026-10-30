@@ -25,6 +25,7 @@ import { createPartsSink } from "./fileParts.js";
 import { initFacets } from "./facets.js";
 import { initFragments } from "./fragments.js";
 import { initTiles } from "./tiles.js";
+import { initGhosting } from "./ghost.js";
 
 // ?drawCap=N lowers the cap, to try a cloud bigger than what is drawn with a small file
 var DRAW_CAP = Math.floor(Number(new URLSearchParams(location.search).get("drawCap"))) || 20000000;
@@ -257,6 +258,7 @@ function display(refit) {
 	viewer.addChunk(interleavePositions(drawn), colours(), DRAW_CAP);
 	if (refit) viewer.fit();
 	ext = extent(cloud);
+	document.dispatchEvent(new Event("las:source"));   // the Ghosting overview redraws
 }
 
 // The normal colours, then the Split view's outside part dimmed grey and the selection yellow
@@ -981,12 +983,21 @@ var fragments = initFragments({
 	}
 });
 // The Tiles tab: builds and edits go through the Worker; selectTiles runs here
+var ghost = null;   // set below; the tiles ask it for the crop box
 var tiles = initTiles({
 	$: $, viewer: viewer, call: call, setStatus: setStatus, fmt: fmt, since: since,
 	file: function () { return file; }, origin: function () { return origin; },
 	polygon: function () { return polyClosed && poly.length >= 6 ? poly.slice() : null; },
 	setMainVisible: function (on) { viewer.setVisible("moving", on); },
+	// the Ghosting tab's box: the tiles outside it are not picked, and Find searches only inside it
+	clipBox: function () { return ghost ? ghost.clipBox() : null; },
+	findBox: function () { return ghost ? ghost.findBox() : null; },
 	// the Edit tab's polygon tools work on the tiles too, with no cloud read
 	polygonTools: function (on) { ["drawButton", "finishButton", "clearPolyButton", "topViewButton"].forEach(function (id) { $(id).disabled = !on && !cloud; }); }
 });
-window.lasDemo = { openFile: openFile, read: read, save: save, viewer: viewer, register: register, tiles: tiles, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets, fragments: fragments };   // for checks from the console
+ghost = initGhosting({
+	$: $, viewer: viewer, call: call, setStatus: setStatus, tiles: tiles,
+	origin: function () { return origin; },
+	clipChanged: function () { tiles.reselect(); }
+});
+window.lasDemo = { ghost: ghost, openFile: openFile, read: read, save: save, viewer: viewer, register: register, tiles: tiles, get cloud() { return cloud; }, get origin() { return origin; }, facets: facets, fragments: fragments };   // for checks from the console
