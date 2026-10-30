@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.1 (2026-10-31)
 
 Fixed (a tile build that stalled for good at 98% in Chrome, with a 177 M point cloud on 16 workers):
 - `buildTiles` with `compress`: the last step (packing the chunk roots and the levels above them) waits at most 30 s
