@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { openLas, writeLas, buildTiles, selectDoubleLayer, selectDoubleLayerStore, snapToLayerStore } from "../../src/index.js";
+import { openLas, writeLas, buildTiles, selectDoubleLayer, selectDoubleLayerStore, snapToLayerStore, suggestDoubleLayerStore, fixDoubleLayerStore } from "../../src/index.js";
 
 var E = 478000, N = 6771000, H = 240;
 var surface = function (x, y) { return 0.1 * x + 0.3 * Math.sin(y / 3); };
@@ -131,4 +131,85 @@ test("bad box, minArea and coherence are refused", async function () {
 	var s = await store();
 	for (var o of [{ box: { minX: 5, maxX: 1 } }, { box: { minY: NaN } }, { box: 3 }, { box: { maxZ: "1" } }, { minArea: -1 }, { coherence: 0 }])
 		await assert.rejects(selectDoubleLayerStore(s, Object.assign({ threads: 1 }, OPTS, o)), { code: "INVALID_ARGUMENT" });
+});
+
+// --- settings from the store's own points, and the one-call fix -------------------------------------------------------
+// the same surface with no ghost
+var CLEAN = (function () {
+	var xs = [], ys = [], zs = [];
+	for (var x = 0; x < 24; x += 0.25) for (var y = 0; y < 24; y += 0.25) { xs.push(E + x); ys.push(N + y); zs.push(H + surface(x, y)); }
+	return { count: xs.length, x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float64Array.from(zs) };
+})();
+async function cleanStore() {
+	var dir = fs.mkdtempSync(path.join(os.tmpdir(), "lazdbl-"));
+	dirs.push(dir);
+	return buildTiles(await openLas(await writeLas(CLEAN, { scale: { x: 0.001, y: 0.001, z: 0.001 } })), { where: { dir: dir }, tilePoints: 3000, replace: true });
+}
+// this ghost lies 1 m or more under the surface, past the suggested maxGap of 0.5 m, so these runs lay their own over it
+var FIX = { threads: 1, tile: 6, settings: { maxGap: 5 } };
+
+test("suggestDoubleLayerStore measures the store, or the box, in the work tiles", async function () {
+	var s = await store(), a = await suggestDoubleLayerStore(s, { threads: 2, tile: 6 });
+	assert.equal(a.ok, true);
+	assert.equal(a.cell, 1);
+	assert.equal(a.tiles, 8, "a sample of the 16 work tiles, not all");
+	assert.ok(a.minGap >= 0.06 && a.minGap <= 0.15 && a.minPoints === 3 && a.bridge === 3, JSON.stringify(a));
+	assert.ok(a.splitFraction > 0.1, "split " + a.splitFraction);
+	var b = await suggestDoubleLayerStore(s, { threads: 1, tile: 6, box: { minX: E + 7, maxX: E + 17, minY: N + 7, maxY: N + 17 } });
+	assert.equal(b.ok, true);
+	assert.equal(b.tiles, 4);
+	var none = await suggestDoubleLayerStore(s, { threads: 1, tile: 6, box: { minX: E + 1000, maxX: E + 1010 } });
+	assert.equal(none.ok, false);
+	assert.match(none.reason, /box/);
+	var g = await suggestDoubleLayerStore(s, { threads: 1, tile: 6, strength: "gentle" });
+	assert.ok(g.minGap >= a.minGap && g.minPoints === 4);
+	await assert.rejects(suggestDoubleLayerStore(s, { threads: 1, strength: "strong" }), { code: "INVALID_ARGUMENT" });
+	await assert.rejects(suggestDoubleLayerStore(s, { threads: 1, box: 3 }), { code: "INVALID_ARGUMENT" });
+});
+
+test("suggestDoubleLayerStore on a clean store sees no splitting", async function () {
+	var a = await suggestDoubleLayerStore(await cleanStore(), { threads: 1, tile: 6 });
+	assert.equal(a.ok, true);
+	assert.ok(a.splitFraction < 0.01, "split " + a.splitFraction);
+});
+
+test("fixDoubleLayerStore finds and moves the ghost in one call, and a second look finds nothing", async function () {
+	var s = await store(), want = selectDoubleLayer(CLOUD, OPTS).stats.selected, seen = [];
+	var r = await fixDoubleLayerStore(s, Object.assign({ onPass: function (p) { seen.push(p); } }, FIX));
+	assert.equal(r.ok, true);
+	assert.ok(r.moved >= 0.98 * want, r.moved + " of " + want);
+	assert.equal(r.found, r.passes[0].found);
+	assert.deepEqual(seen, r.passes);
+	assert.equal(r.settings.cell, 1);
+	assert.equal(r.settings.maxGap, 5);
+	assert.ok(r.passes.length >= 1 && r.passes.length <= 4);
+	var after = await selectDoubleLayerStore(s, Object.assign({ threads: 2, tile: 6 }, OPTS));
+	assert.ok(after.count < want * 0.02, after.count + " left of " + want);
+	var again = await fixDoubleLayerStore(s, FIX);
+	assert.equal(again.moved, 0);
+	assert.equal(again.ok, true);
+});
+
+test("fixDoubleLayerStore: a box moves only what is inside it, and a dry run moves nothing", async function () {
+	var s = await store(), box = { minX: E + 7, maxX: E + 17, minY: N + 7, maxY: N + 17 };
+	var dry = await fixDoubleLayerStore(s, Object.assign({ dryRun: true, box: box }, FIX));
+	assert.ok(dry.found > 200 && dry.moved === 0 && dry.passes.length === 1, JSON.stringify(dry.passes));
+	var whole = await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6 }, OPTS));
+	assert.equal(whole.count, (await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6 }, OPTS))).count);   // untouched
+	var r = await fixDoubleLayerStore(s, Object.assign({ box: box }, FIX));
+	assert.ok(r.moved >= 0.98 * dry.found && r.moved <= 1.05 * dry.found, r.moved + " against " + dry.found);
+	var left = await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6 }, OPTS));
+	assert.ok(left.count > 0.5 * whole.count, "the outside is still there: " + left.count + " of " + whole.count);
+	assert.ok(left.count < whole.count - 0.9 * dry.found);
+});
+
+test("fixDoubleLayerStore on a clean store moves nothing, and bad options are refused", async function () {
+	var c = await cleanStore(), r = await fixDoubleLayerStore(c, { threads: 1, tile: 6 });
+	assert.equal(r.ok, true);
+	assert.equal(r.moved, 0);
+	var empty = await fixDoubleLayerStore(await store(), { threads: 1, tile: 6, box: { minX: E + 1000, maxX: E + 1010 } });
+	assert.equal(empty.ok, false);
+	assert.equal(empty.moved, 0);
+	for (var o of [{ maxPasses: 0 }, { maxPasses: 1.5 }, { strength: "x" }, { mode: "x" }])
+		await assert.rejects(fixDoubleLayerStore(await store(), Object.assign({ threads: 1, tile: 6, settings: { maxGap: 5 } }, o)), { code: "INVALID_ARGUMENT" });
 });

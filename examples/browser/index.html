@@ -389,7 +389,7 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-ghost">
-				<p class="muted small">Ghosting: a surface matched twice (ODM) leaves a second sheet a little above or below the real one. Drag a box on the overview to cut a slice out of the 3D view, look at it side-on, then <b>Find</b>. The box is also the area Find searches. A ghost is a sheet that follows the surface over an area, so single rocks and rubble are left alone.</p>
+				<p class="muted small">Ghosting: a surface matched twice (ODM) leaves a second sheet a little above or below the real one. Drag a box on the overview over where you see it (or leave the whole area), press <b>Show ghosting</b> to see where it is, then <b>Fix ghosting</b> to move it onto the main surface. Single rocks and rubble are left alone.</p>
 				<div class="overview-wrap"><canvas id="gOverview"></canvas><div id="gOverviewNote" class="overview-note">Open a file, or open a tile store on the Tiles tab.</div></div>
 				<div class="row wrap">
 					<button class="button small" id="gRefresh" title="Draw the top-down picture again from what is loaded">Refresh overview</button>
@@ -420,20 +420,35 @@
 					<button class="button small" data-gview="west">West</button>
 					<button class="button small" id="gCopy" title="Copy the box's corners and heights, to paste into a message">Copy corners</button>
 				</div>
+				<h3>Fix ghosting</h3>
+				<p class="muted small">The settings are worked out from the points in the box. <b>Show ghosting</b> marks what it finds in pink and changes nothing. <b>Fix ghosting</b> moves it onto the main surface (the layer with most points), again until nothing is left. Undo is Build tiles again; nothing reaches your file until you save the store.</p>
+				<div class="row">
+					<label class="field">Strength <select id="gStrength"><option value="gentle">Gentle: clear ghosts only</option><option value="normal" selected>Normal</option><option value="thorough">Thorough: fainter ghosts too</option></select></label>
+				</div>
+				<div class="row">
+					<button class="button" id="gShow" disabled>Show ghosting</button>
+					<button class="button" id="gFix" disabled>Fix ghosting</button>
+				</div>
+				<div id="gSimpleInfo" class="muted small">Open a tile store (Tiles tab) first.</div>
+				<details id="gAdvanced">
+				<summary>Advanced settings</summary>
 				<h3>Find the ghost</h3>
 				<p class="muted small"><b>Find</b> splits each cell's heights where they jump by the gap and calls the layers beyond the kept one ghosts (<code>selectDoubleLayerStore</code>); <b>Classify</b> marks them to look at; <b>Snap</b> moves them onto the kept layer (<code>snapToLayerStore</code>). It needs a tile store (Tiles tab).</p>
 				<label class="field">Search only inside the box <input type="checkbox" id="dlLimit" checked title="Find reads only the tiles the box meets: seconds, not the whole store"></label>
 				<div class="row">
-					<label class="field">Cell (m) <input type="number" id="dlCell" value="0.25" min="0.05" step="0.05" title="XY cell: about 1-2 point spacings. On a slope the real surface climbs this much times the slope inside a cell, so keep it small"></label>
-					<label class="field">Gap (m) <input type="number" id="dlGap" value="0.3" min="0.01" step="0.05" title="A vertical jump this big between a cell's heights starts a new layer"></label>
+					<label class="field">Cell (m) <input type="number" id="dlCell" value="0.15" min="0.05" step="0.05" title="XY cell: about 1-2 point spacings. On a slope the real surface climbs this much times the slope inside a cell, so keep it small"></label>
+					<label class="field">Gap (m) <input type="number" id="dlGap" value="0.06" min="0.01" step="0.01" title="A vertical jump this big between a cell's heights starts a new layer"></label>
 				</div>
 				<div class="row">
-					<label class="field">Min patch (m²) <input type="number" id="dlArea" value="4" min="0" step="1" title="A ghost must cover at least this much ground in one piece: rocks and single cells are smaller. 0 turns the test off"></label>
+					<label class="field">Min patch (m²) <input type="number" id="dlArea" value="1" min="0" step="0.5" title="A ghost must cover at least this much ground in one piece: rocks and single cells are smaller. 0 turns the test off"></label>
 					<label class="field">Steady (m) <input type="number" id="dlCoh" value="" min="0.001" step="0.01" placeholder="gap / 4" title="Neighbouring cells join one patch only when their offsets agree this closely: a sheet follows the surface at a steady offset, rocks do not"></label>
 				</div>
 				<div class="row">
 					<label class="field">Max gap (m) <input type="number" id="dlMaxGap" value="" min="0.01" step="0.5" placeholder="none" title="A layer further than this is not a ghost (a real overhang)"></label>
-					<label class="field">Min points <input type="number" id="dlMin" value="5" min="1" step="1" title="A smaller layer in a cell is ignored"></label>
+					<label class="field">Min points <input type="number" id="dlMin" value="3" min="1" step="1" title="A smaller layer in a cell is ignored"></label>
+				</div>
+				<div class="row">
+					<label class="field">Bridge (m) <input type="number" id="dlBridge" value="0.45" min="0" step="0.05" title="Pieces of the ghost this close join into one patch: a sparse ghost has holes. 0: only touching cells"></label>
 				</div>
 				<div class="row">
 					<label class="field">Keep <select id="dlKeep"><option value="auto">Auto (most points)</option><option value="upper">Upper</option><option value="lower">Lower</option></select></label>
@@ -447,6 +462,7 @@
 					<label class="field">Blend <input type="number" id="dlBlend" value="0.5" min="0" max="1" step="0.1" title="Average: how far the kept layer moves towards the ghost (0 leaves it, 1 puts it on the ghost)"></label>
 				</div>
 				<div class="row"><button class="button" id="dlSnap" disabled>Snap found onto the kept layer</button></div>
+				</details>
 			</div>
 
 			<div class="tab-body hidden" id="tab-colour">

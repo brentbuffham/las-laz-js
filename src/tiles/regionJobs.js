@@ -23,7 +23,7 @@ import { dedupeSelection } from "../filter/dedupe.js";
 import { denoisePoints } from "../ops/denoise.js";
 import { meanDistances } from "../ops/outliers.js";
 import { selectSparse } from "../ops/sparse.js";
-import { selectDoubleLayer } from "../ops/doubleLayer.js";
+import { selectDoubleLayer, doubleLayerStats } from "../ops/doubleLayer.js";
 import { pointNormals } from "../ops/normals.js";
 
 // the core points of a region, in region order, and a per-point value of them (Float32) as { node, index, value }
@@ -196,9 +196,27 @@ export async function doubleRegion(store, t) {
 	return r;
 }
 
+/**
+ * One tile of suggestDoubleLayerStore: doubleLayerStats over the region's core points inside t.limit (a box in world
+ * coordinates, or none).
+ * @returns {Promise<{count: number, stats: object}>}
+ */
+export async function doubleStatsRegion(store, t) {
+	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t), a = t.axes;
+	var U = reg[AXES[a[0]]], V = reg[AXES[a[1]]], lim = t.limit, o = t.origin, xs = [], ys = [], zs = [];
+	for (var j = 0; j < reg.count; j++) {
+		if (!inCore(L.core, U[j], V[j])) continue;
+		var wx = reg.x[j] + o.x, wy = reg.y[j] + o.y, wz = reg.z[j] + o.z;
+		if (lim && !(wx >= lim.minX && wx <= lim.maxX && wy >= lim.minY && wy <= lim.maxY && wz >= lim.minZ && wz <= lim.maxZ)) continue;
+		xs.push(reg.x[j]); ys.push(reg.y[j]); zs.push(reg.z[j]);
+	}
+	if (t.onProgress) t.onProgress(1, 1);
+	return { count: reg.count, stats: doubleLayerStats({ count: xs.length, x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float64Array.from(zs) }) };
+}
+
 /** The region jobs by name (the worker's op). */
 export var REGION_JOBS = { fragmentsRegion: fragmentsRegion, facetsRegion: facetsRegion, dedupeRegion: dedupeRegion, smoothRegion: smoothRegion,
-	outlierRegion: outlierRegion, sparseRegion: sparseRegion, roughRegion: roughRegion, doubleRegion: doubleRegion };
+	outlierRegion: outlierRegion, sparseRegion: sparseRegion, roughRegion: roughRegion, doubleRegion: doubleRegion, doubleStatsRegion: doubleStatsRegion };
 
 /**
  * One tile of findFacetsParallel on a store.

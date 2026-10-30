@@ -27,6 +27,21 @@ New (double layers: a surface matched twice leaves a second sheet above or below
   the double-layer controls, searching only inside the box. The box outline is drawn in the 3D view.
 - Layers are vertical: this is for terrain, benches and floors, not a near-upright face. The cell must be small
   enough that the real surface's own slope across it is less than `minGap`.
+- `bridge` (metres, default 0): double cells that far apart join into one patch before `minArea` is judged, for a
+  sparse ghost whose sheet has holes (the offsets may differ by `coherence` for each cell of the distance). On the
+  402 test window it took one pass to join 93% of a ghost that touching cells left in pieces under the patch size.
+- `suggestDoubleLayer(cols, { strength })` works the options out from the points: cell from the density, gap from the
+  roughness of the ordinary cells, patch and bridge from the cell. `doubleLayerStats` and `addDoubleLayerStats` are
+  the measurement it is built on (a cloud read in pieces adds up). `strength`: `"gentle"`, `"normal"`, `"thorough"`.
+- `suggestDoubleLayerStore(store, { box, strength })` and `fixDoubleLayerStore(store, { box, strength, mode, keep,
+  maxPasses, settings, dryRun, onPass })`: measure, find, snap and repeat until nothing is left, in one call. Worker
+  messages `suggestDoubleLayer`, `fixDoubleLayer` and `doubleLayerPoints` (the found points, for a highlight).
+- The demo's Ghosting tab is two buttons and a strength: Show ghosting marks what it finds in pink over the 3D view
+  (an overlay, nothing in the store changes) and Fix ghosting moves it onto the main surface. The old controls
+  (cell, gap, patch, steady, max gap, min points, bridge, keep, smooth, class, snap mode, blend) are under
+  Advanced settings, with defaults that suit ODM clouds (cell 0.15, gap 0.06, 3 points, patch 1 m², bridge 0.45).
+- A tile store's region job may return a summary with no per-point arrays (`doubleStatsRegion`): the Worker's
+  transfer list no longer assumes `node` and `index`.
 
 ## 0.18.2 (2026-10-29)
 

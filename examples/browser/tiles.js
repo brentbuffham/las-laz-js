@@ -30,9 +30,9 @@ export function initTiles(ctx) {
 		active = on;
 		ctx.setMainVisible(!on);
 		ctx.polygonTools(on);
-		["tilesDelete", "tilesClassify", "tilesSave", "tilesClose", "dlFind"].forEach(function (id) { $(id).disabled = !on; });
+		["tilesDelete", "tilesClassify", "tilesSave", "tilesClose", "dlFind", "gShow", "gFix"].forEach(function (id) { $(id).disabled = !on; });
 		dlFound(false);
-		if (!on) { viewer.clearTiles(); loaded.clear(); manifest = null; info("No tiles shown."); }
+		if (!on) { viewer.clearTiles(); loaded.clear(); manifest = null; viewer.setHighlight(null); simple("Open a tile store (Tiles tab) first."); info("No tiles shown."); }
 		document.dispatchEvent(new Event("las:source"));   // the Ghosting overview redraws
 	}
 
@@ -171,7 +171,7 @@ export function initTiles(ctx) {
 	}
 
 	// one edit at a time: the edit buttons wait for it (the library queues edits too)
-	function busy(on) { ["tilesDelete", "tilesClassify", "tilesSave", "dlFind"].forEach(function (id) { $(id).disabled = on || !active; }); $("dlClassify").disabled = $("dlSnap").disabled = on || !active || !found; }
+	function busy(on) { ["tilesDelete", "tilesClassify", "tilesSave", "dlFind", "gShow", "gFix"].forEach(function (id) { $(id).disabled = on || !active; }); $("dlClassify").disabled = $("dlSnap").disabled = on || !active || !found; }
 
 	async function edit(label, run) {
 		var t0 = performance.now();
@@ -197,6 +197,7 @@ export function initTiles(ctx) {
 		if (gap !== "") opts.maxGap = Number(gap);
 		if ($("dlArea").value !== "") opts.minArea = Number($("dlArea").value);
 		if ($("dlCoh").value !== "") opts.coherence = Number($("dlCoh").value);
+		if ($("dlBridge").value !== "") opts.bridge = Number($("dlBridge").value);
 		var limit = ctx.findBox ? ctx.findBox() : null;
 		if (limit) opts.box = limit;   // file coordinates: only the tiles the box meets are read
 		busy(true);
@@ -209,6 +210,54 @@ export function initTiles(ctx) {
 			ctx.setStatus("Double layer: " + ctx.fmt(r.count) + " points in " + ctx.fmt(ctx.since(t0)) + " ms");
 			console.log("[tiles] double layer", { opts: opts, count: r.count, stats: r.stats, ms: ctx.since(t0) });
 		} catch (err) { dlFound(null); ctx.setStatus("Double layer: " + err.message, true); } finally { busy(false); }
+	}
+
+	// Show ghosting / Fix ghosting: the settings are measured from the points in the box (suggestDoubleLayerStore)
+	function simple(text) { $("gSimpleInfo").textContent = text; }
+	function showGhost(xyz) {
+		if (!xyz || !xyz.length) { viewer.setHighlight(null); return; }
+		var p = new Float32Array(xyz.length);
+		for (var i = 0; i < xyz.length; i += 3) { p[i] = xyz[i] - tileOrigin.x; p[i + 1] = xyz[i + 1] - tileOrigin.y; p[i + 2] = xyz[i + 2] - tileOrigin.z; }
+		viewer.setHighlight(p);
+	}
+	function settingsText(s) { return "cell " + s.cell + " m, gap " + s.minGap + " m, min points " + s.minPoints + ", min patch " + s.minArea + " m², bridge " + s.bridge + " m"; }
+	function progressTo(m) { if (m.type === "progress") $("progress").value = m.fraction; }
+
+	async function ghostShow() {
+		var t0 = performance.now(), box = ctx.findBox ? ctx.findBox() : null, extra = box ? { box: box } : {};
+		busy(true);
+		try {
+			simple("Measuring the points…");
+			var s = await ctx.call("suggestDoubleLayer", Object.assign({ strength: $("gStrength").value }, extra), progressTo).promise;
+			if (!s.ok) { dlFound(null); showGhost(null); simple("Cannot tell: " + s.reason + "."); return; }
+			simple("Looking for ghosting…");
+			var r = await ctx.call("findDoubleLayer", Object.assign({ cell: s.cell, minGap: s.minGap, minPoints: s.minPoints, minArea: s.minArea, bridge: s.bridge, maxGap: s.maxGap, keep: "auto" }, extra), progressTo).promise;
+			dlFound(r.count ? r : null);
+			if (!r.count) { showGhost(null); simple("No ghosting found" + (box ? " in the box" : "") + " (" + settingsText(s) + ")."); return; }
+			var pts = await ctx.call("doubleLayerPoints", { max: 200000 }).promise;
+			showGhost(pts.xyz);
+			var m = r.stats.median;
+			simple(ctx.fmt(r.count) + " ghost points" + (box ? " in the box" : "") + ", about " + Math.abs(m).toFixed(2) + " m " + (m > 0 ? "below" : "above") + " the main surface, marked in pink" + (pts.step > 1 ? " (every " + pts.step + "th shown)" : "") + ". Nothing has been changed. Settings: " + settingsText(s) + ". " + ctx.fmt(ctx.since(t0)) + " ms.");
+			ctx.setStatus("Ghosting: " + ctx.fmt(r.count) + " points found");
+		} catch (err) { dlFound(null); showGhost(null); simple("Show ghosting: " + err.message); ctx.setStatus("Show ghosting: " + err.message, true); } finally { busy(false); }
+	}
+
+	async function ghostFix() {
+		var t0 = performance.now(), box = ctx.findBox ? ctx.findBox() : null;
+		busy(true);
+		try {
+			simple("Fixing ghosting…");
+			var r = await ctx.call("fixDoubleLayer", Object.assign({ strength: $("gStrength").value, mode: "offset" }, box ? { box: box } : {}), progressTo).promise;
+			manifest = r.manifest;
+			dlFound(null); showGhost(null);
+			if (!r.ok) simple("Cannot tell: " + r.reason + ".");
+			else if (!r.moved) simple("No ghosting found" + (box ? " in the box" : "") + ", so nothing was moved (" + settingsText(r.settings) + ").");
+			else simple("Moved " + ctx.fmt(r.moved) + " points onto the main surface in " + r.passes.filter(function (p) { return p.moved; }).length + " pass(es) (found " + r.passes.map(function (p) { return ctx.fmt(p.found); }).join(", then ") + "). Settings: " + settingsText(r.settings) + ". " + ctx.fmt(ctx.since(t0)) + " ms.");
+			ctx.setStatus("Ghosting: " + ctx.fmt(r.moved || 0) + " points moved in " + ctx.fmt(ctx.since(t0)) + " ms");
+			viewer.clearTiles(); loaded.clear();
+			document.dispatchEvent(new Event("las:source"));
+			schedule();
+		} catch (err) { simple("Fix ghosting: " + err.message); ctx.setStatus("Fix ghosting: " + err.message, true); } finally { busy(false); }
 	}
 
 	async function dlApply(label, type, payload) {
@@ -252,6 +301,8 @@ export function initTiles(ctx) {
 		var cls = Number($("tilesClass").value);
 		edit("Classify inside polygon as " + cls, function (sel) { return ctx.call("setColumn", { selection: sel, name: "classification", value: cls }).promise; });
 	});
+	$("gShow").addEventListener("click", ghostShow);
+	$("gFix").addEventListener("click", ghostFix);
 	$("dlFind").addEventListener("click", dlFind);
 	$("dlClassify").addEventListener("click", function () { dlApply("Classify the double layer", "classifyDoubleLayer", { value: Number($("dlClass").value) }); });
 	$("dlSnap").addEventListener("click", function () { dlApply("Snap the double layer", "snapDoubleLayer", { mode: $("dlMode").value, blend: Number($("dlBlend").value) }); });

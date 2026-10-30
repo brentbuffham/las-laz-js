@@ -157,7 +157,8 @@ function region(m) {
 		var t = Object.assign({}, m.task, { onProgress: tileProgress(m, 0, 1) });
 		return REGION_JOBS[m.op](store, t);
 	}).then(function (out) {
-		var transfer = [out.node.buffer, out.index.buffer];
+		var transfer = [];
+		if (out.node) transfer.push(out.node.buffer, out.index.buffer);   // a job that returns only a summary (doubleStatsRegion) has none
 		if (out.gid || out.fid) transfer.push((out.gid || out.fid).buffer);
 		if (out.x && out.x.buffer && !out.kept) transfer.push(out.x.buffer, out.y.buffer, out.z.buffer);
 		if (out.value) transfer.push(out.value.buffer);

@@ -31,6 +31,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { layout, runAll, common } from "./parallelStore.js";
 import { estimateNoise } from "../ops/normals.js";
+import { suggestDoubleLayer, addDoubleLayerStats } from "../ops/doubleLayer.js";
 import { scratchBlobs } from "./scratchBlobs.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
@@ -251,6 +252,11 @@ function groupByNode(L, chunks) {
 
 var MIN_KEYS = ["minX", "minY", "minZ"], MAX_KEYS = ["maxX", "maxY", "maxZ"];
 
+// the work tiles whose core meets the limit box
+function tilesMeeting(L, limit) {
+	return L.tiles.filter(function (t) { return [0, 1].every(function (q) { var lo = limit[MIN_KEYS[L.axes[q]]], hi = limit[MAX_KEYS[L.axes[q]]]; return !(t.core[2 * q + 1] < lo || t.core[2 * q] > hi); }); });
+}
+
 // a limit box { minX, maxX, ... } (world coordinates, any side may be left out) checked, with the missing sides open
 function limitBox(b) {
 	if (b === undefined || b === null) return null;
@@ -268,12 +274,12 @@ function limitBox(b) {
 
 /**
  * selectDoubleLayer over a whole tile store, or over the part of it inside opts.box. Cells sit on one grid anchored at the store's corner, and each tile reads an
- * overlap of (smooth + 2) cells, so the cells give the answer a single run over the whole cloud gives (minArea judges
+ * overlap of (smooth + 2 + the bridge in cells) cells, so the cells give the answer a single run over the whole cloud gives (minArea judges
  * a patch inside one work tile: keep it well under a tile's area, a few hundred square metres at most). The points that
  * would move are kept here (about 24 bytes a ghost point, and as many more for partner), for snapToLayerStore.
  * @param {object} store - an open TileStore.
  * @param {{cell: number, minGap: number, maxGap?: number, keep?: string, minPoints?: number, smooth?: number, partner?: boolean,
- *   minArea?: number, coherence?: number, box?: {minX?, maxX?, minY?, maxY?, minZ?, maxZ?},
+ *   minArea?: number, coherence?: number, bridge?: number, box?: {minX?, maxX?, minY?, maxY?, minZ?, maxZ?},
  *   threads?: number, tile?: number, tilePoints?: number, onProgress?: function(number, number), signal?: AbortSignal}} opts -
  *   selectDoubleLayer's options; box: only points inside it (world coordinates, any side open) are found, and only the
  *   tiles it meets are read; partner: also keep the kept-layer points beside a ghost, which the "average" mode moves.
@@ -286,18 +292,17 @@ export async function selectDoubleLayerStore(store, opts) {
 	if (!(typeof o.minGap === "number" && o.minGap > 0 && isFinite(o.minGap))) throw bad("minGap must be a distance > 0, not " + JSON.stringify(o.minGap));
 	if (!(Number.isInteger(smooth) && smooth >= 0)) throw bad("smooth must be a whole number >= 0, not " + JSON.stringify(o.smooth));
 	var threads = await common(store, o, "selectDoubleLayerStore"), partner = !!o.partner;
-	var L = await layout(store, o, threads, o.cell * (smooth + 2));
+	var bridgeCells = o.bridge > 0 ? Math.ceil(o.bridge / o.cell) : 0;
+	var L = await layout(store, o, threads, o.cell * (smooth + 2 + bridgeCells));
 	if (!L.n) return { selection: { deletes: store.manifest.deletes, count: 0, tiles: {} }, count: 0, ghost: [], partner: null, keys: [], origin: { x: 0, y: 0, z: 0 }, tiles: 0, threads: 1,
 		stats: { selected: 0, kept: 0, min: NaN, p05: NaN, median: NaN, p95: NaN, max: NaN } };
 	var ax = Infinity, ay = Infinity;
 	L.nodes.boxes.forEach(function (b) { ax = Math.min(ax, b.minX); ay = Math.min(ay, b.minY); });
-	var dbl = { cell: o.cell, minGap: o.minGap, maxGap: o.maxGap, keep: o.keep, minPoints: o.minPoints, smooth: smooth, minArea: o.minArea, coherence: o.coherence };
+	var dbl = { cell: o.cell, minGap: o.minGap, maxGap: o.maxGap, keep: o.keep, minPoints: o.minPoints, smooth: smooth, minArea: o.minArea, coherence: o.coherence, bridge: o.bridge };
 	var limit = limitBox(o.box);
-	if (limit) {
-		// only the work tiles whose core meets the box run; the cells stay on the store's grid, so a point inside the box
-		// gets the same answer as in a run over the whole store
-		L.tiles = L.tiles.filter(function (t) { return [0, 1].every(function (q) { var lo = limit[MIN_KEYS[L.axes[q]]], hi = limit[MAX_KEYS[L.axes[q]]]; return !(t.core[2 * q + 1] < lo || t.core[2 * q] > hi); }); });
-	}
+	// only the work tiles whose core meets the box run; the cells stay on the store's grid, so a point inside the box
+	// gets the same answer as in a run over the whole store
+	if (limit) L.tiles = tilesMeeting(L, limit);
 	var ghosts = [], partners = [];
 	var ran = await runAll(store, L, o, threads, "doubleRegion", function (t) {
 		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, double: dbl, anchor: { x: ax - L.origin.x, y: ay - L.origin.y }, partner: partner, limit: limit };
@@ -363,4 +368,64 @@ export async function snapToLayerStore(store, found, opts) {
 	}
 	await flush();
 	return { moved: moved, batches: batches };
+}
+
+var SAMPLE_TILES = 8;
+
+/**
+ * The selectDoubleLayerStore options for a store, or for the part of it inside opts.box, worked out from its points (suggestDoubleLayer).
+ * Without a box, a sample of work tiles spread over the store is measured.
+ * @param {object} store - an open TileStore.
+ * @param {{box?: object, strength?: string, threads?: number, tile?: number, tilePoints?: number, onProgress?: function(number, number),
+ *   signal?: AbortSignal}} [opts] - box and strength as selectDoubleLayerStore and suggestDoubleLayer.
+ * @returns {Promise<object>} suggestDoubleLayer's result, with tiles and threads.
+ */
+export async function suggestDoubleLayerStore(store, opts) {
+	var o = opts || {}, threads = await common(store, o, "suggestDoubleLayerStore");
+	var L = await layout(store, o, threads, 0), limit = limitBox(o.box);
+	if (!L.n) return { ok: false, reason: "the store holds no points", tiles: 0, threads: 1 };
+	if (limit) L.tiles = tilesMeeting(L, limit);
+	else if (L.tiles.length > SAMPLE_TILES) L.tiles = Array.from({ length: SAMPLE_TILES }, function (_, i) { return L.tiles[Math.floor((i + 0.5) * L.tiles.length / SAMPLE_TILES)]; });
+	if (!L.tiles.length) return { ok: false, reason: "the box holds no points", tiles: 0, threads: 1 };
+	var parts = [];
+	var ran = await runAll(store, L, o, threads, "doubleStatsRegion", function (t) {
+		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, limit: limit };
+	}, function (r) { parts.push(r.stats); });
+	var stats = addDoubleLayerStats(parts);
+	if (!stats.points) return { ok: false, reason: "the box holds no points", tiles: L.tiles.length, threads: ran };   // an edge tile's core reaches past the store
+	return Object.assign(suggestDoubleLayer(stats, { strength: o.strength }), { tiles: L.tiles.length, threads: ran });
+}
+
+/**
+ * Find the ghost in a store (or inside opts.box) with settings worked out from its points, and move it onto the layer
+ * with most points; again until nothing is left (the first pass joins a sparse sheet's pieces, so a second pass usually
+ * finds nothing). One edit per pass. Loose single cells that do not join into a patch are left, as selectDoubleLayer leaves them.
+ * @param {object} store - an open TileStore.
+ * @param {{box?: object, strength?: string, mode?: string, keep?: string, maxPasses?: number, settings?: object, dryRun?: boolean,
+ *   threads?: number, tile?: number, tilePoints?: number, onProgress?: function(number, number), onPass?: function(object),
+ *   signal?: AbortSignal}} [opts] - strength: as suggestDoubleLayer; mode: snapToLayer's (default "offset"); keep: default
+ *   "auto"; maxPasses (default 4); settings: selectDoubleLayer options laid over the suggested ones; dryRun: find, move nothing
+ *   (one pass); onPass: called with each pass's { pass, found, moved }.
+ * @returns {Promise<{ok: boolean, reason?: string, settings?: object, passes: object[], found: number, moved: number}>} found: the
+ *   ghost points of the first pass (what a dry run reports); moved: the points moved over all passes.
+ */
+export async function fixDoubleLayerStore(store, opts) {
+	var o = opts || {}, maxPasses = o.maxPasses === undefined ? 4 : o.maxPasses;
+	if (!(Number.isInteger(maxPasses) && maxPasses >= 1)) throw bad("maxPasses must be a whole number >= 1, not " + JSON.stringify(o.maxPasses));
+	var s = await suggestDoubleLayerStore(store, o);
+	if (!s.ok) return { ok: false, reason: s.reason, passes: [], found: 0, moved: 0 };
+	var settings = Object.assign({ cell: s.cell, minGap: s.minGap, minPoints: s.minPoints, minArea: s.minArea, bridge: s.bridge, maxGap: s.maxGap, keep: o.keep || "auto" }, o.settings || {});
+	var run = Object.assign({}, settings, { box: o.box, threads: o.threads, tile: o.tile, tilePoints: o.tilePoints, signal: o.signal, onProgress: o.onProgress });
+	var passes = [], moved = 0, found = 0, last = Infinity;
+	for (var pass = 1; pass <= maxPasses; pass++) {
+		var f = await selectDoubleLayerStore(store, run), p = { pass: pass, found: f.count, moved: 0 };
+		if (pass === 1) found = f.count;
+		if (!f.count || o.dryRun) { passes.push(p); if (o.onPass) o.onPass(p); break; }
+		var r = await snapToLayerStore(store, f, { mode: o.mode });
+		p.moved = r.moved; moved += r.moved; passes.push(p);
+		if (o.onPass) o.onPass(p);
+		if (f.count >= 0.9 * last) break;      // no longer getting smaller: stop
+		last = f.count;
+	}
+	return { ok: true, settings: settings, passes: passes, found: found, moved: moved };
 }

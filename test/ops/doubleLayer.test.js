@@ -6,7 +6,7 @@
 /* prettier-ignore-file */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectDoubleLayer, snapToLayer } from "../../src/ops/doubleLayer.js";
+import { selectDoubleLayer, snapToLayer, suggestDoubleLayer, doubleLayerStats, addDoubleLayerStats } from "../../src/ops/doubleLayer.js";
 import * as lib from "../../src/index.js";
 import { rng } from "../helpers/clouds.js";
 
@@ -167,4 +167,125 @@ test("minArea and coherence are checked", function () {
 	[{ minArea: -1 }, { minArea: NaN }, { minArea: "4" }, { coherence: 0 }, { coherence: -1 }, { coherence: Infinity }]
 		.forEach(function (o) { assert.throws(function () { selectDoubleLayer(d.cols, Object.assign({ cell: 1, minGap: 0.4 }, o)); }, { code: "INVALID_ARGUMENT" }); });
 	assert.doesNotThrow(function () { selectDoubleLayer(d.cols, { cell: 1, minGap: 0.4, minArea: 0 }); });
+});
+
+// --- a sparse ghost: a sheet with holes, bridged ----------------------------------------------------------------------
+// ground at 4 cm spacing (about 600 points a square metre) over 10 x 10 m, and a ghost 0.15 m below it in some of the
+// 0.4 m blocks of the middle 8 x 8 m: ten in a hundred ground points have a twin there. fill: the share of blocks
+function sparseGhost(fill, seed) {
+	var r = rng(seed || 3), xs = [], ys = [], zs = [], kind = [], blocks = new Map();
+	var ghostBlock = function (x, y) {
+		if (x < 1 || x >= 9 || y < 1 || y >= 9) return false;
+		var k = Math.floor(x / 0.4) + "," + Math.floor(y / 0.4), v = blocks.get(k);
+		if (v === undefined) { v = r() < fill; blocks.set(k, v); }
+		return v;
+	};
+	for (var x = 0; x < 10; x += 0.04) for (var y = 0; y < 10; y += 0.04) {
+		var z = 0.05 * x + (r() - 0.5) * 0.006;
+		xs.push(x); ys.push(y); zs.push(z); kind.push(0);
+		if (ghostBlock(x, y) && r() < 0.1) { xs.push(x + 0.01); ys.push(y); zs.push(z - 0.15 + (r() - 0.5) * 0.006); kind.push(1); }
+	}
+	return { cols: { count: xs.length, x: Float64Array.from(xs), y: Float64Array.from(ys), z: Float64Array.from(zs) }, kind: kind };
+}
+function ghostPts(d) { var n = 0; d.kind.forEach(function (k) { if (k === 1) n++; }); return n; }
+
+test("bridge joins the pieces of a sparse ghost that touching cells leave apart", function () {
+	var d = sparseGhost(0.3), base = { cell: 0.4, minGap: 0.06, minPoints: 3, minArea: 4 };
+	var all = selectDoubleLayer(d.cols, { cell: 0.4, minGap: 0.06, minPoints: 3 }), touching = selectDoubleLayer(d.cols, base);
+	var bridged = selectDoubleLayer(d.cols, Object.assign({ bridge: 1.2 }, base));
+	assert.ok(all.stats.selected > 0.8 * ghostPts(d), "ungated " + all.stats.selected + " of " + ghostPts(d));
+	assert.ok(touching.stats.selected < 0.5 * all.stats.selected, "touching kept " + touching.stats.selected + " of " + all.stats.selected);
+	assert.ok(bridged.stats.selected > 0.85 * all.stats.selected, "bridged kept " + bridged.stats.selected + " of " + all.stats.selected);
+	assert.ok(bridged.stats.cellsDropped < touching.stats.cellsDropped);
+	var wrong = 0, chosen = new Set(bridged.selection);
+	for (var i = 0; i < d.cols.count; i++) if (chosen.has(i) && d.kind[i] !== 1) wrong++;
+	assert.equal(wrong, 0, wrong + " ground points taken for ghost");
+});
+
+test("bridge 0 is as before, and a bridge under a cell is as touching", function () {
+	var d = sparseGhost(0.3), base = { cell: 0.4, minGap: 0.06, minPoints: 3, minArea: 4 };
+	var a = selectDoubleLayer(d.cols, base), b = selectDoubleLayer(d.cols, Object.assign({ bridge: 0 }, base)), c = selectDoubleLayer(d.cols, Object.assign({ bridge: 0.3 }, base));
+	assert.deepEqual(Array.from(b.selection), Array.from(a.selection));
+	assert.deepEqual(Array.from(c.selection), Array.from(a.selection));
+});
+
+test("bridge does not turn rocks into a sheet", function () {
+	var d = withRocks(function () { return 0.6; }), base = { cell: 0.5, minGap: 0.3, minPoints: 5, minArea: 4, bridge: 1.5 };
+	var f = selectDoubleLayer(d.cols, base);
+	assert.equal(count(d, f, 2), 0, "rock points selected: " + count(d, f, 2));
+	assert.ok(count(d, f, 1) > 0.9 * 15 * 15 * 100 / 2, "the sheet");
+});
+
+test("bridge is checked", function () {
+	var d = doubled(10, 3);
+	[{ bridge: -1 }, { bridge: NaN }, { bridge: Infinity }, { bridge: "1" }]
+		.forEach(function (o) { assert.throws(function () { selectDoubleLayer(d.cols, Object.assign({ cell: 1, minGap: 0.4 }, o)); }, { code: "INVALID_ARGUMENT" }); });
+});
+
+// --- settings from the points -----------------------------------------------------------------------------------------
+function fromSuggestion(s) { return { cell: s.cell, minGap: s.minGap, minPoints: s.minPoints, minArea: s.minArea, bridge: s.bridge, maxGap: s.maxGap }; }
+
+test("suggestDoubleLayer finds settings that find a sparse ghost and leave the ground alone", function () {
+	var d = sparseGhost(0.5, 5), s = suggestDoubleLayer(d.cols);
+	assert.equal(s.ok, true);
+	assert.ok(s.cell >= 0.3 && s.cell <= 0.6, "cell " + s.cell);
+	assert.ok(s.minGap >= 0.06 && s.minGap <= 0.15, "gap " + s.minGap);
+	assert.ok(s.splitFraction > 0.1, "split " + s.splitFraction);
+	var f = selectDoubleLayer(d.cols, fromSuggestion(s)), chosen = new Set(f.selection), wrong = 0;
+	for (var i = 0; i < d.cols.count; i++) if (chosen.has(i) && d.kind[i] !== 1) wrong++;
+	assert.equal(wrong, 0, wrong + " ground points taken for ghost");
+	assert.ok(f.stats.selected > 0.7 * ghostPts(d), f.stats.selected + " of " + ghostPts(d));
+	assert.ok(Math.abs(f.stats.median - 0.15) < 0.03, "offset " + f.stats.median);
+});
+
+test("suggestDoubleLayer on a clean surface sees almost no splitting and finds nothing", function () {
+	var d = sparseGhost(0, 9), s = suggestDoubleLayer(d.cols);
+	assert.equal(s.ok, true);
+	assert.ok(s.splitFraction < 0.01, "split " + s.splitFraction);
+	assert.equal(selectDoubleLayer(d.cols, fromSuggestion(s)).stats.selected, 0);
+});
+
+test("suggestDoubleLayer scales the cell to the point density", function () {
+	var d = sparseGhost(0.5, 5), dense = suggestDoubleLayer(d.cols), keep = [];
+	// the same ground at a quarter of the density (every other point each way)
+	for (var i = 0; i < d.cols.count; i++) if (Math.round(d.cols.x[i] / 0.04) % 2 === 0 && Math.round(d.cols.y[i] / 0.04) % 2 === 0) keep.push(i);
+	var pick = function (a) { return Float64Array.from(keep, function (i) { return a[i]; }); };
+	var thin = suggestDoubleLayer({ count: keep.length, x: pick(d.cols.x), y: pick(d.cols.y), z: pick(d.cols.z) });
+	assert.equal(thin.ok, true);
+	assert.ok(thin.cell > dense.cell, "cell " + thin.cell + " against " + dense.cell);
+	assert.ok(thin.density < dense.density * 0.4);
+});
+
+test("suggestDoubleLayer says when it cannot tell", function () {
+	var few = { count: 100, x: new Float64Array(100).map(function (_, i) { return i * 0.1; }), y: new Float64Array(100), z: new Float64Array(100) };
+	var s = suggestDoubleLayer(few);
+	assert.equal(s.ok, false);
+	assert.match(s.reason, /few/);
+	assert.equal(suggestDoubleLayer({ count: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0) }).ok, false);
+});
+
+test("strength: gentle asks for more, thorough for less", function () {
+	var d = sparseGhost(0.5, 5), g = suggestDoubleLayer(d.cols, { strength: "gentle" }), n = suggestDoubleLayer(d.cols), t = suggestDoubleLayer(d.cols, { strength: "thorough" });
+	assert.ok(g.minGap > n.minGap && n.minGap > t.minGap, [g.minGap, n.minGap, t.minGap].join(" "));
+	assert.deepEqual([g.minPoints, n.minPoints, t.minPoints], [4, 3, 2]);
+	assert.ok(g.minArea > n.minArea && n.minArea > t.minArea);
+	assert.deepEqual(suggestDoubleLayer(d.cols, { strength: "normal" }), n);
+	assert.throws(function () { suggestDoubleLayer(d.cols, { strength: "strong" }); }, { code: "INVALID_ARGUMENT" });
+});
+
+test("thorough finds at least what gentle finds and still leaves a clean surface alone", function () {
+	var d = sparseGhost(0.5, 5), find = function (c, s) { return selectDoubleLayer(c, fromSuggestion(suggestDoubleLayer(c, { strength: s }))).stats.selected; };
+	assert.ok(find(d.cols, "thorough") >= find(d.cols, "gentle"));
+	assert.equal(find(sparseGhost(0, 9).cols, "thorough"), 0);
+});
+
+test("doubleLayerStats of two pieces add up, and suggestDoubleLayer takes the sum", function () {
+	var d = sparseGhost(0.5, 5), half = d.cols.count >> 1, cut = function (a, b) { return { count: b - a, x: d.cols.x.slice(a, b), y: d.cols.y.slice(a, b), z: d.cols.z.slice(a, b) }; };
+	var a = doubleLayerStats(cut(0, half)), b = doubleLayerStats(cut(half, d.cols.count)), sum = addDoubleLayerStats([a, b]);
+	assert.equal(sum.points, d.cols.count);
+	assert.equal(sum.cells[3], a.cells[3] + b.cells[3]);
+	assert.ok(sum.hist[3].every(function (v, i) { return v === a.hist[3][i] + b.hist[3][i]; }));
+	assert.equal(suggestDoubleLayer(sum).ok, true);
+	assert.equal(lib.suggestDoubleLayer, suggestDoubleLayer);
+	assert.equal(lib.doubleLayerStats, doubleLayerStats);
 });

@@ -67,6 +67,9 @@ export function createViewer(container) {
 	var clipBox = null;   // { minX, maxX, minY, maxY, minZ, maxZ } local, open sides Infinity; null: no crop
 	var clipHelper = null;
 	var OPEN = 1e12;
+	// the points a finder has found, drawn over the cloud (no depth test: a ghost under the surface still shows)
+	var highlight = null;
+	var highlightMaterial = new THREE.PointsMaterial({ color: 0xff2d95, size: 4, sizeAttenuation: false, depthTest: false });
 	var labelLayer = document.createElement("div");
 	labelLayer.className = "pick-labels";
 	container.appendChild(labelLayer);
@@ -209,7 +212,21 @@ export function createViewer(container) {
 					scene.add(clipHelper);
 				}
 			}
-			if (was !== !!clipBox) { material.clippingPlanes = clipBox ? clipPlanes : null; material.needsUpdate = true; }
+			if (was !== !!clipBox) {
+				material.clippingPlanes = highlightMaterial.clippingPlanes = clipBox ? clipPlanes : null;
+				material.needsUpdate = highlightMaterial.needsUpdate = true;
+			}
+		},
+		/** Draw these points (Float32 x, y, z, local frame) in magenta over the cloud; setHighlight(null) removes them. Changes no data. */
+		setHighlight: function (positions) {
+			if (highlight) { scene.remove(highlight); highlight.geometry.dispose(); highlight = null; }
+			if (!positions || !positions.length) return;
+			var g = new THREE.BufferGeometry();
+			g.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+			highlight = new THREE.Points(g, highlightMaterial);
+			highlight.frustumCulled = false;
+			highlight.renderOrder = 2;
+			scene.add(highlight);
 		},
 		/** The crop box now in force (local frame), or null. */
 		clip: function () { return clipBox ? Object.assign({}, clipBox) : null; },

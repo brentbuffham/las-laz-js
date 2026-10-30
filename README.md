@@ -273,7 +273,7 @@ as `minNeighbours`, but PDAL does not count a point exactly `radius` away.
 ```js
 import { selectDoubleLayer, snapToLayer, removePoints } from "las-laz-js";
 
-var found = selectDoubleLayer(pts, { cell: 0.25, minGap: 0.3, minArea: 4 });   // keep: "auto" | "upper" | "lower"
+var found = selectDoubleLayer(pts, { cell: 0.25, minGap: 0.3, minArea: 4, bridge: 0.75 });   // keep: "auto" | "upper" | "lower"
 found.stats;                                                       // { selected, kept, cellsDouble, cellsDropped, min, p05, median, p95, max } of dz
 var flat = snapToLayer(pts, found);                                // "offset": each ghost point moves by its cell's offset
 var meet = snapToLayer(pts, found, { mode: "average", blend: 0.5 });   // both layers move half way
@@ -295,6 +295,40 @@ its neighbours (8-connected) into a patch of at least that area, and two neighbo
 offsets agree within `coherence` (default `minGap / 4`): a sheet follows the surface at a steady offset, rocks
 do not. `stats.cellsDropped` counts the cells a too-small patch lost. Set `coherence` near the sheet's own
 cell-to-cell noise: a loose value lets rubble of similar heights join up.
+
+A sparse ghost has holes, so its pieces may not touch. `bridge` (metres, default 0 = touching cells only) joins double
+cells that far apart into one patch before `minArea` is applied, and the offsets may then differ by `coherence` for
+each cell of the distance. Rocks stay out: a bridged field of rocks still needs a steady offset over `minArea` of ground.
+
+#### Settings from the points
+
+```js
+import { suggestDoubleLayer, selectDoubleLayerStore, fixDoubleLayerStore } from "las-laz-js";
+
+var s = suggestDoubleLayer(pts, { strength: "normal" });     // "gentle" | "normal" | "thorough"
+// { ok, cell, minGap, minPoints, minArea, bridge, maxGap, density, splitFraction, texture }
+var found = selectDoubleLayer(pts, s);                       // the settings are selectDoubleLayer's options
+
+var r = await fixDoubleLayerStore(store, { box, strength: "normal" });   // measure, find, snap, until nothing is left
+// { ok, settings, passes: [{ pass, found, moved }], found, moved }
+```
+
+`suggestDoubleLayer` measures the largest empty stretch of heights inside each cell (with 3 points either side
+of it): small on a clean surface, about the ghost's offset where a second sheet lies on it. The cell comes from the
+point density (about 150 points to a cell), the gap from how big that stretch is on the ordinary cells (12 times
+the lower quartile, 0.06 to 0.15 m), `minPoints` 3, `minArea` the larger of 1 m² and 25 cells, `bridge` 3 cells, and
+`maxGap` 0.5 m (a layer further off is structure, not a ghost). `ok: false` says why when the points are too few or
+too thin to tell. `splitFraction` is the share of cells whose stretch passes the gap: a clean surface has well under
+1%. `strength` trades certainty for reach: `"gentle"` (larger gap, 4 points, twice the area) takes clear ghosts only,
+`"thorough"` (smaller gap, 2 points, half the area) takes fainter ones and a little real texture with them.
+Measured on ODM clouds of about 7,000 points a square metre, the suggestion matched settings tuned by hand, found the
+ghosts in two boxes and nothing in four clean ones, at every strength.
+
+`suggestDoubleLayerStore(store, { box, strength })` measures a tile store (inside the box, or a sample of eight
+work tiles), and `fixDoubleLayerStore(store, { box, strength, mode, keep, maxPasses, settings, dryRun, onPass })`
+runs the whole thing: the first pass joins a sparse sheet's pieces, a second normally finds nothing and ends it.
+Single double cells that never join a patch are left, as `selectDoubleLayer` leaves them. `settings` is laid over
+the suggested options (for a ghost further off than 0.5 m, `{ maxGap: 5 }`); `dryRun` finds and moves nothing.
 
 `selectDoubleLayerStore(store, opts)` and `snapToLayerStore(store, found, { mode, blend })` do it over a tile
 store (`partner: true` for `"average"`). `box: { minX, maxX, minY, maxY, minZ, maxZ }` (file coordinates, any

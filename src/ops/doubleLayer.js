@@ -12,8 +12,11 @@
 // A ghost is a sheet over an area, not a rock: a double cell counts only
 // when it joins its neighbours into a patch of at least minArea square
 // metres, and two neighbours join only when their offsets agree within
-// coherence. A boulder's top is a double cell on its own, and boulders
-// beside each other stand at different heights, so neither forms a patch.
+// coherence. A sparse ghost leaves holes in its sheet, so double cells up
+// to bridge metres apart join too (the offsets may then differ by
+// coherence for every cell of the way). A boulder's top is a double cell on
+// its own, and boulders beside each other stand at different heights, so
+// neither forms a patch.
 // Layers are vertical: this is for terrain, benches and floors, not for
 // a face that stands near upright.
 //==========================================================
@@ -37,14 +40,16 @@ function percentile(sorted, p) { return sorted.length ? sorted[Math.min(sorted.l
  * Find the ghost layer of a surface scanned twice.
  * @param {object} cols - point columns with x, y, z, or a k = 3 positions column.
  * @param {{cell: number, minGap: number, maxGap?: number, keep?: string, minPoints?: number, smooth?: number,
- *   anchor?: {x: number, y: number}, minArea?: number, coherence?: number}} opts - cell: XY cell size (required, about 1-2 point spacings); minGap: the
+ *   anchor?: {x: number, y: number}, minArea?: number, coherence?: number, bridge?: number}} opts - cell: XY cell size (required, about 1-2 point spacings); minGap: the
  *   vertical jump that starts a new layer (required); maxGap (default no limit): a layer further than this from the
  *   kept one is not a ghost (a real overhang); keep: "auto" (default; the layer with most points, the upper on a tie),
  *   "upper" or "lower"; minPoints (default 5): a smaller layer is ignored; smooth (default 1): rings of cells the offset
  *   is averaged over (0: none); anchor: the grid's corner, so separate runs share one grid (default the data's minimum);
  *   minArea (default 0, off): a patch of double cells smaller than this many square metres is not a ghost (rocks, single
  *   cells); coherence (default minGap / 4): the most two neighbouring double cells' offsets may differ and still be one
- *   patch (a sheet follows the surface at a steady offset; rocks do not).
+ *   patch (a sheet follows the surface at a steady offset; rocks do not); bridge (default 0: touching cells only): double
+ *   cells up to this many metres apart join into one patch, for a ghost whose sheet has holes (the offsets of two such
+ *   cells may differ by coherence for each cell of the distance).
  * @returns {{selection: Uint32Array, dz: Float64Array, dominantZ: Float64Array, partner: {selection: Uint32Array, dz: Float64Array},
  *   stats: object}} selection: the ghost points; dz: what to add to each one's z to land on the kept layer;
  *   dominantZ: the kept layer's median height in each one's cell; partner: the kept-layer points in cells that have a
@@ -67,6 +72,9 @@ export function selectDoubleLayer(cols, opts) {
 	if (!(typeof minArea === "number" && minArea >= 0 && isFinite(minArea))) throw bad("selectDoubleLayer minArea must be a number >= 0 (square metres), not " + String(o.minArea));
 	var coherence = o.coherence === undefined ? o.minGap / 4 : o.coherence;
 	if (!(typeof coherence === "number" && coherence > 0 && isFinite(coherence))) throw bad("selectDoubleLayer coherence must be a positive finite number, not " + String(o.coherence));
+
+	var bridge = o.bridge === undefined ? 0 : o.bridge;
+	if (!(typeof bridge === "number" && bridge >= 0 && isFinite(bridge))) throw bad("selectDoubleLayer bridge must be a number >= 0 (metres), not " + String(o.bridge));
 
 	var coords = coordsOf(cols, "selectDoubleLayer"), n = cols.count;
 	checkPointCount(n);
@@ -128,8 +136,8 @@ export function selectDoubleLayer(cols, opts) {
 		off[s2] = sum / w; weight[s2] = w; keptZ[s2] = K.med; cellsDouble++;
 	}
 
-	// a ghost is a sheet over an area: drop the double cells whose patch (8-connected, offsets within coherence) is too small
-	var cellsDropped = 0;
+	// a ghost is a sheet over an area: drop the double cells whose patch (joined across bridge, offsets within coherence) is too small
+	var cellsDropped = 0, reach = Math.max(1, Math.ceil(bridge / cell - 1e-9));
 	if (minArea > 0 && cellsDouble > 0) {
 		var seen = new Uint8Array(cells), area = cell * cell, stack = [], members = [];
 		for (var s0 = 0; s0 < cells; s0++) {
@@ -138,11 +146,11 @@ export function selectDoubleLayer(cols, opts) {
 			while (stack.length) {
 				var cur = stack.pop();
 				members.push(cur);
-				for (var ex = -1; ex <= 1; ex++) {
-					for (var ey = -1; ey <= 1; ey++) {
+				for (var ex = -reach; ex <= reach; ex++) {
+					for (var ey = -reach; ey <= reach; ey++) {
 						if (!ex && !ey) continue;
 						var nb = map.get((cxs[cur] + ex + HALF) * SPAN + (cys[cur] + ey + HALF));
-						if (nb === undefined || seen[nb] || off[nb] !== off[nb] || Math.abs(off[nb] - off[cur]) > coherence) continue;
+						if (nb === undefined || seen[nb] || off[nb] !== off[nb] || Math.abs(off[nb] - off[cur]) > coherence * Math.max(Math.abs(ex), Math.abs(ey))) continue;
 						seen[nb] = 1; stack.push(nb);
 					}
 				}
@@ -221,4 +229,107 @@ export function snapToLayer(cols, found, opts) {
 	var res = { count: n };
 	list.forEach(function (c) { Object.defineProperty(res, c.name, { value: c.name === "z" ? out : cols[c.name], enumerable: true, writable: true, configurable: true }); });
 	return res;
+}
+
+// ---------------------------------------------------------------
+// Settings from the points. Inside a cell the points of one surface sit
+// within a few millimetres of each other in height, so the largest empty
+// stretch of heights in a cell (with a few points either side of it) is
+// small on a clean surface and about the ghost's offset where a second
+// sheet lies on it. doubleLayerStats counts that largest stretch per cell
+// at several cell sizes; suggestDoubleLayer picks the cell from the point
+// density and the gap from how big the stretches are on the ordinary
+// cells, so the same call suits a 1 cm photogrammetry cloud and a 10 cm one.
+// ---------------------------------------------------------------
+
+var STAT_CELLS = [0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4, 0.6, 0.8, 1];
+var GAP_BINS = 48, GAP_LO = 0.0005, GAP_RATIO = Math.pow(2 / GAP_LO, 1 / GAP_BINS);
+var STAT_MIN_CELL = 12, STAT_SIDE = 3, POINTS_PER_CELL = 150;
+
+function gapBin(g) { return g < GAP_LO ? 0 : Math.min(GAP_BINS - 1, 1 + Math.floor(Math.log(g / GAP_LO) / Math.log(GAP_RATIO))); }
+function binValue(b) { return b === 0 ? GAP_LO / 2 : GAP_LO * Math.pow(GAP_RATIO, b - 0.5); }
+
+/**
+ * Count, per cell size, how large the biggest gap in heights is in each cell (see suggestDoubleLayer).
+ * @param {object} cols - point columns with x, y, z, or a k = 3 positions column.
+ * @returns {{points: number, area: number, cells: number[], hist: Uint32Array[]}} points; area: square metres the points occupy
+ *   (0.5 m cells); cells[i], hist[i]: for cell size STAT_CELLS[i], the cells with enough points and a histogram of their biggest gaps.
+ *   Several results add up (addStats), for a cloud read in pieces.
+ */
+export function doubleLayerStats(cols) {
+	var coords = coordsOf(cols, "doubleLayerStats"), n = cols.count;
+	checkPointCount(n);
+	var X = coords.x, Y = coords.y, Z = coords.z, st = coords.stride, i;
+	var out = { points: n, area: 0, cells: STAT_CELLS.map(function () { return 0; }), hist: STAT_CELLS.map(function () { return new Uint32Array(GAP_BINS); }) };
+	if (n === 0) return out;
+	var x0 = Infinity, y0 = Infinity;
+	for (i = 0; i < n; i++) { if (X[i * st] < x0) x0 = X[i * st]; if (Y[i * st] < y0) y0 = Y[i * st]; }
+	var occ = new Set();
+	for (i = 0; i < n; i++) occ.add(Math.floor((X[i * st] - x0) * 2) * 1048576 + Math.floor((Y[i * st] - y0) * 2));
+	out.area = occ.size * 0.25;
+	STAT_CELLS.forEach(function (cell, ci) {
+		var inv = 1 / cell, map = new Map(), lists = [];
+		for (var p = 0; p < n; p++) {
+			var key = Math.floor((X[p * st] - x0) * inv) * 1048576 + Math.floor((Y[p * st] - y0) * inv), l = map.get(key);
+			if (l === undefined) { l = []; map.set(key, l); lists.push(l); }
+			l.push(Z[p * st]);
+		}
+		lists.forEach(function (zs) {
+			if (zs.length < STAT_MIN_CELL) return;
+			zs.sort(function (a, b) { return a - b; });
+			var best = 0;
+			for (var j = STAT_SIDE; j <= zs.length - STAT_SIDE; j++) { var g = zs[j] - zs[j - 1]; if (g > best) best = g; }
+			out.cells[ci]++; out.hist[ci][gapBin(best)]++;
+		});
+	});
+	return out;
+}
+
+/** Add doubleLayerStats results together (a cloud read in pieces). */
+export function addDoubleLayerStats(list) {
+	var out = { points: 0, area: 0, cells: STAT_CELLS.map(function () { return 0; }), hist: STAT_CELLS.map(function () { return new Uint32Array(GAP_BINS); }) };
+	list.forEach(function (r) {
+		out.points += r.points; out.area += r.area;
+		r.cells.forEach(function (c, i) { out.cells[i] += c; for (var b = 0; b < GAP_BINS; b++) out.hist[i][b] += r.hist[i][b]; });
+	});
+	return out;
+}
+
+function histQuantile(h, total, q) {
+	var need = q * total, run = 0;
+	for (var b = 0; b < h.length; b++) { run += h[b]; if (run >= need) return binValue(b); }
+	return binValue(h.length - 1);
+}
+
+/**
+ * The selectDoubleLayer options for a cloud, worked out from its points.
+ * @param {object|{points: number, area: number, cells: number[], hist: Uint32Array[]}} source - point columns, or doubleLayerStats' result
+ *   (for a cloud read in pieces).
+ * @param {{strength?: string}} [opts] - strength: "gentle" (a larger gap, 4 points, twice the area: only clear ghosts), "normal"
+ *   (default) or "thorough" (a smaller gap, 2 points, half the area: fainter ghosts, and a little real texture with them).
+ * @returns {{ok: boolean, reason?: string, cell?: number, minGap?: number, minPoints?: number, minArea?: number, bridge?: number, maxGap?: number,
+ *   density?: number, splitFraction?: number, texture?: {p25: number, p50: number, p95: number}}} ok false (with a reason) when the
+ *   points are too few or too thin to say. cell: about 150 points to a cell (0.05 to 1 m); minGap: 12 times the lower quartile of
+ *   the cells' biggest gaps (the ordinary surface), at least 0.06 and at most 0.15 m; minPoints 3; minArea the larger of 1 m2 and
+ *   25 cells; bridge 3 cells; maxGap 0.5 m (a layer further off is structure, not a ghost). splitFraction: the share of cells
+ *   whose biggest gap exceeds minGap (a clean surface has under 1%); texture: the biggest gap's quartile, median and 95th
+ *   percentile over the cells, the roughness the gap has to clear.
+ */
+export function suggestDoubleLayer(source, opts) {
+	var strength = opts && opts.strength !== undefined ? opts.strength : "normal";
+	if (strength !== "gentle" && strength !== "normal" && strength !== "thorough") throw bad("suggestDoubleLayer strength must be \"gentle\", \"normal\" or \"thorough\", not " + JSON.stringify(strength));
+	var stats = source && source.hist ? source : doubleLayerStats(source);
+	if (stats.points < 2000 || !(stats.area > 0)) return { ok: false, reason: "too few points to measure (" + stats.points + ")" };
+	var density = stats.points / stats.area, ideal = Math.sqrt(POINTS_PER_CELL / density), ci = 0, i;
+	for (i = 1; i < STAT_CELLS.length; i++) if (Math.abs(Math.log(STAT_CELLS[i] / ideal)) < Math.abs(Math.log(STAT_CELLS[ci] / ideal))) ci = i;
+	var cell = STAT_CELLS[ci], total = stats.cells[ci];
+	if (total < 30) return { ok: false, reason: "too few cells with enough points (" + total + " of " + cell + " m)", density: density };
+	var h = stats.hist[ci], p25 = histQuantile(h, total, 0.25), p50 = histQuantile(h, total, 0.5), p95 = histQuantile(h, total, 0.95);
+	var minGap = Math.min(0.15, Math.max(0.06, 12 * p25)), over = 0, minPoints = 3, minArea = Math.max(1, 25 * cell * cell);
+	for (var b = 0; b < h.length; b++) if (binValue(b) > minGap) over += h[b];
+	var splitFraction = over / total;
+	if (strength === "gentle") { minGap = Math.min(0.2, minGap * 1.5); minPoints = 4; minArea *= 2; }
+	else if (strength === "thorough") { minGap = Math.max(0.04, minGap * 0.75); minPoints = 2; minArea /= 2; }
+	return { ok: true, cell: cell, minGap: Math.round(minGap * 1000) / 1000, minPoints: minPoints, minArea: Math.round(minArea * 100) / 100,
+		bridge: Math.round(3 * cell * 1000) / 1000, maxGap: 0.5, density: density, splitFraction: splitFraction, texture: { p25: p25, p50: p50, p95: p95 } };
 }

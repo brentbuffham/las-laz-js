@@ -34,6 +34,9 @@
 //   removeColumn        { name }                      -> { manifest }
 //   transform           { transform: { m, t } }       -> { manifest }
 //   findDoubleLayer    { cell, minGap, ...selectDoubleLayerStore opts } -> { count, stats, tiles, threads } (kept in the Worker)
+//   suggestDoubleLayer { box?, strength? } -> suggestDoubleLayerStore's result (the options for findDoubleLayer, measured from the points)
+//   doubleLayerPoints  { max? } -> { xyz (Float64, world, interleaved), total, step } the found ghost points, every step-th
+//   fixDoubleLayer     { box?, strength?, mode?, maxPasses?, settings? } -> fixDoubleLayerStore's result and the manifest (edits the store)
 //   classifyDoubleLayer { value }                     -> { manifest } (the found points' class)
 //   snapDoubleLayer     { mode?, blend? }             -> { moved, batches, manifest } (the found points moved)
 //   writeTiles          { scratchId, root?, dir?, ...writeLas opts } -> { scratchId, count }
@@ -51,7 +54,7 @@ import { checkTransform, transformBounds } from "../ops/transform.js";
 import { buildTiles } from "../tiles/build.js";
 import { openTiles } from "../tiles/TileStore.js";
 import { openScratchSyncWriter } from "../io/ScratchBinaryFile.js";
-import { selectDoubleLayerStore, snapToLayerStore } from "../tiles/storeOps.js";
+import { selectDoubleLayerStore, snapToLayerStore, suggestDoubleLayerStore, fixDoubleLayerStore } from "../tiles/storeOps.js";
 
 function buffersOf(cols) {
 	var out = [];
@@ -189,6 +192,34 @@ export function createWorkerHandler(post) {
 			});
 			doubleFound = await selectDoubleLayerStore(needStore(), o);
 			return { result: { count: doubleFound.count, stats: doubleFound.stats, tiles: doubleFound.tiles, threads: doubleFound.threads, partner: !!doubleFound.partner } };
+		},
+		suggestDoubleLayer: async function (id, payload, controller) {
+			var o = Object.assign({}, payload, {
+				signal: controller.signal,
+				onProgress: function (done, total) { post({ id: id, type: "progress", fraction: total ? done / total : 1, label: "measuring" }); }
+			});
+			return { result: await suggestDoubleLayerStore(needStore(), o) };
+		},
+		fixDoubleLayer: async function (id, payload, controller) {
+			var o = Object.assign({}, payload, {
+				signal: controller.signal,
+				onProgress: function (done, total) { post({ id: id, type: "progress", fraction: total ? done / total : 1, label: "ghosting" }); }
+			});
+			var r = await fixDoubleLayerStore(needStore(), o);
+			doubleFound = null;     // the points moved: a held selection is stale
+			return changed(r);
+		},
+		doubleLayerPoints: async function (id, payload) {
+			var found = needDouble(), max = payload && payload.max > 0 ? payload.max : 200000, step = Math.max(1, Math.ceil(found.count / max)), o = found.origin;
+			var xyz = new Float64Array(3 * Math.ceil(found.count / step)), w = 0, k = 0;
+			found.ghost.forEach(function (g) {
+				if (!g) return;
+				for (var q = 0; q < g.index.length; q++) {
+					if (k++ % step) continue;
+					xyz[w++] = g.x[q] + o.x; xyz[w++] = g.y[q] + o.y; xyz[w++] = g.z[q] + o.z;
+				}
+			});
+			return { result: { xyz: xyz.subarray(0, w), total: found.count, step: step } };
 		},
 		classifyDoubleLayer: async function (id, payload) {
 			var found = needDouble();
