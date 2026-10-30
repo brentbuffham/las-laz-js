@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.0 (2026-10-30)
 
 New (double layers: a surface matched twice leaves a second sheet above or below the real one):
 - `selectDoubleLayer(cols, { cell, minGap, maxGap, keep, minPoints, smooth, anchor, minArea, coherence })`: points go into XY cells; in
