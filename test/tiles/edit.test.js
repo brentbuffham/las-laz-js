@@ -630,3 +630,29 @@ test("snapshot: a lost file is named, and the store is left as it was; a clone l
 		await store.close();
 	}
 });
+
+test("snapshot: redo is a snapshot of the edited store taken before the undo; the stored selection is refused after a delete is taken back", async function () {
+	var map = new Map(), store = await build(B7, { compress: true, where: { memory: map } });
+	try {
+		var original = await storeRecords(store);
+		var before = await store.snapshot("undo");
+		var sel = await store.selectBox(BOX);
+		await store.keepPoints(sel);
+		var edited = await storeRecords(store);
+		// undo: keep the edited state first, then go back
+		var redo = await store.snapshot("redo");
+		await store.restoreSnapshot(before.id);
+		assert.deepEqual(await storeRecords(store), original);
+		await assert.rejects(store.keepPoints(sel), /select again/, "the stored selection cannot be run again after a keep is taken back");
+		// redo: keep the original state again (undo of the redo), then go forward
+		var undoAgain = await store.snapshot("undo");
+		await store.restoreSnapshot(redo.id);
+		assert.deepEqual(await storeRecords(store), edited);
+		await store.restoreSnapshot(undoAgain.id);
+		assert.deepEqual(await storeRecords(store), original);
+		assert.deepEqual(liveTiles(map), manifestTiles(store.manifest), "no file left over");
+		assert.deepEqual(store.snapshots(), []);
+	} finally {
+		await store.close();
+	}
+});
