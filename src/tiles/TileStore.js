@@ -247,8 +247,10 @@ TileStore.prototype.addColumn = editing("addColumn");
 TileStore.prototype.removeColumn = editing("removeColumn");
 /** Compose a transform ({ m, t }, as makeTransform) onto the store's. @function */
 TileStore.prototype.transform = editing("transform");
-/** Move points: { key: { index, x, y, z } } in world coordinates (after the store transform). @function */
+/** Move points: { key: { index, x, y, z } } in world coordinates (after the store transform); opts { signal, onProgress, threads }. @function */
 TileStore.prototype.setPositions = editing("setPositions");
+/** Move the selected points by a transform { m, t } (world, after the store transform); opts { signal, onProgress, threads }. @function @returns {Promise<{moved: number}>} */
+TileStore.prototype.transformPoints = editing("transformPoints");
 
 /**
  * Write the store as LAS / LAZ, node by node (src/tiles/write.js).

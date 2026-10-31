@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.19.5 (2026-10-31)
+
+Added:
+- `store.transformPoints(sel, { m, t }, opts)`: move the selected points to `m * p + t` (world coordinates, after the
+  store transform) in one atomic edit on the worker pool. Returns `{ moved }`. Selections stay valid.
+- `setPositions(value, opts)` takes `{ signal, onProgress, threads }` and decodes and packs on the pool (about 5x faster
+  on a compressed store; the tile files are the same as on one thread).
+
+Faster:
+- `keepPoints` and `deletePoints` no longer decode a tile they empty whole (a keep that keeps none of it, a delete that takes
+  all of it); the tile is written empty. A crop that keeps a small part of a big cloud decodes only the tiles its edge cuts.
+- `mergeStores`, `splitStore` and `alignStores` read the source tiles with `readTiles` (the source store's pool, a few
+  tiles ahead), not one tile at a time. `threads: 1` keeps the old order.
+
+Changed:
+- `onProgress` of `setColumn`, `deletePoints`, `keepPoints` and `setPositions` reports `done: 0` first and then as each
+  tile is written, not at the start of each group of tiles. `keepPoints`' total counts the tiles it rewrites or empties.
+
 ## 0.19.4 (2026-10-31)
 
 - `select` and the `select*` wrappers report `onProgress({ phase: "select", done: 0, total })` as soon as the tiles are classified, before the pool starts or any tile is read, so a caller can tell a scan has begun.

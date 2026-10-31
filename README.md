@@ -878,6 +878,21 @@ asked. Each writes the tiles it changes as new files as it goes (one tile in mem
 then the manifest, then removes the old files, so an edit cut short leaves the store as it was. A
 store changed in another tab or worker since this one was opened refuses the edit (`BAD_STORE`):
 open it again. A read that an edit on the same store overtakes reads the new tile.
+
+Every scan and edit takes `{ signal, onProgress, threads }`: `select`, `selectBox`, `selectPolygon`,
+`selectScreen` and `selectClasses` as their last (or only) options, `setColumn`, `deletePoints`, `keepPoints`,
+`setPositions` and `transformPoints` as their last argument. `onProgress({ phase, done, total })` is `"select"`
+(the tiles to be read; the first report is `done: 0`, before any tile is read) or `"edit"` (the tiles rewritten,
+reported as each is written). A `signal` that aborts rejects with `ABORTED`; an edit stopped this way leaves the store
+as it was. On a compressed store the tiles are decoded and packed on the store's worker pool, a few at a time, so the
+edit is checked for a stop between groups of tiles (twice the pool size); `threads: 1` keeps a call on its own
+thread, one tile at a time. A tile that an edit empties whole (a `keepPoints` that keeps none of it, a
+`deletePoints` that takes all of it) is written empty without being decoded.
+`await store.transformPoints(sel, { m, t })` moves the selected points to `m * p + t` in world coordinates (after the
+store transform) as one atomic edit, and `setPositions({ [key]: { index, x, y, z } })` sets exact positions. Neither
+reorders points or counts as a delete, so a selection stays valid. The new positions are rounded to the store's scale: a
+rotation or scale undone by its inverse can end one scale unit from where it began, a translation by a multiple of the
+scale does not. `mergeStores`, `splitStore` and `alignStores` read the source stores' tiles on their pools too.
 `writeLas` writes the source's version, point format, scale, offset, CRS, class names and extra
 bytes, plus the added columns; an unedited store gives back every source record byte for byte (in
 tile order, not the file's). Undo is the caller's.

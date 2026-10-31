@@ -81,15 +81,20 @@ async function copyToStore(sources, opts, name) {
 			classNames: Object.keys(p.first.classNames || {}).length ? p.first.classNames : undefined, extraBytes: p.extra || undefined });
 		for (var i = 0; i < sources.length; i++) {
 			var s = sources[i], fields = recordFields(s.store.manifest.pointFormat).concat(p.extra ? ["extra"] : []), nodes = storeNodes(s.store.manifest);
-			for (var k = 0; k < nodes.keys.length; k++) {
-				aborted(signal);
-				var key = nodes.keys[k], pick = s.sel ? s.sel.tiles[key] : null;
-				if (s.sel && !(pick && pick.length)) continue;
-				var pts = await s.store.readTile(key, { fields: fields });
-				if (pick) pts = keepPoints(pts, pick);
-				await w.writePoints(pts);
-				count += pts.count;
-				if (opts.onProgress) opts.onProgress(count, 2 * total);   // the copy is half the work, the build the rest
+			// the tiles to copy, decoded on the source store's pool a few ahead of the writer (threads: 1 for this thread only)
+			var keys = nodes.keys.filter(function (key) { return !s.sel || (s.sel.tiles[key] && s.sel.tiles[key].length); });
+			var gen = s.store.readTiles(keys, { fields: fields, threads: opts.threads });
+			try {
+				for (var got = await gen.next(); !got.done; got = await gen.next()) {
+					aborted(signal);
+					var pts = got.value.points, pick = s.sel ? s.sel.tiles[got.value.key] : null;
+					if (pick) pts = keepPoints(pts, pick);
+					await w.writePoints(pts);
+					count += pts.count;
+					if (opts.onProgress) opts.onProgress(count, 2 * total);   // the copy is half the work, the build the rest
+				}
+			} finally {
+				await gen.return();
 			}
 		}
 		await w.close();

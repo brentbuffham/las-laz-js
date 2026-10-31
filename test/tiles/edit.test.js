@@ -16,6 +16,7 @@ import { buildTiles } from "../../src/tiles/build.js";
 import { openTiles } from "../../src/tiles/TileStore.js";
 import { combineTileSelections } from "../../src/tiles/edit.js";
 import { selectTiles } from "../../src/tiles/select.js";
+import { mergeStores, splitStore } from "../../src/tiles/merge.js";
 import { selectBox, selectPolygon, unionSelections, intersectSelections, subtractSelections } from "../../src/ops/select.js";
 import { makeTransform } from "../../src/ops/transform.js";
 import { tileLas, sourceRecords, storeRecords } from "../helpers/tileFiles.js";
@@ -359,6 +360,126 @@ test("a pool that fails mid-edit hands its tiles to this thread, with the same f
 		await a.setColumn(sel, "classification", 6);
 		await b.setColumn(await b.select(evenPoints, { threads: 1 }), "classification", 6, { threads: 1 });
 		assert.deepEqual(tileFiles(mapA), tileFiles(mapB));
+	} finally {
+		await a.close(); await b.close();
+	}
+});
+
+test("a tile that loses every point is written empty without being decoded", async function () {
+	var mapA = new Map(), mapB = new Map();
+	var a = await build(B7, { compress: true, where: { memory: mapA } }), b = await build(B7, { compress: true, where: { memory: mapB } });
+	try {
+		var sel = await a.selectBox(BOX);   // starts the pool
+		var partial = Object.keys(sel.tiles).filter(function (k) { return sel.tiles[k].length < a.manifest.nodes[k].count; }).length;
+		var decodes = 0, decode = a._pool.decode;
+		a._pool.decode = function () { decodes++; return decode.apply(a._pool, arguments); };
+		var seen = [];
+		await a.keepPoints(sel, { onProgress: function (p) { seen.push(p); } });
+		var all = Object.keys(a.manifest.nodes).filter(function (k) { return a.manifest.nodes[k].count > 0 || true; }).length;
+		assert.ok(partial > 0 && partial < all, "some tiles are cut, many are emptied or kept");
+		assert.equal(decodes, partial, "only the tiles that keep some points and lose some are decoded");
+		assert.ok(seen.length > 2 && seen[0].done === 0 && seen[seen.length - 1].done === seen[seen.length - 1].total, "progress runs from 0 to the total");
+		await b.keepPoints(await b.selectBox(BOX, { threads: 1 }), { threads: 1 });
+		assert.deepEqual(tileFiles(mapA), tileFiles(mapB));
+		assert.equal(a.count, sel.count);
+	} finally {
+		await a.close(); await b.close();
+	}
+});
+
+test("deletePoints: a tile deleted whole is not decoded either", async function () {
+	var store = await build(B7, { compress: true });
+	try {
+		var sel = await store.select(everyPoint);   // every tile whole
+		var decodes = 0, decode = store._pool.decode;
+		store._pool.decode = function () { decodes++; return decode.apply(store._pool, arguments); };
+		await store.deletePoints(sel);
+		assert.equal(decodes, 0);
+		assert.equal(store.count, 0);
+	} finally {
+		await store.close();
+	}
+});
+
+test("setPositions: on the pool the files are the single thread's; progress, and a signal that leaves the store as it was", async function () {
+	var mapA = new Map(), mapB = new Map();
+	var a = await build(B7, { compress: true, where: { memory: mapA } }), b = await build(B7, { compress: true, where: { memory: mapB } });
+	try {
+		var wasManifest = JSON.parse(JSON.stringify(a.manifest));
+		var value = {};
+		var keys = Object.keys(a.manifest.nodes).filter(function (k) { return a.manifest.nodes[k].count > 1; });
+		keys.forEach(function (k) {
+			var c = a.manifest.nodes[k].count, index = Uint32Array.from([0, c - 1]);
+			value[k] = { index: index, x: Float64Array.from([478000.5, 478001.25]), y: Float64Array.from([6772000.5, 6772001.25]), z: Float64Array.from([100.5, 101.25]) };
+		});
+		await a.select(everyPoint);   // starts the pool
+		var ac = new AbortController(), ticks = 0;
+		await assert.rejects(a.setPositions(value, { threads: 1, signal: ac.signal, onProgress: function () { if (++ticks === 2) ac.abort(); } }), function (e) { return e.code === "ABORTED"; });
+		assert.deepEqual(a.manifest, wasManifest, "stopped: the manifest is as it was");
+		var seen = [];
+		await a.setPositions(value, { onProgress: function (p) { seen.push(p); } });
+		await b.setPositions(value, { threads: 1 });
+		assert.deepEqual(tileFiles(mapA), tileFiles(mapB));
+		assert.ok(seen[0].done === 0 && seen[seen.length - 1].done === keys.length);
+	} finally {
+		await a.close(); await b.close();
+	}
+});
+
+test("transformPoints moves the selected points by m * p + t, atomically, and a translation by the scale's multiple undoes exactly", async function () {
+	var map = new Map(), store = await build(B7, { compress: true, where: { memory: map } });
+	try {
+		var sel = await store.selectBox(BOX), key = Object.keys(sel.tiles)[0], idx = sel.tiles[key];
+		var before = await store.readTile(key, { fields: ["x", "y", "z", "gpsTime"] });
+		var T = { m: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [10, -20, 5] };
+		var r = await store.transformPoints(sel, T);
+		assert.equal(r.moved, sel.count);
+		var after = await store.readTile(key, { fields: ["x", "y", "z", "gpsTime"] });
+		var picked = new Set(Array.from(idx));
+		for (var i = 0; i < before.count; i++) {
+			var dx = picked.has(i) ? 10 : 0, dy = picked.has(i) ? -20 : 0, dz = picked.has(i) ? 5 : 0;
+			assert.ok(Math.abs(after.x[i] - before.x[i] - dx) < 1e-6 && Math.abs(after.y[i] - before.y[i] - dy) < 1e-6 && Math.abs(after.z[i] - before.z[i] - dz) < 1e-6, "point " + i);
+			assert.equal(after.gpsTime[i], before.gpsTime[i], "other fields stay");
+		}
+		assert.equal(store.manifest.deletes, 0);
+		await store.transformPoints(sel, { m: T.m, t: [-10, 20, -5] });   // the same selection is still valid
+		var back = await store.readTile(key, { fields: ["x", "y", "z"] });
+		for (i = 0; i < before.count; i++) assert.ok(Math.abs(back.x[i] - before.x[i]) < 1e-9 && Math.abs(back.y[i] - before.y[i]) < 1e-9 && Math.abs(back.z[i] - before.z[i]) < 1e-9);
+		// a stopped move leaves the store as it was (threads: 1: the signal is checked tile by tile)
+		var ac = new AbortController(), was = JSON.parse(JSON.stringify(store.manifest)), n = 0;
+		await assert.rejects(store.transformPoints(await store.select(everyPoint), T, { threads: 1, signal: ac.signal, onProgress: function () { if (++n === 2) ac.abort(); } }), function (e) { return e.code === "ABORTED"; });
+		assert.deepEqual(store.manifest, was);
+		await assert.rejects(store.transformPoints(sel, { m: [1, 2, 3], t: [0, 0, 0] }), /3×3/);
+	} finally {
+		await store.close();
+	}
+});
+
+test("transformPoints goes through the store transform", async function () {
+	var store = await build(B7);
+	var move = makeTransform({ translate: [100, 0, 0] });
+	await store.transform(move);
+	var sel = await store.selectBox({ minX: 478040 + 100, maxX: 478120 + 100, minY: 6772030, maxY: 6772150 });
+	assert.ok(sel.count > 0);
+	var key = Object.keys(sel.tiles)[0], before = await store.readTile(key, { fields: ["x"] });
+	await store.transformPoints(sel, { m: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 7, 0] });
+	var after = await store.readTile(key, { fields: ["x"] });
+	assert.ok(Math.abs(after.x[sel.tiles[key][0]] - before.x[sel.tiles[key][0]]) < 1e-9, "x is where the store transform puts it");
+});
+
+test("mergeStores and splitStore read the source's tiles on its pool, and give the same points as one thread", async function () {
+	var a = await build(B7, { compress: true }), b = await build(B3, { compress: true });
+	try {
+		var one = await mergeStores([a, b], { where: { memory: new Map() }, threads: 1, tilePoints: 600 });
+		assert.ok(!a._pool && !b._pool, "threads: 1 starts no pool");
+		var pooled = await mergeStores([a, b], { where: { memory: new Map() }, tilePoints: 600 });
+		assert.ok(a._pool && b._pool, "the copy decoded on the source stores' pools");
+		assert.equal(pooled.count, a.count + b.count);
+		assert.deepEqual(await storeRecords(pooled), await storeRecords(one));
+		var sel = await a.selectBox(BOX), before = a.count;
+		var part = await splitStore(a, sel, { where: { memory: new Map() }, tilePoints: 600 });
+		assert.equal(part.count, sel.count);
+		assert.equal(a.count, before - sel.count);
 	} finally {
 		await a.close(); await b.close();
 	}

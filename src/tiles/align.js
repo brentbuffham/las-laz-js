@@ -46,8 +46,8 @@ export async function storeSample(store, maxPoints, origin) {
 		take = take.concat(lv); total += n; levels++;
 	}
 	var x = new Float32Array(total), y = new Float32Array(total), z = new Float32Array(total), q = 0;
-	for (var t = 0; t < take.length; t++) {
-		var p = await store.readTile(nodes.keys[take[t]], { fields: ["x", "y", "z"], localOrigin: o, float32: true });
+	for await (var read of store.readTiles(take.map(function (i) { return nodes.keys[i]; }), { fields: ["x", "y", "z"], localOrigin: o, float32: true })) {
+		var p = read.points;
 		x.set(p.x, q); y.set(p.y, q); z.set(p.z, q); q += p.count;
 	}
 	return { count: q, x: x, y: y, z: z, origin: o, levels: levels, of: of };

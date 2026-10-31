@@ -318,31 +318,33 @@ function pooled(task) {
 // Rewrite nodes: each is loaded with its records raw, work(key, { t, records }) returns { records, columns } (or
 // null to leave it), and put writes it. On a compressed store, tiles are decoded and packed on the store's worker
 // pool, several at a time (threads: 1 for this thread only); a pool that fails or stalls hands the rest to this
-// thread. The files are the same either way. Progress and the signal are by group of tiles.
-async function rewriteNodes(store, put, keys, opts, work) {
+// thread. The files are the same either way. Progress is as each tile is written; the signal is checked between
+// groups of tiles. skip(key) true: the tile's records are not needed (work gets records: null), so they are not decoded.
+async function rewriteNodes(store, put, keys, opts, work, skip) {
 	var m = store.manifest, len = m.recordLength, pool = null, down = false;
 	var signal = opts && opts.signal;
 	if (m.laz && !(opts && opts.threads === 1) && keys.length >= 2) pool = await storePool(store, opts && opts.threads > 0 ? Math.floor(opts.threads) : 0);
-	var step = pool ? 2 * pool.size : 1, working = phase(opts && opts.onProgress, "edit", keys.length);
+	var step = pool ? 2 * pool.size : 1, working = phase(opts && opts.onProgress, "edit", keys.length), finished = 0;
+	working.tick(0);
 	var one = async function (key) {
-		var t = await loadTile(store, key), records = null;
-		if (pool && !down && t.compressed && t.count) {
+		var t = await loadTile(store, key), records = null, none = !!skip && skip(key);
+		if (pool && !down && !none && t.compressed && t.count) {
 			records = await pooled(function () { return pool.decode({ vlr: m.laz, recordLength: len, packed: t.records.slice().buffer, chunks: [{ s: 0, e: t.records.length, count: t.count }], base: 0 }); });
 			if (!records) down = true;
 		}
-		if (!records) records = rawRecords(store, t);
+		if (!records && !none) records = rawRecords(store, t);
 		var out = work(key, { t: t, records: records });
-		if (!out) return;
+		if (!out) { working.tick(++finished); return; }
 		var packed = null, count = out.records.length / len;
 		if (pool && !down && count) {
 			var r = await pooled(function () { return pool.compress({ vlr: m.laz, recordLength: len, records: out.records.slice().buffer, counts: [count] }); });
 			if (r) packed = r.bytes; else down = true;
 		}
 		await put(key, out.records, out.columns, t.size, null, packed);
+		working.tick(++finished);
 	};
 	for (var k = 0; k < keys.length; k += step) {
 		aborted(signal);
-		working.tick(k);
 		await Promise.all(keys.slice(k, k + step).map(one));
 	}
 	working.finish();
@@ -379,6 +381,10 @@ function removeWhere(store, sel, keepSelected, opts) {
 				}
 				removed += node.count - kept;
 				return { records: records, columns: columns };
+			}, function (key) {
+				// a tile that loses every point (a keep with none picked, a delete with all): written empty, never decoded
+				var picked = sel.tiles[key];
+				return keepSelected ? !(picked && picked.length) : !!picked && picked.length === m.nodes[key].count;
 			});
 			return { removed: removed };
 		}, function (body) { body.deletes++; });
@@ -466,8 +472,10 @@ export function setColumn(store, sel, name, value, opts) {
 /**
  * Move points: value { key: { index (ascending), x, y, z } } in world coordinates (after the store transform). The
  * records take the store transform's inverse, then the scale and offset; each node's box is measured again.
+ * opts: signal (checked between groups of tiles: ABORTED, the store as it was), onProgress({ phase: "edit", done, total })
+ * by tile, threads (1: no worker pool; a compressed store's tiles are decoded and packed on the store's pool).
  */
-export function setPositions(store, value) {
+export function setPositions(store, value, opts) {
 	return queued(store, function () {
 		var m = store.manifest;
 		if (!value || typeof value !== "object") throw bad("positions must be { key: { index, x, y, z } }");
@@ -479,10 +487,40 @@ export function setPositions(store, value) {
 			for (var i = 0; i < v.index.length; i++) if (!(v.index[i] < node.count) || (i && v.index[i] <= v.index[i - 1])) throw bad("positions[" + k + "].index " + v.index[i] + " is not an ascending point of the tile (" + node.count + " points)");
 		});
 		return session(store, async function (put) {
-			for (var t = 0; t < keys.length; t++) {
-				var key = keys[t], n = await readNode(store, key);
-				await put(key, patchPositions(store, n.records, value[key], inv), n.t.columns, n.t.size, null);
-			}
+			await rewriteNodes(store, put, keys, opts, function (key, n) {
+				return { records: patchPositions(store, n.records, value[key], inv), columns: n.t.columns };
+			});
+		}, null);
+	});
+}
+
+/**
+ * Move the selected points by a transform { m, t } (as makeTransform: row-major 3x3 m, then t) in world coordinates
+ * (after the store transform): each becomes m * p + t. One atomic edit, on the pool like setPositions; selections stay valid.
+ * The new positions are rounded to the store's scale, so moving back by the inverse of a rotation or scale can end up
+ * one scale unit from where it began (a translation by a multiple of the scale is exact).
+ * opts: signal, onProgress, threads (as setPositions).
+ */
+export function transformPoints(store, sel, T, opts) {
+	return queued(store, function () {
+		checkSelection(store, sel);
+		checkTransform(T, "transform");
+		var m = store.manifest, keys = Object.keys(sel.tiles).sort(keyOrder), inv = m.transform ? invertTransform(m.transform) : null;
+		var a = T.m, t = T.t, moved = 0;
+		return session(store, async function (put) {
+			await rewriteNodes(store, put, keys, opts, function (key, n) {
+				var idx = sel.tiles[key], world = decodeRecords(n.records, store.header, { fields: ["x", "y", "z"], transform: m.transform || undefined });
+				var x = new Float64Array(idx.length), y = new Float64Array(idx.length), z = new Float64Array(idx.length);
+				for (var i = 0; i < idx.length; i++) {
+					var px = world.x[idx[i]], py = world.y[idx[i]], pz = world.z[idx[i]];
+					x[i] = a[0] * px + a[1] * py + a[2] * pz + t[0];
+					y[i] = a[3] * px + a[4] * py + a[5] * pz + t[1];
+					z[i] = a[6] * px + a[7] * py + a[8] * pz + t[2];
+				}
+				moved += idx.length;
+				return { records: patchPositions(store, n.records, { index: idx, x: x, y: y, z: z }, inv), columns: n.t.columns };
+			});
+			return { moved: moved };
 		}, null);
 	});
 }
