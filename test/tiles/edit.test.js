@@ -518,3 +518,115 @@ test("a move that does not fit the scale fails in the worker and in this thread 
 		await store.close();
 	}
 });
+
+// ---- snapshots: an edit taken back with no copy ----
+
+function liveTiles(map) { return Array.from(map.keys()).filter(function (n) { return /\.tile$/.test(n); }).sort(); }
+function manifestTiles(m) { return Object.keys(m.nodes).map(function (k) { return k + "." + m.nodes[k].gen + ".tile"; }).sort(); }
+
+test("snapshot: a delete, a column edit and a move are taken back; no tile is copied and none is left over", async function () {
+	for (var compress of [false, true]) {
+		var map = new Map(), store = await build(B7, { compress: compress, where: { memory: map } });
+		try {
+			var wasFiles = tileFiles(map), wasRecords = await storeRecords(store), wasManifest = JSON.parse(JSON.stringify(store.manifest));
+			var snap = await store.snapshot("before the crop");
+			assert.equal(snap.points, 15000);
+			assert.deepEqual(liveTiles(map), Object.keys(wasFiles).sort(), "taking a snapshot writes no tile file");
+			assert.deepEqual(store.snapshots().map(function (s) { return s.id; }), [snap.id]);
+			await store.keepPoints(await store.selectBox(BOX));
+			await store.setColumn(await store.select(everyPoint), "classification", 9);
+			await store.transformPoints(await store.select(everyPoint), { m: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [1, 2, 3] });
+			assert.ok(store.count < 15000);
+			assert.ok(liveTiles(map).length > Object.keys(wasFiles).length, "the replaced files are kept");
+			var r = await store.restoreSnapshot(snap.id);
+			assert.equal(r.restored, snap.id);
+			assert.equal(store.count, 15000);
+			assert.deepEqual(await storeRecords(store), wasRecords, "compress " + compress + ": the very same records");
+			assert.deepEqual(store.manifest.nodes, wasManifest.nodes);
+			assert.deepEqual(liveTiles(map), manifestTiles(store.manifest), "no file left that the manifest does not name");
+			assert.deepEqual(tileFiles(map), wasFiles, "the original files, byte for byte");
+			assert.deepEqual(store.snapshots(), [], "the snapshot is used up");
+			assert.equal(store.manifest.snapshots, undefined);
+		} finally {
+			await store.close();
+		}
+	}
+});
+
+test("snapshot: discard frees the kept files and leaves the edits; a restore refuses an unknown id", async function () {
+	var map = new Map(), store = await build(B7, { compress: true, where: { memory: map } });
+	try {
+		var snap = await store.snapshot();
+		await store.deletePoints(await store.selectBox(BOX));
+		var after = store.count, kept = liveTiles(map).length;
+		assert.ok(kept > Object.keys(store.manifest.nodes).length);
+		await store.discardSnapshot(snap.id);
+		assert.equal(store.count, after);
+		assert.deepEqual(liveTiles(map), manifestTiles(store.manifest), "only the files in use stay");
+		assert.deepEqual(store.snapshots(), []);
+		await assert.rejects(store.restoreSnapshot(snap.id), /no snapshot/);
+		await assert.rejects(store.discardSnapshot("s99"), /no snapshot/);
+	} finally {
+		await store.close();
+	}
+});
+
+test("snapshot: it survives closing and opening the store; the opening keeps its files", async function () {
+	var map = new Map(), store = await build(B7, { compress: true, where: { memory: map } });
+	var wasRecords = await storeRecords(store);
+	var snap = await store.snapshot("kept over a reload");
+	await store.deletePoints(await store.selectBox(BOX));
+	var again = await openTiles({ memory: map });
+	assert.deepEqual(again.snapshots().map(function (s) { return s.label; }), ["kept over a reload"]);
+	await again.restoreSnapshot(snap.id);
+	assert.deepEqual(await storeRecords(again), wasRecords);
+	assert.deepEqual(liveTiles(map), manifestTiles(again.manifest));
+	await again.close(); await store.close();
+});
+
+test("snapshot: selections stay valid over a move, are refused after a delete is taken back, and a later edit never writes over a kept file", async function () {
+	var map = new Map(), store = await build(B7, { where: { memory: map } });
+	try {
+		var sel = await store.selectBox(BOX);
+		var snap = await store.snapshot();
+		await store.transformPoints(sel, { m: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [5, 0, 0] });
+		await store.restoreSnapshot(snap.id);
+		await store.setColumn(sel, "classification", 4);   // the same selection still works after a move is taken back
+		var s2 = await store.snapshot();
+		await store.deletePoints(sel);
+		var late = await store.selectBox(BOX);   // made after the delete
+		await store.restoreSnapshot(s2.id);
+		await assert.rejects(store.setColumn(late, "classification", 1), /select again/);
+		await assert.rejects(store.deletePoints(sel), /select again/, "even the selection from before: the layout was changed in between");
+		// two snapshots, edits between; a restore of the older, then edits, keep the newer one's files whole
+		var a = await store.snapshot("a");
+		await store.setColumn(await store.select(everyPoint), "classification", 7);
+		var b = await store.snapshot("b");
+		var atB = await storeRecords(store);
+		await store.setColumn(await store.select(everyPoint), "classification", 8);
+		await store.restoreSnapshot(a.id);
+		await store.setColumn(await store.select(everyPoint), "classification", 11);   // writes generations above the ones b keeps
+		await store.restoreSnapshot(b.id);
+		assert.deepEqual(await storeRecords(store), atB, "b is as it was when taken");
+	} finally {
+		await store.close();
+	}
+});
+
+test("snapshot: a lost file is named, and the store is left as it was; a clone leaves the snapshots behind", async function () {
+	var map = new Map(), store = await build(B7, { where: { memory: map } });
+	try {
+		var snap = await store.snapshot();
+		await store.deletePoints(await store.selectBox(BOX));
+		var copy = await (await import("../../src/tiles/clone.js")).cloneStore(store, { memory: new Map() });
+		assert.equal(copy.manifest.snapshots, undefined, "the copy holds no snapshot");
+		assert.equal(copy.count, store.count);
+		var lost = Object.keys(snap && store.manifest.snapshots[0].body.nodes).map(function (k) { return k + "." + store.manifest.snapshots[0].body.nodes[k].gen + ".tile"; }).filter(function (n) { return !manifestTiles(store.manifest).includes(n); })[0];
+		map.delete(lost);
+		var was = JSON.parse(JSON.stringify(store.manifest));
+		await assert.rejects(store.restoreSnapshot(snap.id), function (e) { return e.code === "BAD_STORE" && e.message.indexOf(lost) >= 0; });
+		assert.deepEqual(store.manifest, was);
+	} finally {
+		await store.close();
+	}
+});

@@ -126,6 +126,8 @@ async function sweep(backend, m) {
 		var now = await readManifest(backend) || m, body = now.body;
 		var keep = new Set(["store-a.json", "store-b.json", HEAD_NAME, EVLRS_NAME]);
 		Object.keys(body.nodes).forEach(function (k) { keep.add(tileName(k, body.nodes[k].gen)); });
+		// the files a snapshot keeps
+		(body.snapshots || []).forEach(function (s) { Object.keys(s.body.nodes).forEach(function (k) { keep.add(tileName(k, s.body.nodes[k].gen)); }); });
 		var names = await backend.list();
 		for (var i = 0; i < names.length; i++) if (!keep.has(names[i])) await backend.remove(names[i]);
 		return now;
@@ -247,6 +249,27 @@ TileStore.prototype.addColumn = editing("addColumn");
 TileStore.prototype.removeColumn = editing("removeColumn");
 /** Compose a transform ({ m, t }, as makeTransform) onto the store's. @function */
 TileStore.prototype.transform = editing("transform");
+/**
+ * Keep the store as it is, so later edits can be taken back with no copy (restoreSnapshot) or let go of
+ * (discardSnapshot). No tile file is written; the files the edits replace are kept until then.
+ * @function
+ * @param {string} [label]
+ * @returns {Promise<{id: string, label: string|null, at: number, points: number}>}
+ */
+TileStore.prototype.snapshot = editing("snapshot");
+/** Put the store back as it was at the snapshot (id), and use the snapshot up; edits since are taken back. @function @returns {Promise<{restored: string}>} */
+TileStore.prototype.restoreSnapshot = editing("restore");
+/** Let a snapshot go and free the files kept for it; the store stays as it is. @function @returns {Promise<{discarded: string}>} */
+TileStore.prototype.discardSnapshot = editing("discardSnapshot");
+/** The snapshots held, oldest first: [{ id, label, at, points }]. @returns {Array} */
+TileStore.prototype.snapshots = function () {
+	var m = this.manifest;
+	return (m.snapshots || []).map(function (s) {
+		var points = 0;
+		Object.keys(s.body.nodes).forEach(function (k) { points += s.body.nodes[k].count; });
+		return { id: s.id, label: s.label, at: s.at, points: points };
+	});
+};
 /** Move points: { key: { index, x, y, z } } in world coordinates (after the store transform); opts { signal, onProgress, threads }. @function */
 TileStore.prototype.setPositions = editing("setPositions");
 /** Move the selected points by a transform { m, t } (world, after the store transform); opts { signal, onProgress, threads }. @function @returns {Promise<{moved: number}>} */

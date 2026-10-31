@@ -893,6 +893,13 @@ store transform) as one atomic edit, and `setPositions({ [key]: { index, x, y, z
 reorders points or counts as a delete, so a selection stays valid. The new positions are rounded to the store's scale: a
 rotation or scale undone by its inverse can end one scale unit from where it began, a translation by a multiple of the
 scale does not. `mergeStores`, `splitStore` and `alignStores` read the source stores' tiles on their pools too.
+
+To be able to take an edit back, `await store.snapshot("before the crop")` first (it writes no tile, just the manifest, so it is
+instant), edit, then `await store.restoreSnapshot(id)` puts the store back exactly as it was, or `discardSnapshot(id)` keeps the
+edit and frees the files held for it. This replaces copying the store with `cloneStore` to be able to undo: the edit already writes
+new files for the tiles it changes, so the old ones are simply kept. Until then the replaced tiles stay on disk. Several snapshots can
+be held; `store.snapshots()` lists them. A restore also takes back every edit made after the snapshot, and a selection made before a
+delete or keep that it took back is refused (select again).
 `writeLas` writes the source's version, point format, scale, offset, CRS, class names and extra
 bytes, plus the added columns; an unedited store gives back every source record byte for byte (in
 tile order, not the file's). Undo is the caller's.

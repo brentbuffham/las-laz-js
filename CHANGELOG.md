@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.19.7 (2026-11-01)
+
+Added (an edit you can take back with no copy of the store):
+- `store.snapshot(label?)` keeps the store as it is: it writes no tile file, only the manifest, which now holds a copy of
+  itself (`manifest.snapshots`). The node files an edit replaces are kept while a snapshot names them.
+- `store.restoreSnapshot(id)` puts the store back as it was at the snapshot and uses the snapshot up: later edits (deletes,
+  keeps, column and position edits, transforms, added columns) are taken back and their files removed. It takes about as long as
+  writing the manifest (13 ms on a 1,173 tile store) where `cloneStore` has to copy every file (about 2 ms a file in OPFS).
+- `store.discardSnapshot(id)` lets one go and removes the files kept for it; `store.snapshots()` lists them (`{ id, label, at, points }`).
+- Selections: one made before a delete or keep that a restore takes back is refused afterwards (select again); one made before
+  a move or a column edit stays valid.
+- The kept files cost the disk of the tiles replaced since the snapshot, until it is restored or discarded. Opening a store keeps
+  them. `cloneStore` copies the store as it is and leaves the snapshots behind. `manifest.snapshots` is part of the manifest object a
+  caller may post to another thread; it holds one copy of the node table for each snapshot.
+
 ## 0.19.6 (2026-11-01)
 
 Faster:

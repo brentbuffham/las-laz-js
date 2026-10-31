@@ -50,6 +50,7 @@ export function cloneStore(store, where, opts) {
 
 async function copy(store, where, opts) {
 	var signal = opts.signal, m = JSON.parse(JSON.stringify(store.manifest)), src = store._backend;
+	delete m.snapshots;   // the copy is the store as it is: the files a snapshot keeps are not copied
 	await roomFor(where, m.bytes, store.count);
 	var target = await openBackend(where);
 	var existing = await readManifest(target);

@@ -11,6 +11,8 @@
 //    (wave packets and extra bytes included); added columns directly
 //  - addColumn / removeColumn: a typed array per node, in every node
 //  - transform: composed into the manifest; no node is rewritten
+//  - snapshot / restore / discardSnapshot: the manifest kept in itself, and the
+//    node files it names kept too, so an edit can be taken back with no copy
 // Every edit writes nodes as their next generation, then the manifest,
 // then removes the old generation: cut short, the old manifest still
 // names the old files, and the new ones are orphans that the next
@@ -256,7 +258,10 @@ async function session(store, run, change) {
 		var disk = await readManifest(be);
 		if (!disk || disk.seq !== store._seq) throw new LasError(ERROR_CODES.BAD_STORE, "the tile store changed in another tab or worker since it was opened here; open it again");
 		var m = store.manifest, len = m.recordLength, pack = packOf(store);
-		var body = JSON.parse(JSON.stringify(m)), written = [], replaced = [];
+		var body = JSON.parse(JSON.stringify(m)), written = [], replaced = [], held = {};
+		// a node's next generation is above every one a snapshot holds (its files are kept, never written over)
+		(m.snapshots || []).forEach(function (s) { Object.keys(s.body.nodes).forEach(function (k) { held[k] = Math.max(held[k] || 0, s.body.nodes[k].gen); }); });
+		var nextGen = function (key, old) { return Math.max(old.gen, held[key] || 0) + 1; };
 		// box with records null: the node was packed and measured on the pool (count and records as they were)
 		var put = async function (key, records, columns, oldSize, same, packed, box) {
 			var old = m.nodes[key];
@@ -264,27 +269,27 @@ async function session(store, run, change) {
 			if (same) {
 				var keep = same.packed || same.raw;
 				var kept = encodeTile({ count: old.count, records: keep, compressed: !!same.packed, columns: columns });
-				var keptName = tileName(key, old.gen + 1);
+				var gen = nextGen(key, old), keptName = tileName(key, gen);
 				await be.put(keptName, kept);
 				written.push(keptName);
 				replaced.push(tileName(key, old.gen));
-				body.nodes[key] = { count: old.count, gen: old.gen + 1, box: old.box };
+				body.nodes[key] = { count: old.count, gen: gen, box: old.box };
 				body.bytes += kept.length - oldSize;
 				return;
 			}
 			var measured = records === null, count = measured ? old.count : records.length / len;
 			if (pack && store._onPack) store._onPack(key);
 			var bytes = encodeTile({ count: count, records: packed || (pack ? pack(records, 0, count) : records), compressed: !!pack, columns: columns });
-			var name = tileName(key, old.gen + 1);
+			var gen = nextGen(key, old), name = tileName(key, gen);
 			await be.put(name, bytes);
 			written.push(name);
 			replaced.push(tileName(key, old.gen));
-			body.nodes[key] = { count: count, gen: old.gen + 1, box: measured ? box : tightBox(records, len, m.scale, m.offset) };
+			body.nodes[key] = { count: count, gen: gen, box: measured ? box : tightBox(records, len, m.scale, m.offset) };
 			body.bytes += bytes.length - oldSize;
 		};
 		var result, seq;
 		try {
-			result = await run(put, m);
+			result = await run(put, m, function (name) { replaced.push(name); });
 			if (change) change(body);
 			body.edits++;
 			seq = await writeManifest(be, body);
@@ -295,13 +300,13 @@ async function session(store, run, change) {
 				// the manifest landed before the write reported its error: it stands
 				store.manifest = now.body;
 				store._seq = now.seq;
-				await removeEach(be, replaced);
+				await removeEach(be, unreferenced(body, replaced));
 			} else await removeEach(be, written);
 			throw err;
 		}
 		store.manifest = body;
 		store._seq = seq;
-		await removeEach(be, replaced);
+		await removeEach(be, unreferenced(body, replaced));
 		return result;
 	} finally {
 		be.unlock();
@@ -358,6 +363,15 @@ async function rewriteNodes(store, put, keys, opts, work, skip, remote) {
 		await Promise.all(keys.slice(k, k + step).map(one));
 	}
 	working.finish();
+}
+
+// The files in names that neither the manifest nor a snapshot in it names
+function unreferenced(body, names) {
+	var live = new Set();
+	var add = function (nodes) { Object.keys(nodes).forEach(function (k) { live.add(tileName(k, nodes[k].gen)); }); };
+	add(body.nodes);
+	(body.snapshots || []).forEach(function (s) { add(s.body.nodes); });
+	return names.filter(function (n) { return !live.has(n); });
 }
 
 async function removeEach(be, names) {
@@ -623,5 +637,99 @@ export function transform(store, T) {
 			m = mm;
 		}
 		return session(store, async function () {}, function (body) { body.transform = { m: m, t: t }; });
+	});
+}
+
+// ---- snapshots ----
+// A snapshot is the manifest as it stands, kept in the manifest (body.snapshots), and the node files it names are kept
+// as edits replace them. Taking one writes no tile file; restoring one points the store at those files again and
+// removes the ones written since. They cost the disk of the tiles replaced since, until restored or discarded.
+
+function findSnapshot(m, id) {
+	var s = (m.snapshots || []).filter(function (x) { return x.id === id; })[0];
+	if (!s) throw bad("no snapshot " + JSON.stringify(id) + " in the store");
+	return s;
+}
+
+export function snapshotInfo(s) {
+	var points = 0;
+	Object.keys(s.body.nodes).forEach(function (k) { points += s.body.nodes[k].count; });
+	return { id: s.id, label: s.label, at: s.at, points: points };
+}
+
+/**
+ * Keep the store as it is, to take later edits back (restore) or let go (discardSnapshot).
+ * @param {object} store
+ * @param {string} [label]
+ * @returns {Promise<{id: string, label: string|null, at: number, points: number}>}
+ */
+export function snapshot(store, label) {
+	return queued(store, function () {
+		var info = null;
+		return session(store, async function () {}, function (body) {
+			var copy = JSON.parse(JSON.stringify(body));
+			delete copy.snapshots;
+			body.snapshotSeq = (body.snapshotSeq || 0) + 1;
+			var s = { id: "s" + body.snapshotSeq, label: label === undefined ? null : String(label), at: Date.now(), body: copy };
+			body.snapshots = (body.snapshots || []).concat([s]);
+			info = snapshotInfo(s);
+		}).then(function () { return info; });
+	});
+}
+
+/**
+ * Put the store back as it was when the snapshot was taken, and use the snapshot up. Edits made since are taken back,
+ * their files removed. Selections made before a delete or keep since are refused (select again).
+ * @param {object} store
+ * @param {string} id - from snapshot / store.snapshots()
+ * @returns {Promise<{restored: string}>}
+ * @throws {LasError} INVALID_ARGUMENT for an id not in the store; BAD_STORE when a file the snapshot names is gone
+ */
+export function restore(store, id) {
+	return queued(store, function () {
+		var snap = findSnapshot(store.manifest, id);
+		return session(store, async function (put, m, drop) {
+			var have = new Set(await store._backend.list());
+			Object.keys(snap.body.nodes).forEach(function (k) {
+				var name = tileName(k, snap.body.nodes[k].gen);
+				if (!have.has(name)) throw new LasError(ERROR_CODES.BAD_STORE, "snapshot " + id + " has lost " + name + "; it cannot be restored");
+			});
+			Object.keys(m.nodes).forEach(function (k) {
+				var now = m.nodes[k], was = snap.body.nodes[k];
+				if (!was || was.gen !== now.gen) drop(tileName(k, now.gen));
+			});
+			return { restored: id };
+		}, function (body) {
+			var now = { deletes: body.deletes, edits: body.edits, seq: body.snapshotSeq, snapshots: body.snapshots.filter(function (x) { return x.id !== id; }) };
+			Object.keys(body).forEach(function (k) { delete body[k]; });
+			Object.assign(body, JSON.parse(JSON.stringify(snap.body)));
+			body.edits = now.edits;
+			body.snapshotSeq = now.seq;
+			if (now.snapshots.length) body.snapshots = now.snapshots;
+			// points moved by a delete or keep since: a selection from before it names other points
+			body.deletes = now.deletes === snap.body.deletes ? snap.body.deletes : now.deletes + 1;
+		});
+	});
+}
+
+/**
+ * Let a snapshot go: the files kept for it are removed. The store stays as it is.
+ * @param {object} store
+ * @param {string} id
+ * @returns {Promise<{discarded: string}>}
+ */
+export function discardSnapshot(store, id) {
+	return queued(store, function () {
+		var snap = findSnapshot(store.manifest, id);
+		return session(store, async function (put, m, drop) {
+			Object.keys(snap.body.nodes).forEach(function (k) {
+				var was = snap.body.nodes[k], now = m.nodes[k];
+				if (!now || now.gen !== was.gen) drop(tileName(k, was.gen));
+			});
+			return { discarded: id };
+		}, function (body) {
+			body.snapshots = body.snapshots.filter(function (x) { return x.id !== id; });
+			if (!body.snapshots.length) delete body.snapshots;
+		});
 	});
 }
