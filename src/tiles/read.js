@@ -123,7 +123,7 @@ export async function* readTiles(store, keys, opts) {
 
 // The store's decode pool: started on first use (n workers, or the default when n is 0) and
 // kept, as a view loads tiles again and again; a different n starts a new one
-async function storePool(store, n) {
+export async function storePool(store, n) {
 	var want = n || await defaultThreads();
 	if (want < 2) return null;
 	if (store._pool && store._poolSize === want) return store._pool;

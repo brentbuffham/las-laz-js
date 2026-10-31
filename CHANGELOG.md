@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.19.3 (2026-10-31)
+
+Faster (a Categorise on a big compressed tile store ran one tile at a time on one thread):
+- `setColumn` on a standard field (classification, intensity, ...), `deletePoints` and `keepPoints`: on a compressed store
+  the tiles are decoded and packed on the store's worker pool, several at a time (about 3x faster on 1.5 M points, 149 tiles).
+  `threads: 1` in the options keeps it on the calling thread. The tile files are byte for byte the same either way. A pool
+  that fails, or gives no answer for 30 s, hands that tile and the rest to the calling thread.
+- `keepPoints` no longer reads a tile it keeps whole; `onProgress` counts only the tiles that are rewritten.
+- The signal is checked between groups of tiles (twice the pool size) rather than between single tiles.
+
 ## 0.19.2 (2026-10-31)
 
 Added (a big selection or column edit on a tile store gave nothing to show and nothing to cancel):

@@ -262,6 +262,7 @@ test("setPositions moves points in world coordinates, through the store transfor
 });
 
 function everyPoint(cols) { return Uint32Array.from({ length: cols.count }, function (_, i) { return i; }); }
+function evenPoints(cols) { return Uint32Array.from({ length: cols.count >> 1 }, function (_, i) { return 2 * i; }); }
 
 test("select reports the tiles it reads, and stops on a signal", async function () {
 	var store = await build(B7), seen = [];
@@ -304,7 +305,7 @@ test("setColumn, deletePoints and keepPoints report by tile, and a signal leaves
 	assert.equal(seen[seen.length - 1].done, touched);
 	// stopped after the first tile: nothing changes, no orphan file stays
 	for (var op of ["setColumn", "deletePoints", "keepPoints"]) {
-		var again = await store.select(everyPoint), ac = new AbortController(), before = JSON.parse(JSON.stringify(store.manifest));
+		var again = await store.select(evenPoints), ac = new AbortController(), before = JSON.parse(JSON.stringify(store.manifest));
 		var args = op === "setColumn" ? [again, "classification", 9] : [again];
 		args.push({ signal: ac.signal, onProgress: function () { ac.abort(); } });
 		await assert.rejects(store[op].apply(store, args), function (e) { return e.code === "ABORTED"; });
@@ -318,4 +319,46 @@ test("setColumn, deletePoints and keepPoints report by tile, and a signal leaves
 	assert.deepEqual(names.filter(function (n) { return !keep.has(n); }), [], "no orphan generations");
 	var cls = await reopened.readTile(Object.keys(reopened.manifest.nodes)[0], { fields: ["classification"] });
 	assert.ok(Array.from(cls.classification).every(function (c) { return c === 5; }), "the finished setColumn stands; the stopped ones did not run");
+});
+
+// every tile file of a store held in a Map, by name
+function tileFiles(map) {
+	var out = {};
+	Array.from(map.keys()).filter(function (n) { return /\.tile$/.test(n); }).forEach(function (n) { out[n] = Buffer.from(map.get(n)).toString("base64"); });
+	return out;
+}
+
+test("a compressed store's edits on the pool write the same files as on one thread", async function () {
+	var edits = [
+		function (s, sel, o) { return s.setColumn(sel, "classification", 6, o); },
+		function (s, sel, o) { return s.deletePoints(sel, o); },
+		function (s, sel, o) { return s.keepPoints(sel, o); }
+	];
+	for (var e of edits) {
+		var mapA = new Map(), mapB = new Map();
+		var a = await build(B7, { compress: true, where: { memory: mapA } }), b = await build(B7, { compress: true, where: { memory: mapB } });
+		try {
+			await e(a, await a.select(evenPoints), undefined);
+			assert.ok(a._pool, "the pool decoded and packed");
+			await e(b, await b.select(evenPoints, { threads: 1 }), { threads: 1 });
+			assert.ok(!b._pool, "threads: 1 starts no pool");
+			assert.deepEqual(tileFiles(mapA), tileFiles(mapB));
+		} finally {
+			await a.close(); await b.close();
+		}
+	}
+});
+
+test("a pool that fails mid-edit hands its tiles to this thread, with the same files", async function () {
+	var mapA = new Map(), mapB = new Map();
+	var a = await build(B7, { compress: true, where: { memory: mapA } }), b = await build(B7, { compress: true, where: { memory: mapB } });
+	try {
+		var sel = await a.select(evenPoints);   // starts the pool
+		a._pool.compress = function () { return Promise.reject(new Error("worker lost")); };
+		await a.setColumn(sel, "classification", 6);
+		await b.setColumn(await b.select(evenPoints, { threads: 1 }), "classification", 6, { threads: 1 });
+		assert.deepEqual(tileFiles(mapA), tileFiles(mapB));
+	} finally {
+		await a.close(); await b.close();
+	}
 });

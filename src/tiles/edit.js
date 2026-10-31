@@ -30,7 +30,7 @@ import { writeManifest, readManifest } from "./manifest.js";
 import { encodeTile, COLUMN_TYPES } from "./tileFile.js";
 import { tileName } from "./TileStore.js";
 import { tightBox, phase } from "./build.js";
-import { loadTile, rawRecords } from "./read.js";
+import { loadTile, rawRecords, storePool } from "./read.js";
 import { nodeWorldBox } from "./select.js";
 import { compareKeys as keyOrder } from "./octree.js";
 
@@ -254,7 +254,7 @@ async function session(store, run, change) {
 		if (!disk || disk.seq !== store._seq) throw new LasError(ERROR_CODES.BAD_STORE, "the tile store changed in another tab or worker since it was opened here; open it again");
 		var m = store.manifest, len = m.recordLength, pack = packOf(store);
 		var body = JSON.parse(JSON.stringify(m)), written = [], replaced = [];
-		var put = async function (key, records, columns, oldSize, same) {
+		var put = async function (key, records, columns, oldSize, same, packed) {
 			var old = m.nodes[key];
 			// same: a column-only edit - the node's records go through as stored (packed or raw), its box stays
 			if (same) {
@@ -270,7 +270,7 @@ async function session(store, run, change) {
 			}
 			var count = records.length / len;
 			if (pack && store._onPack) store._onPack(key);
-			var bytes = encodeTile({ count: count, records: pack ? pack(records, 0, count) : records, compressed: !!pack, columns: columns });
+			var bytes = encodeTile({ count: count, records: packed || (pack ? pack(records, 0, count) : records), compressed: !!pack, columns: columns });
 			var name = tileName(key, old.gen + 1);
 			await be.put(name, bytes);
 			written.push(name);
@@ -304,6 +304,49 @@ async function session(store, run, change) {
 	}
 }
 
+var POOL_WAIT = 30000;   // ms the pool may take over one tile before that tile is done on this thread (as buildTiles packs)
+
+// A pool task that fails or does not answer in POOL_WAIT gives null: that tile is done on this thread instead
+function pooled(task) {
+	return new Promise(function (resolve) {
+		var timer = setTimeout(function () { resolve(null); }, POOL_WAIT);
+		Promise.resolve().then(task).then(function (r) { clearTimeout(timer); resolve(r); }, function () { clearTimeout(timer); resolve(null); });
+	});
+}
+
+// Rewrite nodes: each is loaded with its records raw, work(key, { t, records }) returns { records, columns } (or
+// null to leave it), and put writes it. On a compressed store, tiles are decoded and packed on the store's worker
+// pool, several at a time (threads: 1 for this thread only); a pool that fails or stalls hands the rest to this
+// thread. The files are the same either way. Progress and the signal are by group of tiles.
+async function rewriteNodes(store, put, keys, opts, work) {
+	var m = store.manifest, len = m.recordLength, pool = null, down = false;
+	var signal = opts && opts.signal;
+	if (m.laz && !(opts && opts.threads === 1) && keys.length >= 2) pool = await storePool(store, opts && opts.threads > 0 ? Math.floor(opts.threads) : 0);
+	var step = pool ? 2 * pool.size : 1, working = phase(opts && opts.onProgress, "edit", keys.length);
+	var one = async function (key) {
+		var t = await loadTile(store, key), records = null;
+		if (pool && !down && t.compressed && t.count) {
+			records = await pooled(function () { return pool.decode({ vlr: m.laz, recordLength: len, packed: t.records.slice().buffer, chunks: [{ s: 0, e: t.records.length, count: t.count }], base: 0 }); });
+			if (!records) down = true;
+		}
+		if (!records) records = rawRecords(store, t);
+		var out = work(key, { t: t, records: records });
+		if (!out) return;
+		var packed = null, count = out.records.length / len;
+		if (pool && !down && count) {
+			var r = await pooled(function () { return pool.compress({ vlr: m.laz, recordLength: len, records: out.records.slice().buffer, counts: [count] }); });
+			if (r) packed = r.bytes; else down = true;
+		}
+		await put(key, out.records, out.columns, t.size, null, packed);
+	};
+	for (var k = 0; k < keys.length; k += step) {
+		aborted(signal);
+		working.tick(k);
+		await Promise.all(keys.slice(k, k + step).map(one));
+	}
+	working.finish();
+}
+
 async function removeEach(be, names) {
 	for (var i = 0; i < names.length; i++) { try { await be.remove(names[i]); } catch (e) { /* the next opening sweeps it */ } }
 }
@@ -316,14 +359,13 @@ function removeWhere(store, sel, keepSelected, opts) {
 		var removed = 0;
 		return session(store, async function (put, m) {
 			var len = m.recordLength;
-			var keys = keepSelected ? Object.keys(m.nodes).sort(keyOrder) : Object.keys(sel.tiles).sort(keyOrder);
-			var working = phase(opts && opts.onProgress, "edit", keys.length);
-			for (var i = 0; i < keys.length; i++) {
-				aborted(opts && opts.signal);
-				working.tick(i);
-				var key = keys[i], node = m.nodes[key], picked = sel.tiles[key] || new Uint32Array(0);
-				if (!node.count || (keepSelected && picked.length === node.count) || (!keepSelected && !picked.length)) continue;
-				var n = await readNode(store, key), flag = new Uint8Array(node.count);
+			// the tiles with something to remove (or, for keep, something to keep out); the rest stay as they are
+			var keys = (keepSelected ? Object.keys(m.nodes) : Object.keys(sel.tiles)).sort(keyOrder).filter(function (key) {
+				var node = m.nodes[key], picked = sel.tiles[key] || new Uint32Array(0);
+				return node.count && !(keepSelected && picked.length === node.count) && !(!keepSelected && !picked.length);
+			});
+			await rewriteNodes(store, put, keys, opts, function (key, n) {
+				var node = m.nodes[key], picked = sel.tiles[key] || new Uint32Array(0), flag = new Uint8Array(node.count);
 				for (var p = 0; p < picked.length; p++) flag[picked[p]] = 1;
 				var stay = keepSelected ? 1 : 0, kept = 0;
 				for (var q = 0; q < node.count; q++) if (flag[q] === stay) kept++;
@@ -335,16 +377,17 @@ function removeWhere(store, sel, keepSelected, opts) {
 					o++;
 				}
 				removed += node.count - kept;
-				await put(key, records, columns, n.t.size);
-			}
-			working.finish();
+				return { records: records, columns: columns };
+			});
 			return { removed: removed };
 		}, function (body) { body.deletes++; });
 	});
 }
 
 /**
- * Delete the selected points. opts: signal (stops it between tiles: ABORTED, the store as it was), onProgress({ phase: "edit", done, total }) by tile.
+ * Delete the selected points. opts: signal (stops it between groups of tiles: ABORTED, the store as it was),
+ * onProgress({ phase: "edit", done, total }) by tile, threads (1: no worker pool; a compressed store's tiles are
+ * decoded and packed on the store's pool).
  */
 export function deletePoints(store, sel, opts) { return removeWhere(store, sel, false, opts); }
 
@@ -373,7 +416,8 @@ function checkTyped(type, v, name, where) {
 
 /**
  * Set a field for the selected points: one value, or { key: typed array } in the selection's order.
- * opts: signal (stops it between tiles: ABORTED, the store as it was), onProgress({ phase: "edit", done, total }) by tile.
+ * opts: signal (stops it between groups of tiles: ABORTED, the store as it was), onProgress({ phase: "edit", done, total }),
+ * threads (1: no worker pool). A compressed store's tiles are decoded and packed on the store's worker pool.
  */
 export function setColumn(store, sel, name, value, opts) {
 	return queued(store, function () {
@@ -394,19 +438,24 @@ export function setColumn(store, sel, name, value, opts) {
 			}
 		});
 		return session(store, async function (put) {
+			if (ai < 0) {
+				// a standard field: each tile's records re-encoded (decoded and packed on the pool for a compressed store)
+				await rewriteNodes(store, put, keys, opts, function (key, n) {
+					return { records: patchField(store, n.records, name, sel.tiles[key], perTile ? value[key] : null, value), columns: n.t.columns };
+				});
+				return;
+			}
+			// an added column: the typed array only, the records go through as stored
 			var working = phase(opts && opts.onProgress, "edit", keys.length);
 			for (var t = 0; t < keys.length; t++) {
 				aborted(opts && opts.signal);
 				working.tick(t);
-				var key = keys[t], idx = sel.tiles[key], n = ai >= 0 ? await readNodeColumns(store, key) : await readNode(store, key), want = perTile ? value[key] : null;
-				var records = n.records, columns = n.t.columns;
-				if (ai >= 0) {
-					var col = columns[ai].slice(), big = EXTRA_TYPES[m.columns[ai].type].big;
-					for (var i = 0; i < idx.length; i++) { var v = perTile ? want[i] : value; col[idx[i]] = big ? BigInt(v) : v; }
-					columns = columns.slice();
-					columns[ai] = col;
-				} else records = patchField(store, records, name, idx, perTile ? want : null, value);
-				await put(key, records, columns, n.t.size, ai >= 0 ? n : null);
+				var key = keys[t], idx = sel.tiles[key], n = await readNodeColumns(store, key), want = perTile ? value[key] : null;
+				var col = n.t.columns[ai].slice(), big = EXTRA_TYPES[m.columns[ai].type].big;
+				for (var i = 0; i < idx.length; i++) { var v = perTile ? want[i] : value; col[idx[i]] = big ? BigInt(v) : v; }
+				var columns = n.t.columns.slice();
+				columns[ai] = col;
+				await put(key, null, columns, n.t.size, n);
 			}
 			working.finish();
 		}, null);
