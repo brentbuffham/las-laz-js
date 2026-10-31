@@ -221,7 +221,9 @@ function editing(name) {
  * Select points tile by tile: fn(cols, { key, count, box }) returns ascending indices or null.
  * @function
  * @param {function} fn
- * @param {{fields?: string[], box?: object}} [opts] - fields read (x, y, z); only tiles meeting box
+ * @param {{fields?: string[], box?: object, signal?: AbortSignal, onProgress?: function({phase, done, total}), threads?: number}} [opts] -
+ *   fields read (x, y, z); only tiles meeting box; signal and onProgress ({ phase: "select" }, by tile read) as selectBox,
+ *   selectPolygon, selectScreen and selectClasses take them too
  * @returns {Promise<{deletes: number, count: number, tiles: object}>} a tile selection
  */
 TileStore.prototype.select = editing("select");
@@ -233,11 +235,11 @@ TileStore.prototype.selectPolygon = editing("selectPolygon");
 TileStore.prototype.selectScreen = editing("selectScreen");
 /** The points of some classes. @function */
 TileStore.prototype.selectClasses = editing("selectClasses");
-/** Delete the selected points. @function @returns {Promise<{removed: number}>} */
+/** Delete the selected points; opts { signal, onProgress } (phase "edit", by tile). @function @returns {Promise<{removed: number}>} */
 TileStore.prototype.deletePoints = editing("deletePoints");
-/** Keep only the selected points. @function @returns {Promise<{removed: number}>} */
+/** Keep only the selected points; opts { signal, onProgress } as deletePoints. @function @returns {Promise<{removed: number}>} */
 TileStore.prototype.keepPoints = editing("keepPoints");
-/** Set a field for the selected points: a value, or { key: typed array }. @function */
+/** Set a field for the selected points: a value, or { key: typed array }; opts { signal, onProgress } as deletePoints. @function */
 TileStore.prototype.setColumn = editing("setColumn");
 /** Add a column (name, type "u8" ... "f64", fill) to every point. @function */
 TileStore.prototype.addColumn = editing("addColumn");

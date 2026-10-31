@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.2 (2026-10-31)
+
+Added (a big selection or column edit on a tile store gave nothing to show and nothing to cancel):
+- `select`, `selectBox`, `selectPolygon`, `selectScreen` and `selectClasses` take `signal` and `onProgress` (and `threads`)
+  in their options. `onProgress({ phase: "select", done, total })` counts the tiles to be read, which are known before
+  the first is read; a signal stops the selection with ABORTED between tiles.
+- `select` decodes the tiles it reads through the store's worker pool, as `readTiles` does (`threads: 1` keeps it on the
+  calling thread). The selection is the same.
+- `setColumn`, `deletePoints` and `keepPoints` take `{ signal, onProgress }` as a last argument.
+  `onProgress({ phase: "edit", done, total })` counts the tiles rewritten. A signal stops the edit with ABORTED
+  between tiles, and the store is as it was (the new tile files are removed, the manifest is not written).
+
 ## 0.19.1 (2026-10-31)
 
 Fixed (a tile build that stalled for good at 98% in Chrome, with a 177 M point cloud on 16 workers):

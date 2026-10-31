@@ -29,12 +29,13 @@ import { screenOf, boxOnScreen } from "../ops/screen.js";
 import { writeManifest, readManifest } from "./manifest.js";
 import { encodeTile, COLUMN_TYPES } from "./tileFile.js";
 import { tileName } from "./TileStore.js";
-import { tightBox } from "./build.js";
+import { tightBox, phase } from "./build.js";
 import { loadTile, rawRecords } from "./read.js";
 import { nodeWorldBox } from "./select.js";
 import { compareKeys as keyOrder } from "./octree.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
+function aborted(signal) { if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the edit was stopped"); }
 
 var SETTABLE = { classification: [0, 255], classificationFlags: [0, 15], intensity: [0, 65535], userData: [0, 255], pointSourceId: [0, 65535], red: [0, 65535], green: [0, 65535], blue: [0, 65535] };
 var MORE_RESERVED = ["count", "positions", "bounds", "stats", "colours", "normal", "extra", "extraBytes", "index"];
@@ -67,16 +68,24 @@ function axisAgainst(lo, hi, min, max, e) {
  * A selection across the store: fn picks points tile by tile.
  * @param {object} store
  * @param {function(object, {key: string, count: number, box: object}): (Uint32Array|null)} fn
- * @param {{fields?: string[], box?: object, classify?: function(object): number}} [opts] - box: only tiles
+ * @param {{fields?: string[], box?: object, classify?: function(object): number, signal?: AbortSignal,
+ *   onProgress?: function({phase: string, done: number, total: number}), threads?: number}} [opts] - box: only tiles
  *   whose box (moved by the transform) meets it; classify(box): -1 for a tile none of whose points fn
- *   would pick (skipped), 1 for one all of whose points it would (taken whole, not read), 0 to read it
+ *   would pick (skipped), 1 for one all of whose points it would (taken whole, not read), 0 to read it.
+ *   The tiles to read are known before the first is read: onProgress({ phase: "select", done, total }) counts
+ *   them; signal stops it (ABORTED; nothing is written by a selection); LAZ tiles decode on the store's pool
+ *   (threads: 1 for this thread only)
  * @returns {Promise<{deletes: number, count: number, tiles: object}>}
+ * @throws {LasError} ABORTED
  */
 export async function select(store, fn, opts) {
 	opts = opts || {};
 	if (typeof fn !== "function") throw bad("select needs a function (cols, tile) -> Uint32Array or null");
 	if (opts.classify !== undefined && typeof opts.classify !== "function") throw bad("classify must be a function (box) -> -1, 0 or 1");
 	var m = store.manifest, keys = Object.keys(m.nodes).sort(keyOrder), out = { deletes: m.deletes, count: 0, tiles: {} };
+	aborted(opts.signal);
+	// every tile is classified first (no reads), so the tiles to read are known and progress counts them
+	var plan = [], toRead = [];
 	for (var i = 0; i < keys.length; i++) {
 		var node = m.nodes[keys[i]];
 		if (!node.count) continue;
@@ -84,26 +93,40 @@ export async function select(store, fn, opts) {
 		if (opts.box && !meets(nb, opts.box)) continue;
 		var verdict = opts.classify ? opts.classify(nb) : 0;
 		if (verdict < 0) continue;
-		if (verdict > 0) {
-			var all = new Uint32Array(node.count);
-			for (var a = 0; a < all.length; a++) all[a] = a;
-			out.tiles[keys[i]] = all;
-			out.count += all.length;
-			continue;
-		}
-		var cols = await store.readTile(keys[i], { fields: opts.fields || ["x", "y", "z"] });
-		var picked = fn(cols, { key: keys[i], count: node.count, box: nb });
-		if (picked && picked.length) { out.tiles[keys[i]] = picked instanceof Uint32Array ? picked : Uint32Array.from(picked); out.count += picked.length; }
+		plan.push({ key: keys[i], count: node.count, box: nb, whole: verdict > 0 });
+		if (verdict <= 0) toRead.push(keys[i]);
 	}
+	var reading = phase(opts.onProgress, "select", toRead.length), done = 0;
+	var gen = store.readTiles(toRead, { fields: opts.fields || ["x", "y", "z"], threads: opts.threads });
+	try {
+		for (var p = 0; p < plan.length; p++) {
+			var step = plan[p];
+			aborted(opts.signal);
+			if (step.whole) {
+				var all = new Uint32Array(step.count);
+				for (var a = 0; a < all.length; a++) all[a] = a;
+				out.tiles[step.key] = all;
+				out.count += all.length;
+				continue;
+			}
+			var got = await gen.next();
+			var picked = fn(got.value.points, { key: step.key, count: step.count, box: step.box });
+			if (picked && picked.length) { out.tiles[step.key] = picked instanceof Uint32Array ? picked : Uint32Array.from(picked); out.count += picked.length; }
+			reading.tick(++done);
+		}
+	} finally {
+		await gen.return();
+	}
+	reading.finish();
 	return out;
 }
 
-/** The points inside a box (world coordinates, after the store transform). */
-export function selectBox(store, box) {
+/** The points inside a box (world coordinates, after the store transform); opts: signal, onProgress, threads (as select). */
+export function selectBox(store, box, opts) {
 	if (!box || typeof box !== "object") throw bad("box must be an object { minX, maxX, minY, maxY, minZ, maxZ }");
 	var useZ = box.minZ !== undefined || box.maxZ !== undefined;
 	return select(store, function (cols) { return boxOf(cols, box); }, {
-		fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: box,
+		fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: box, signal: opts && opts.signal, onProgress: opts && opts.onProgress, threads: opts && opts.threads,
 		classify: function (nb) {
 			var e = slack(nb), v = Math.min(axisAgainst(nb.minX, nb.maxX, box.minX, box.maxX, e), axisAgainst(nb.minY, nb.maxY, box.minY, box.maxY, e));
 			return useZ ? Math.min(v, axisAgainst(nb.minZ, nb.maxZ, box.minZ, box.maxZ, e)) : v;
@@ -111,7 +134,7 @@ export function selectBox(store, box) {
 	});
 }
 
-/** The points inside a polygon in XY (selectPolygon's options): a tile wholly inside taken without reading it. */
+/** The points inside a polygon in XY (selectPolygon's options, and signal, onProgress, threads as select): a tile wholly inside taken without reading it. */
 export function selectPolygon(store, polygon, opts) {
 	if (!polygon || polygon.length < 6) throw bad("polygon must be [x0, y0, x1, y1, ...] with 3 or more vertices");
 	var shape = makePolygonTest(polygon, opts);
@@ -126,7 +149,7 @@ export function selectPolygon(store, polygon, opts) {
 	if (opts && opts.maxZ !== undefined) b.maxZ = opts.maxZ;
 	var useZ = opts && (opts.minZ !== undefined || opts.maxZ !== undefined);
 	return select(store, function (cols) { return polygonOf(cols, polygon, opts); }, {
-		fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: b,
+		fields: useZ ? ["x", "y", "z"] : ["x", "y"], box: b, signal: opts && opts.signal, onProgress: opts && opts.onProgress, threads: opts && opts.threads,
 		classify: function (nb) {
 			var e = slack(nb), z = useZ ? axisAgainst(nb.minZ, nb.maxZ, opts.minZ, opts.maxZ, e) : 1;
 			if (z < 0) return -1;
@@ -143,19 +166,19 @@ export function selectPolygon(store, polygon, opts) {
  * @param {object} store
  * @param {{viewProjection: number[], width: number, height: number, localOrigin?: {x, y, z}}} view - as selectTiles
  * @param {number[]|TypedArray} polygon - pixels from the view's top-left, y down
- * @param {{boundary?: "touching"|"inside", tolerance?: number}} [opts]
+ * @param {{boundary?: "touching"|"inside", tolerance?: number, signal?: AbortSignal, onProgress?: function, threads?: number}} [opts] - signal, onProgress, threads as select
  */
 export function selectScreen(store, view, polygon, opts) {
 	var s = screenOf(view), shape = makePolygonTest(polygon, opts), margin = shape.tolerance + 1e-6 * (1 + s.width + s.height);
 	return select(store, function (cols) { return screenSel(cols, view, polygon, opts); }, {
-		fields: ["x", "y", "z"],
+		fields: ["x", "y", "z"], signal: opts && opts.signal, onProgress: opts && opts.onProgress, threads: opts && opts.threads,
 		classify: function (nb) { return boxOnScreen(s, nb, shape.points, margin); }
 	});
 }
 
-/** The points of some classes. */
-export function selectClasses(store, classes) {
-	return select(store, function (cols) { return classesOf(cols, classes); }, { fields: ["classification"] });
+/** The points of some classes; opts: signal, onProgress, threads (as select). */
+export function selectClasses(store, classes, opts) {
+	return select(store, function (cols) { return classesOf(cols, classes); }, { fields: ["classification"], signal: opts && opts.signal, onProgress: opts && opts.onProgress, threads: opts && opts.threads });
 }
 
 /**
@@ -287,14 +310,17 @@ async function removeEach(be, names) {
 
 // ---- delete / keep ----
 
-function removeWhere(store, sel, keepSelected) {
+function removeWhere(store, sel, keepSelected, opts) {
 	return queued(store, function () {
 		checkSelection(store, sel);
 		var removed = 0;
 		return session(store, async function (put, m) {
 			var len = m.recordLength;
 			var keys = keepSelected ? Object.keys(m.nodes).sort(keyOrder) : Object.keys(sel.tiles).sort(keyOrder);
+			var working = phase(opts && opts.onProgress, "edit", keys.length);
 			for (var i = 0; i < keys.length; i++) {
+				aborted(opts && opts.signal);
+				working.tick(i);
 				var key = keys[i], node = m.nodes[key], picked = sel.tiles[key] || new Uint32Array(0);
 				if (!node.count || (keepSelected && picked.length === node.count) || (!keepSelected && !picked.length)) continue;
 				var n = await readNode(store, key), flag = new Uint8Array(node.count);
@@ -311,16 +337,19 @@ function removeWhere(store, sel, keepSelected) {
 				removed += node.count - kept;
 				await put(key, records, columns, n.t.size);
 			}
+			working.finish();
 			return { removed: removed };
 		}, function (body) { body.deletes++; });
 	});
 }
 
-/** Delete the selected points. */
-export function deletePoints(store, sel) { return removeWhere(store, sel, false); }
+/**
+ * Delete the selected points. opts: signal (stops it between tiles: ABORTED, the store as it was), onProgress({ phase: "edit", done, total }) by tile.
+ */
+export function deletePoints(store, sel, opts) { return removeWhere(store, sel, false, opts); }
 
-/** Keep only the selected points. */
-export function keepPoints(store, sel) { return removeWhere(store, sel, true); }
+/** Keep only the selected points (opts as deletePoints). */
+export function keepPoints(store, sel, opts) { return removeWhere(store, sel, true, opts); }
 
 // ---- columns ----
 
@@ -344,8 +373,9 @@ function checkTyped(type, v, name, where) {
 
 /**
  * Set a field for the selected points: one value, or { key: typed array } in the selection's order.
+ * opts: signal (stops it between tiles: ABORTED, the store as it was), onProgress({ phase: "edit", done, total }) by tile.
  */
-export function setColumn(store, sel, name, value) {
+export function setColumn(store, sel, name, value, opts) {
 	return queued(store, function () {
 		checkSelection(store, sel);
 		var m = store.manifest, added = m.columns.map(function (c) { return c.name; }), ai = added.indexOf(name);
@@ -364,7 +394,10 @@ export function setColumn(store, sel, name, value) {
 			}
 		});
 		return session(store, async function (put) {
+			var working = phase(opts && opts.onProgress, "edit", keys.length);
 			for (var t = 0; t < keys.length; t++) {
+				aborted(opts && opts.signal);
+				working.tick(t);
 				var key = keys[t], idx = sel.tiles[key], n = ai >= 0 ? await readNodeColumns(store, key) : await readNode(store, key), want = perTile ? value[key] : null;
 				var records = n.records, columns = n.t.columns;
 				if (ai >= 0) {
@@ -375,6 +408,7 @@ export function setColumn(store, sel, name, value) {
 				} else records = patchField(store, records, name, idx, perTile ? want : null, value);
 				await put(key, records, columns, n.t.size, ai >= 0 ? n : null);
 			}
+			working.finish();
 		}, null);
 	});
 }

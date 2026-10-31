@@ -260,3 +260,62 @@ test("setPositions moves points in world coordinates, through the store transfor
 	await assert.rejects(store.setPositions({ [key]: { index: Uint32Array.from([2, 0]), x: x, y: y, z: z } }), /ascending/);
 	await assert.rejects(store.setPositions({ nope: { index: idx, x: x, y: y, z: z } }), /not in the store/);
 });
+
+function everyPoint(cols) { return Uint32Array.from({ length: cols.count }, function (_, i) { return i; }); }
+
+test("select reports the tiles it reads, and stops on a signal", async function () {
+	var store = await build(B7), seen = [];
+	var sel = await store.selectBox(BOX, { onProgress: function (p) { seen.push(p); } });
+	var reads = seen[seen.length - 1].total;
+	assert.ok(reads > 1);
+	assert.ok(seen.every(function (p) { return p.phase === "select" && p.total === reads; }));
+	assert.equal(seen[seen.length - 1].done, reads, "ends at the total");
+	assert.ok(seen.every(function (p, i) { return !i || p.done > seen[i - 1].done; }), "climbs");
+	assert.deepEqual((await store.selectBox(BOX)).tiles, sel.tiles, "the same selection without a callback");
+	var ac = new AbortController(), count = 0;
+	await assert.rejects(store.select(function (cols) { count++; ac.abort(); return null; }, { signal: ac.signal }), function (e) { return e.code === "ABORTED"; });
+	assert.equal(count, 1, "no tile is read after the signal");
+	var done = new AbortController(); done.abort();
+	await assert.rejects(store.selectClasses([2], { signal: done.signal }), function (e) { return e.code === "ABORTED"; });
+});
+
+test("select on a compressed store reads through the pool and gives the raw store's selection", async function () {
+	var raw = await build(B7), laz = await build(B7, { compress: true });
+	try {
+		var a = await raw.selectBox(BOX), b = await laz.selectBox(BOX);
+		assert.equal(b.count, a.count);
+		assert.deepEqual(Object.keys(b.tiles).length, Object.keys(a.tiles).length);
+		var one = await laz.selectBox(BOX, { threads: 1 });
+		assert.deepEqual(one.tiles, b.tiles);
+	} finally {
+		await raw.close(); await laz.close();
+	}
+});
+
+test("setColumn, deletePoints and keepPoints report by tile, and a signal leaves the store as it was", async function () {
+	var map = new Map(), store = await build(B7, { where: { memory: map } });
+	var was = await ids(store), wasManifest = JSON.parse(JSON.stringify(store.manifest));
+	var seen = [];
+	var sel = await store.select(everyPoint);
+	var touched = Object.keys(sel.tiles).length;
+	assert.ok(touched > 2);
+	await store.setColumn(sel, "classification", 5, { onProgress: function (p) { seen.push(p); } });
+	assert.ok(seen.every(function (p) { return p.phase === "edit" && p.total === touched; }));
+	assert.equal(seen[seen.length - 1].done, touched);
+	// stopped after the first tile: nothing changes, no orphan file stays
+	for (var op of ["setColumn", "deletePoints", "keepPoints"]) {
+		var again = await store.select(everyPoint), ac = new AbortController(), before = JSON.parse(JSON.stringify(store.manifest));
+		var args = op === "setColumn" ? [again, "classification", 9] : [again];
+		args.push({ signal: ac.signal, onProgress: function () { ac.abort(); } });
+		await assert.rejects(store[op].apply(store, args), function (e) { return e.code === "ABORTED"; });
+		assert.deepEqual(store.manifest, before, op + ": the manifest is unchanged");
+	}
+	assert.equal(store.manifest.deletes, wasManifest.deletes, "no delete counted");
+	var reopened = await openTiles({ memory: map });
+	assert.deepEqual(await ids(reopened), was, "every point is still there");
+	var names = await reopened._backend.list(), keep = new Set(["store-a.json", "store-b.json", "source.head", "source.evlrs"]);
+	Object.keys(reopened.manifest.nodes).forEach(function (k) { keep.add(k + "." + reopened.manifest.nodes[k].gen + ".tile"); });
+	assert.deepEqual(names.filter(function (n) { return !keep.has(n); }), [], "no orphan generations");
+	var cls = await reopened.readTile(Object.keys(reopened.manifest.nodes)[0], { fields: ["classification"] });
+	assert.ok(Array.from(cls.classification).every(function (c) { return c === 5; }), "the finished setColumn stands; the stopped ones did not run");
+});

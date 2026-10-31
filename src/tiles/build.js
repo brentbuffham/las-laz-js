@@ -128,7 +128,7 @@ async function refineChunks(las, cube, len, chunks, chunkPoints, signal) {
 }
 
 // Each value once, climbing; the total only from finish()
-function phase(onProgress, name, total) {
+export function phase(onProgress, name, total) {
 	var last = -1;
 	return {
 		tick: function (done) {
