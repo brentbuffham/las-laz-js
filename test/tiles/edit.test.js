@@ -270,6 +270,7 @@ test("select reports the tiles it reads, and stops on a signal", async function 
 	var reads = seen[seen.length - 1].total;
 	assert.ok(reads > 1);
 	assert.ok(seen.every(function (p) { return p.phase === "select" && p.total === reads; }));
+	assert.equal(seen[0].done, 0, "the first report comes before any tile is read");
 	assert.equal(seen[seen.length - 1].done, reads, "ends at the total");
 	assert.ok(seen.every(function (p, i) { return !i || p.done > seen[i - 1].done; }), "climbs");
 	assert.deepEqual((await store.selectBox(BOX)).tiles, sel.tiles, "the same selection without a callback");

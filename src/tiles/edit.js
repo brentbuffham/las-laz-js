@@ -97,6 +97,7 @@ export async function select(store, fn, opts) {
 		if (verdict <= 0) toRead.push(keys[i]);
 	}
 	var reading = phase(opts.onProgress, "select", toRead.length), done = 0;
+	reading.tick(0);   // the tiles are classified, the first is yet to be read: tells the caller the scan has begun
 	var gen = store.readTiles(toRead, { fields: opts.fields || ["x", "y", "z"], threads: opts.threads });
 	try {
 		for (var p = 0; p < plan.length; p++) {

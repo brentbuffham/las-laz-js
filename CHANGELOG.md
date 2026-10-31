@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.19.4 (2026-10-31)
+
+- `select` and the `select*` wrappers report `onProgress({ phase: "select", done: 0, total })` as soon as the tiles are classified, before the pool starts or any tile is read, so a caller can tell a scan has begun.
+
 ## 0.19.3 (2026-10-31)
 
 Faster (a Categorise on a big compressed tile store ran one tile at a time on one thread):
