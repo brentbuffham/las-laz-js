@@ -18,7 +18,7 @@ import { roomFor } from "./build.js";
 import { queued } from "./edit.js";
 import { compareKeys as keyOrder } from "./octree.js";
 
-var PUTS = 8;   // files copied at once (as buildTiles writes them)
+var PUTS = 32;   // files copied at once (OPFS spends about 2 ms creating a file whatever its size: more in flight hides the waits)
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 function aborted(signal) { if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the copy was stopped"); }
@@ -68,7 +68,7 @@ async function copy(store, where, opts) {
 				if (name === EVLRS_NAME) return;   // a store with no EVLR blob
 				throw new LasError(ERROR_CODES.BAD_STORE, "the tile store has lost " + name + " (changed in another tab or worker?); open it again");
 			}
-			await target.put(name, bytes);
+			await target.put(name, bytes, { flush: false });   // the manifest, last, is flushed; a cut-short copy is removed
 		};
 		for (var i = 0; i < names.length; i += PUTS) {
 			aborted(signal);
@@ -76,6 +76,7 @@ async function copy(store, where, opts) {
 			done = Math.min(total, i + PUTS);
 			if (opts.onProgress) opts.onProgress({ phase: "clone", done: done, total: total });
 		}
+		aborted(signal);   // a stop that came with the last file
 		var now = await readManifest(src);
 		if (!now || now.seq !== store._seq) throw new LasError(ERROR_CODES.BAD_STORE, "the tile store changed in another tab or worker during the copy; open it again and copy it then");
 		var seq = await writeManifest(target, m);

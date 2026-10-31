@@ -101,7 +101,7 @@ function opfsBackend(where) {
 		if (!d) { d = folder(where.root, sub ? base + "/" + sub : base, true); dirs.set(sub, d); d.catch(function () { dirs.delete(sub); }); }
 		return d;
 	}
-	async function writer(p) {
+	async function writer(p, flush) {
 		var fh = await (await dirFor(p[0])).getFileHandle(p[1], { create: true }), h = await fh.createSyncAccessHandle();
 		h.truncate(0);
 		var at = 0;
@@ -110,7 +110,7 @@ function opfsBackend(where) {
 				try { h.write(bytes, { at: at }); } catch (e) { throw isQuotaError(e) ? noSpace("writing tile store " + where.opfs + " (" + p[1] + ")") : e; }
 				at += bytes.length;
 			},
-			close: function () { h.flush(); h.close(); }
+			close: function () { if (flush !== false) h.flush(); h.close(); }
 		};
 	}
 	function missing(e) { return e && e.name === "NotFoundError"; }
@@ -139,9 +139,10 @@ function opfsBackend(where) {
 				throw e;
 			}
 		},
-		put: async function (name, bytes) {
+		// opts.flush false: the file is closed without forcing it to disk (a copy whose manifest comes last)
+		put: async function (name, bytes, opts) {
 			var p = split(name), w;
-			try { w = await writer(p); } catch (e) { throw await refused(p, e); }
+			try { w = await writer(p, opts && opts.flush); } catch (e) { throw await refused(p, e); }
 			try { w.write(bytes); } finally { w.close(); }
 		},
 		appender: async function (name) {

@@ -15,6 +15,8 @@
 //      (s / e index into packed; base is packed's file offset)
 // In (compress): { id, op: "compress", vlr, recordLength, records: ArrayBuffer, counts: number[] }
 //      (counts: each chunk's points, back to back from the start of records)
+// In (move): { id, op: "move", vlr, recordLength, count, packed: ArrayBuffer, scale, offset, storeT, inv, index: ArrayBuffer,
+//      and T, or x / y / z: ArrayBuffers } (one packed tile with some points moved: src/tiles/movePoints.js)
 // In (octree): { id, op: "octree", records: ArrayBuffer, recordLength, cube, rootKey, opts, laz }
 //      (a tile build's chunk: src/tiles/chunkNodes.js)
 // In (bucket): { id, op: "bucket", records: ArrayBuffer, recordLength, cube, chunks: keys, plan }
@@ -22,7 +24,7 @@
 // Out: { ready: true } once listening, then per task
 //      decode { id, records: ArrayBuffer }, compress { id, chunks: ArrayBuffer, sizes: number[] }
 //      (the chunks back to back, and each one's length), octree { id, nodes: [{ key, count, records: ArrayBuffer, packed, box }] },
-//      bucket { id, records: ArrayBuffer, runs: [chunk, points, ...] },
+//      bucket { id, records: ArrayBuffer, runs: [chunk, points, ...] }, move { id, bytes: ArrayBuffer, box },
 //      or { id, error: { code, message, offset } }
 //==========================================================
 
@@ -35,6 +37,8 @@ import { findFacets } from "../facets/findFacets.js";
 import { pointNormals } from "../ops/normals.js";
 import { openTiles } from "../tiles/TileStore.js";
 import { REGION_JOBS } from "../tiles/regionJobs.js";
+import { movePoints } from "../tiles/movePoints.js";
+import { tightBox } from "../tiles/tightBox.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -66,6 +70,7 @@ function handle(m) {
 		if (m.op === "compress") compress(m);
 		else if (m.op === "octree") octree(m);
 		else if (m.op === "bucket") bucket(m);
+		else if (m.op === "move") move(m);
 		else if (m.op === "fragments") fragments(m);
 		else if (m.op === "facets") facets(m);
 		else if (REGION_JOBS[m.op]) region(m);
@@ -86,6 +91,18 @@ function compress(m) {
 	var out = new Uint8Array(total), o = 0;
 	chunks.forEach(function (c) { out.set(c, o); o += c.length; });
 	port.post({ id: m.id, chunks: out.buffer, sizes: chunks.map(function (c) { return c.length; }) }, [out.buffer]);
+}
+
+// one packed tile: decoded, the points moved, packed again and measured, all here
+function move(m) {
+	var len = m.recordLength, bytes = new Uint8Array(m.packed), records = new Uint8Array(m.count * len);
+	decoder(m)(bytes, 0, bytes.length, m.count, new DataView(records.buffer), 0, 0);
+	movePoints(records, len, {
+		index: new Uint32Array(m.index), scale: m.scale, offset: m.offset, storeT: m.storeT, inv: m.inv, T: m.T,
+		x: m.x ? new Float64Array(m.x) : null, y: m.y ? new Float64Array(m.y) : null, z: m.z ? new Float64Array(m.z) : null
+	});
+	var out = compressor(m)(records, 0, m.count).slice();
+	port.post({ id: m.id, bytes: out.buffer, box: tightBox(records, len, m.scale, m.offset) }, [out.buffer]);
 }
 
 function octree(m) {

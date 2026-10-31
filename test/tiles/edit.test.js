@@ -484,3 +484,37 @@ test("mergeStores and splitStore read the source's tiles on its pool, and give t
 		await a.close(); await b.close();
 	}
 });
+
+test("transformPoints and setPositions move points inside the pool's workers; a pool that fails hands the tiles to this thread", async function () {
+	var T = { m: [0, -1, 0, 1, 0, 0, 0, 0, 1], t: [478100 + 6772100 + 30, 6772100 - 478100 - 12, 2.5] };   // a quarter turn about (478100, 6772100), and a shift
+	var mapA = new Map(), mapB = new Map(), mapC = new Map();
+	var a = await build(B7, { compress: true, where: { memory: mapA } }), b = await build(B7, { compress: true, where: { memory: mapB } }), c = await build(B7, { compress: true, where: { memory: mapC } });
+	try {
+		await a.transform(makeTransform({ translate: [5, 0, 0] })); await b.transform(makeTransform({ translate: [5, 0, 0] })); await c.transform(makeTransform({ translate: [5, 0, 0] }));
+		var selA = await a.select(evenPoints), selB = await b.select(evenPoints, { threads: 1 }), selC = await c.select(evenPoints);
+		var moves = 0, move = a._pool.move;
+		a._pool.move = function () { moves++; return move.apply(a._pool, arguments); };
+		await a.transformPoints(selA, T);
+		assert.equal(moves, Object.keys(selA.tiles).length, "each tile was moved in a worker");
+		await b.transformPoints(selB, T, { threads: 1 });
+		c._pool.move = function () { return Promise.reject(new Error("worker lost")); };
+		await c.transformPoints(selC, T);
+		assert.deepEqual(tileFiles(mapA), tileFiles(mapB));
+		assert.deepEqual(tileFiles(mapC), tileFiles(mapB));
+		assert.deepEqual(a.manifest.nodes, b.manifest.nodes, "the tile boxes too");
+	} finally {
+		await a.close(); await b.close(); await c.close();
+	}
+});
+
+test("a move that does not fit the scale fails in the worker and in this thread alike, leaving the store as it was", async function () {
+	var store = await build(B7, { compress: true });
+	try {
+		var sel = await store.select(evenPoints), was = JSON.parse(JSON.stringify(store.manifest));
+		await assert.rejects(store.transformPoints(sel, { m: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [1e10, 0, 0] }), /int32 overflow/);
+		assert.deepEqual(store.manifest, was);
+		await assert.rejects(store.transformPoints(sel, { m: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [1e10, 0, 0] }, { threads: 1 }), /int32 overflow/);
+	} finally {
+		await store.close();
+	}
+});

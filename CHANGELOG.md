@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.6 (2026-11-01)
+
+Faster:
+- `transformPoints` and `setPositions` on a compressed store: a pool worker decodes the tile, moves the points, packs it and
+  measures its box, and no records come back to the calling thread. Only the X, Y, Z bytes of the moved records are written (the
+  other fields are never decoded). 1.5 M points of 3 M moved, 149 tiles: 1.7 s -> 1.2 s on the pool, 8.0 s -> 5.6 s on one thread.
+  The files are the same on the pool and on one thread, and a pool that fails hands the tile to the calling thread.
+- `cloneStore`: 32 files in flight instead of 8, and each file closed without forcing it to disk (the manifest, written last, is
+  still flushed; a copy cut short is still removed). In Chrome, 1,000 files of 90 KB in OPFS: 4.1-4.6 s -> 2.7-2.8 s.
+  OPFS spends about 2.2 ms creating a file whatever its size (1 KB files cost the same as 90 KB ones), and creating files in
+  several workers was no quicker than in one, so a copy of N files stays near N x 2 ms.
+
 ## 0.19.5 (2026-10-31)
 
 Added:

@@ -171,6 +171,16 @@ export async function createLazPool(n, nodeUrl) {
 			return run(Object.assign({ op: "compress" }, task), [task.records], function (m) { return { bytes: new Uint8Array(m.chunks), sizes: m.sizes }; });
 		},
 		/**
+		 * Move some points of one packed tile (src/tiles/movePoints.js), on a worker: decoded, moved, packed and measured there.
+		 * @param {{vlr: object, recordLength: number, count: number, packed: ArrayBuffer, scale: object, offset: object,
+		 *   storeT: object|null, inv: object|null, index: ArrayBuffer, T?: object, x?: ArrayBuffer, y?: ArrayBuffer, z?: ArrayBuffer}} task - buffers transferred
+		 * @returns {Promise<{bytes: Uint8Array, box: number[]|null}>} the packed tile and its tight box
+		 */
+		move: function (task) {
+			var transfer = [task.packed, task.index].concat(task.x ? [task.x, task.y, task.z] : []);
+			return run(Object.assign({ op: "move" }, task), transfer, function (m) { return { bytes: new Uint8Array(m.bytes), box: m.box }; });
+		},
+		/**
 		 * Build one tile chunk's nodes (src/tiles/chunkNodes.js) from its records (transferred).
 		 * @param {{records: ArrayBuffer, recordLength: number, cube: object, rootKey: string, opts: object, laz: object|null}} task
 		 * @returns {Promise<Array<{key: string, count: number, records: Uint8Array, packed: boolean, box: number[]|null}>>}

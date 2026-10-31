@@ -29,7 +29,9 @@ import { screenOf, boxOnScreen } from "../ops/screen.js";
 import { writeManifest, readManifest } from "./manifest.js";
 import { encodeTile, COLUMN_TYPES } from "./tileFile.js";
 import { tileName } from "./TileStore.js";
-import { tightBox, phase } from "./build.js";
+import { phase } from "./build.js";
+import { tightBox } from "./tightBox.js";
+import { movePoints } from "./movePoints.js";
 import { loadTile, rawRecords, storePool } from "./read.js";
 import { nodeWorldBox } from "./select.js";
 import { compareKeys as keyOrder } from "./octree.js";
@@ -255,7 +257,8 @@ async function session(store, run, change) {
 		if (!disk || disk.seq !== store._seq) throw new LasError(ERROR_CODES.BAD_STORE, "the tile store changed in another tab or worker since it was opened here; open it again");
 		var m = store.manifest, len = m.recordLength, pack = packOf(store);
 		var body = JSON.parse(JSON.stringify(m)), written = [], replaced = [];
-		var put = async function (key, records, columns, oldSize, same, packed) {
+		// box with records null: the node was packed and measured on the pool (count and records as they were)
+		var put = async function (key, records, columns, oldSize, same, packed, box) {
 			var old = m.nodes[key];
 			// same: a column-only edit - the node's records go through as stored (packed or raw), its box stays
 			if (same) {
@@ -269,14 +272,14 @@ async function session(store, run, change) {
 				body.bytes += kept.length - oldSize;
 				return;
 			}
-			var count = records.length / len;
+			var measured = records === null, count = measured ? old.count : records.length / len;
 			if (pack && store._onPack) store._onPack(key);
 			var bytes = encodeTile({ count: count, records: packed || (pack ? pack(records, 0, count) : records), compressed: !!pack, columns: columns });
 			var name = tileName(key, old.gen + 1);
 			await be.put(name, bytes);
 			written.push(name);
 			replaced.push(tileName(key, old.gen));
-			body.nodes[key] = { count: count, gen: old.gen + 1, box: tightBox(records, len, m.scale, m.offset) };
+			body.nodes[key] = { count: count, gen: old.gen + 1, box: measured ? box : tightBox(records, len, m.scale, m.offset) };
 			body.bytes += bytes.length - oldSize;
 		};
 		var result, seq;
@@ -320,7 +323,9 @@ function pooled(task) {
 // pool, several at a time (threads: 1 for this thread only); a pool that fails or stalls hands the rest to this
 // thread. The files are the same either way. Progress is as each tile is written; the signal is checked between
 // groups of tiles. skip(key) true: the tile's records are not needed (work gets records: null), so they are not decoded.
-async function rewriteNodes(store, put, keys, opts, work, skip) {
+// remote(key, t) (compressed tiles on the pool only) returns a pool.move task for a tile, which a worker decodes, changes,
+// packs and measures with no records coming back here; null leaves the tile to work.
+async function rewriteNodes(store, put, keys, opts, work, skip, remote) {
 	var m = store.manifest, len = m.recordLength, pool = null, down = false;
 	var signal = opts && opts.signal;
 	if (m.laz && !(opts && opts.threads === 1) && keys.length >= 2) pool = await storePool(store, opts && opts.threads > 0 ? Math.floor(opts.threads) : 0);
@@ -328,6 +333,11 @@ async function rewriteNodes(store, put, keys, opts, work, skip) {
 	working.tick(0);
 	var one = async function (key) {
 		var t = await loadTile(store, key), records = null, none = !!skip && skip(key);
+		if (pool && !down && remote && t.compressed && t.count) {
+			var task = remote(key, t), r0 = task ? await pooled(function () { return pool.move(task); }) : null;
+			if (r0) { await put(key, null, t.columns, t.size, null, r0.bytes, r0.box); working.tick(++finished); return; }
+			if (task) down = true;
+		}
 		if (pool && !down && !none && t.compressed && t.count) {
 			records = await pooled(function () { return pool.decode({ vlr: m.laz, recordLength: len, packed: t.records.slice().buffer, chunks: [{ s: 0, e: t.records.length, count: t.count }], base: 0 }); });
 			if (!records) down = true;
@@ -487,11 +497,25 @@ export function setPositions(store, value, opts) {
 			for (var i = 0; i < v.index.length; i++) if (!(v.index[i] < node.count) || (i && v.index[i] <= v.index[i - 1])) throw bad("positions[" + k + "].index " + v.index[i] + " is not an ascending point of the tile (" + node.count + " points)");
 		});
 		return session(store, async function (put) {
+			var spec = function (key) {
+				var v = value[key];
+				return { index: Uint32Array.from(v.index), x: Float64Array.from(v.x), y: Float64Array.from(v.y), z: Float64Array.from(v.z), scale: m.scale, offset: m.offset, storeT: m.transform || null, inv: inv };
+			};
 			await rewriteNodes(store, put, keys, opts, function (key, n) {
-				return { records: patchPositions(store, n.records, value[key], inv), columns: n.t.columns };
-			});
+				var records = n.records.slice();
+				movePoints(records, m.recordLength, spec(key));
+				return { records: records, columns: n.t.columns };
+			}, null, function (key, t) { return movedTask(m, t, spec(key)); });
 		}, null);
 	});
+}
+
+// a pool.move task: the tile's packed records copied (the pool transfers them), and the spec's buffers
+function movedTask(m, t, spec) {
+	var task = { vlr: m.laz, recordLength: m.recordLength, count: t.count, packed: t.records.slice().buffer, scale: spec.scale, offset: spec.offset, storeT: spec.storeT, inv: spec.inv, index: spec.index.buffer };
+	if (spec.T) task.T = spec.T;
+	else { task.x = spec.x.buffer; task.y = spec.y.buffer; task.z = spec.z.buffer; }
+	return task;
 }
 
 /**
@@ -506,21 +530,15 @@ export function transformPoints(store, sel, T, opts) {
 		checkSelection(store, sel);
 		checkTransform(T, "transform");
 		var m = store.manifest, keys = Object.keys(sel.tiles).sort(keyOrder), inv = m.transform ? invertTransform(m.transform) : null;
-		var a = T.m, t = T.t, moved = 0;
+		var move = { m: Array.from(T.m), t: Array.from(T.t) };
 		return session(store, async function (put) {
+			var spec = function (key) { return { index: Uint32Array.from(sel.tiles[key]), T: move, scale: m.scale, offset: m.offset, storeT: m.transform || null, inv: inv }; };
 			await rewriteNodes(store, put, keys, opts, function (key, n) {
-				var idx = sel.tiles[key], world = decodeRecords(n.records, store.header, { fields: ["x", "y", "z"], transform: m.transform || undefined });
-				var x = new Float64Array(idx.length), y = new Float64Array(idx.length), z = new Float64Array(idx.length);
-				for (var i = 0; i < idx.length; i++) {
-					var px = world.x[idx[i]], py = world.y[idx[i]], pz = world.z[idx[i]];
-					x[i] = a[0] * px + a[1] * py + a[2] * pz + t[0];
-					y[i] = a[3] * px + a[4] * py + a[5] * pz + t[1];
-					z[i] = a[6] * px + a[7] * py + a[8] * pz + t[2];
-				}
-				moved += idx.length;
-				return { records: patchPositions(store, n.records, { index: idx, x: x, y: y, z: z }, inv), columns: n.t.columns };
-			});
-			return { moved: moved };
+				var records = n.records.slice();
+				movePoints(records, m.recordLength, spec(key));
+				return { records: records, columns: n.t.columns };
+			}, null, function (key, t) { return movedTask(m, t, spec(key)); });
+			return { moved: sel.count };
 		}, null);
 	});
 }
@@ -532,24 +550,6 @@ function invertTransform(T) {
 		(a[5] * a[6] - a[3] * a[8]) / det, (a[0] * a[8] - a[2] * a[6]) / det, (a[2] * a[3] - a[0] * a[5]) / det,
 		(a[3] * a[7] - a[4] * a[6]) / det, (a[1] * a[6] - a[0] * a[7]) / det, (a[0] * a[4] - a[1] * a[3]) / det];
 	return { m: i, t: [0, 1, 2].map(function (r) { return -(i[3 * r] * T.t[0] + i[3 * r + 1] * T.t[1] + i[3 * r + 2] * T.t[2]); }) };
-}
-
-// a node's records with new positions (world, taken back through inv when the store is moved)
-function patchPositions(store, records, v, inv) {
-	var m = store.manifest, len = m.recordLength;
-	var cols = decodeRecords(records, store.header, { fields: recordFields(m.pointFormat) });
-	var so = { scale: m.scale, offset: m.offset };
-	for (var i = 0; i < v.index.length; i++) {
-		var p = v.index[i], x = v.x[i], y = v.y[i], z = v.z[i];
-		if (inv) { var q = inv.m; cols.x[p] = q[0] * x + q[1] * y + q[2] * z + inv.t[0]; cols.y[p] = q[3] * x + q[4] * y + q[5] * z + inv.t[1]; cols.z[p] = q[6] * x + q[7] * y + q[8] * z + inv.t[2]; }
-		else { cols.x[p] = x; cols.y[p] = y; cols.z[p] = z; }
-	}
-	// the X, Y, Z bytes only (12 of each record): every other field stays as stored
-	var out = new Uint8Array(len * cols.count);
-	encodeRecords(cols, m.pointFormat, len, so, null, new DataView(out.buffer), 0, { bounds: { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity, minZ: Infinity, maxZ: -Infinity }, byReturn: new Array(15).fill(0) }, 0, null);
-	var res = records.slice();
-	for (i = 0; i < v.index.length; i++) { var o = v.index[i] * len; res.set(out.subarray(o, o + 12), o); }
-	return res;
 }
 
 // Re-encode the node twice and copy only the bytes the new values change
