@@ -31,6 +31,15 @@ runs in the browser and in Node — and built for files far larger than memory.
 - Also: a ready-made module Worker (`las-laz-js/worker`) and a
   [Three.js demo](https://brentbuffham.github.io/las-laz-js/).
 
+## Speed is a priority
+
+How fast a function runs is a design requirement of this library, not an afterthought. A new function or a change to
+one is built to be the quickest way to do the job: work that can run in parallel runs on the worker pool (a tile store's
+edits and reads default to it, and `threads: 1` is only for tests and debugging), nothing is read, decoded or copied
+that does not have to be (a tile an edit does not touch is neither decoded nor rewritten, and an undo is a snapshot,
+not a copy of the store), and a slower route is taken only when the faster one is not safe. A change that makes a
+function slower needs a reason in its commit.
+
 ## Install
 
 ```sh
