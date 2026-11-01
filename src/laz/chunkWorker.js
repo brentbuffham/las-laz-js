@@ -19,6 +19,8 @@
 //      and T, or x / y / z: ArrayBuffers } (one packed tile with some points moved: src/tiles/movePoints.js)
 // In (dedupe): { id, op: "dedupe", count, x, y, z (or null): ArrayBuffers, f32, tolerance, frozen?: ArrayBuffer }
 //      (one tile of dedupeParallel: src/filter/dedupeParallel.js; Out: { id, status: ArrayBuffer }, a byte 1 for each point kept)
+// In (tile): { id, op: "tile", job, params, count, x, y, z: ArrayBuffers, f32 } (one tile of a parallel run on a cloud in memory: src/index/tileJobs.js;
+//      Out: { id, result }, the job's typed arrays)
 // In (octree): { id, op: "octree", records: ArrayBuffer, recordLength, cube, rootKey, opts, laz }
 //      (a tile build's chunk: src/tiles/chunkNodes.js)
 // In (bucket): { id, op: "bucket", records: ArrayBuffer, recordLength, cube, chunks: keys, plan }
@@ -42,6 +44,7 @@ import { REGION_JOBS } from "../tiles/regionJobs.js";
 import { movePoints } from "../tiles/movePoints.js";
 import { tightBox } from "../tiles/tightBox.js";
 import { dedupeSweep } from "../filter/dedupeCore.js";
+import { TILE_JOBS } from "../index/tileJobs.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -77,6 +80,7 @@ function handle(m) {
 		else if (m.op === "fragments") fragments(m);
 		else if (m.op === "facets") facets(m);
 		else if (m.op === "dedupe") dedupeTile(m);
+		else if (m.op === "tile") tileJob(m);
 		else if (REGION_JOBS[m.op]) region(m);
 		else decode(m);
 	} catch (err) {
@@ -154,6 +158,14 @@ function dedupeTile(m) {
 	var status = new Uint8Array(n), kept = swept.kept;
 	for (var i = 0; i < kept.length; i++) status[kept[i]] = 1;
 	port.post({ id: m.id, status: status.buffer }, [status.buffer]);
+}
+
+// one tile of a parallel run on a cloud in memory (src/ops/parallel.js): the job's arrays come back, transferred
+function tileJob(m) {
+	var A = m.f32 ? Float32Array : Float64Array;
+	var r = TILE_JOBS[m.job]({ count: m.count, x: new A(m.x), y: new A(m.y), z: new A(m.z) }, m.params, tileProgress(m, 0, 1)), transfer = [];
+	Object.keys(r).forEach(function (key) { if (r[key] && r[key].buffer) transfer.push(r[key].buffer); });
+	port.post({ id: m.id, result: r }, transfer);
 }
 
 // one tile of findFacetsParallel: the result with its facet column sent as a buffer

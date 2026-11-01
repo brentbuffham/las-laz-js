@@ -15,13 +15,15 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
 import { buildKdTree, kdNearest } from "../index/kdtree.js";
+import { sharedBar } from "../progressBar.js";
 
 var K = 32, GOLDEN = (Math.sqrt(5) - 1) / 2;
 
 /**
  * The point spacing of a surface: the side of the square each point stands for.
  * @param {object} cols - point columns (x / y / z or a k = 3 positions column), any frame.
- * @param {{sample?: number}} [options] - sample: how many points to measure at (default 10,000; at least 9).
+ * @param {{sample?: number, onProgress?: function(number, number), signal?: AbortSignal}} [options] - sample: how many points to measure at
+ *   (default 10,000; at least 9). onProgress(done, total): a bar of 1000, the tree build most of it; a signal is looked at as it ticks (ABORTED).
  * @returns {number} in the columns' units; NaN for fewer than 9 points.
  * @throws {LasError} INVALID_ARGUMENT naming sample.
  */
@@ -31,11 +33,15 @@ export function pointSpacing(cols, opts) {
 	var n = cols.count;
 	if (!(n >= 9)) return NaN;
 	var co = coordsOf(cols, "pointSpacing"), X = co.x, Y = co.y, Z = co.z, st = co.stride;
-	var tree = buildKdTree(cols, "pointSpacing"), m0 = Math.min(n, sample), P = new Uint32Array(K), D2 = new Float64Array(K), r = [];
+	var bar = sharedBar(opts && opts.onProgress, opts && opts.signal), BUILD = 0.8;
+	bar.at(0);
+	var tree = buildKdTree(cols, "pointSpacing", function (f) { bar.at(BUILD * f); }), m0 = Math.min(n, sample), P = new Uint32Array(K), D2 = new Float64Array(K), r = [], tick = bar.ticker(BUILD, 1, m0);
 	for (var j = 0; j < m0; j++) {
+		tick(j);
 		var i = m0 === n ? j : Math.floor(((j * GOLDEN) % 1) * n), o = i * st, m = kdNearest(tree, X[o], Y[o], Z[o], K, Infinity, i, P, D2);
 		r.push(D2[m - 1] * K / m);   // fewer than K in all (a small cloud): the m-th, scaled to K; with 9 points or more m >= 8
 	}
+	bar.at(1);
 	r.sort(function (a, b) { return a - b; });
 	return Math.sqrt(r[Math.floor((r.length - 1) / 2)]) * Math.sqrt(Math.PI / K);
 }

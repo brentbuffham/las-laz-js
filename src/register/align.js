@@ -60,7 +60,8 @@ function rodrigues(wx, wy, wz) {
  * @param {object} fixed - the same, local to fixedOrigin.
  * @param {{pairs: {from: ArrayLike<number>, to: ArrayLike<number>}, model?: string, movingOrigin?: number[],
  *   fixedOrigin?: number[], icp?: false|{maxDistance: number, iterations?: number, sample?: number, k?: number},
- *   onProgress?: function(number, number)}} options - pairs in world coordinates (from on the moving
+ *   onProgress?: function(number, number), signal?: AbortSignal}} options - onProgress(done, total) counts iterations (the fixed cloud's
+ *   tree build is the first of them); a signal is looked at as it ticks (ABORTED); pairs in world coordinates (from on the moving
  *   cloud, to on the fixed); model "rigid" (default), "level" or "scale"; origins default [0, 0, 0];
  *   icp: maxDistance required, iterations 30, sample 50,000, k 16 (neighbours per fixed normal).
  * @returns {{transform: {m: number[], t: number[]}, fit: object, icp?: {iterations: number, converged: boolean,
@@ -91,7 +92,12 @@ export function alignCloud(moving, fixed, options) {
 	var fit = fitTransform(o.pairs.from, o.pairs.to, { model: model });
 	if (!icp) return { transform: fit.transform, fit: fit };
 
-	var mc = coordsOf(moving, "alignCloud"), tree = buildKdTree(fixed, "alignCloud"), fc = tree.coords;
+	var report = o.onProgress, signal = o.signal;
+	function check() { if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the run was stopped"); }
+	check();
+	if (report) report(0, iterations);
+	// the fixed cloud's tree is built before the first iteration: its progress is a part of the first
+	var mc = coordsOf(moving, "alignCloud"), tree = buildKdTree(fixed, "alignCloud", function (f) { check(); if (report) report(0.9 * f, iterations); }), fc = tree.coords;
 	var sel = thinSelection(moving.count, Math.min(sample, moving.count)), S = sel.length;
 	var sx = new Float64Array(S), sy = new Float64Array(S), sz = new Float64Array(S);
 	for (var j = 0; j < S; j++) {
@@ -196,7 +202,8 @@ export function alignCloud(moving, fixed, options) {
 			constrained = inc.constrained;
 			var next = compose(inc, T), m2 = match(next);
 			it++;
-			if (o.onProgress) o.onProgress(it, iterations);
+			check();
+			if (report) report(it, iterations);
 			if (m2.used < need) { cur = m2; T = next; break; }
 			T = next; cur = m2;
 			if (inc.angle < 1e-7 && inc.shift < 1e-6 * maxD) { converged = true; break; }

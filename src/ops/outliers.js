@@ -9,7 +9,8 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { checkK, progress } from "../index/knn.js";
+import { checkK } from "../index/knn.js";
+import { sharedBar } from "../progressBar.js";
 import { buildKdTree, kdNearest } from "../index/kdtree.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
@@ -18,14 +19,16 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  * The points whose mean distance to their k nearest other points is above the cloud's
  * mean of those means plus multiplier standard deviations.
  * @param {object} cols - point columns (x, y, z or a k = 3 positions column).
- * @param {{k?: number, multiplier?: number, onProgress?: function(number, number)}} [opts] - k 8, multiplier 2 (PDAL's defaults).
+ * @param {{k?: number, multiplier?: number, onProgress?: function(number, number), signal?: AbortSignal}} [opts] - k 8, multiplier 2
+ *   (PDAL's defaults). onProgress(done, total) counts points, with the tree build first (a tenth of it); a signal is looked at as it ticks
+ *   (ABORTED), where a stop can reach a run on this thread.
  * @returns {Uint32Array} ascending point numbers
  */
 export function selectOutliers(cols, opts) {
 	opts = opts || {};
 	var k = opts.k === undefined ? 8 : opts.k, mult = opts.multiplier === undefined ? 2 : opts.multiplier;
 	if (!(typeof mult === "number" && isFinite(mult))) { checkK(k, "k"); throw bad("multiplier must be a finite number, not " + String(mult)); }
-	var r = meanDistances(cols, k, opts.onProgress), n = r.means.length, means = r.means;
+	var r = meanDistances(cols, k, opts.onProgress, opts.signal), n = r.means.length, means = r.means;
 	if (n <= k) return new Uint32Array(0);
 	var threshold = r.M1 + mult * Math.sqrt(r.M2 / (n - 1)), hits = 0, i, j;
 	for (i = 0; i < n; i++) if (means[i] > threshold) hits++;
@@ -40,13 +43,15 @@ export function selectOutliers(cols, opts) {
  * @param {object} cols - point columns.
  * @param {number} k
  * @param {function(number, number)} [onProgress]
+ * @param {AbortSignal} [signal]
  * @returns {{means: Float64Array, M1: number, M2: number}}
  */
-export function meanDistances(cols, k, onProgress) {
+export function meanDistances(cols, k, onProgress, signal) {
 	checkK(k, "k");
-	var tick = progress(onProgress, cols.count);
-	var index = buildKdTree(cols, "selectOutliers"), n = index.count;
-	if (n <= k) { tick(n); return { means: new Float64Array(0), M1: 0, M2: 0 }; }
+	var bar = sharedBar(onProgress, signal, cols.count), BUILD = 0.1;
+	bar.at(0);
+	var index = buildKdTree(cols, "selectOutliers", function (f) { bar.at(BUILD * f); }), n = index.count, tick = bar.ticker(BUILD, 1, n);
+	if (n <= k) { bar.at(1); return { means: new Float64Array(0), M1: 0, M2: 0 }; }
 	var co = index.coords, X = co.x, Y = co.y, Z = co.z, st = co.stride;
 	var P = new Uint32Array(k), D = new Float64Array(k), means = new Float64Array(n);
 	var M1 = 0, M2 = 0;

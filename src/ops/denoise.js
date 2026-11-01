@@ -22,7 +22,8 @@
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf } from "../index/grid.js";
-import { checkK, checkMaxDistance, progress } from "../index/knn.js";
+import { checkK, checkMaxDistance } from "../index/knn.js";
+import { sharedBar } from "../progressBar.js";
 import { buildKdTree, kdNearest } from "../index/kdtree.js";
 import { fitPlane, estimateNoise } from "./normals.js";
 import { columnsOf, sameType, checkNoSharedMemory } from "./columns.js";
@@ -35,8 +36,10 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  * Smooth point columns against their neighbours.
  * @param {object} cols - point columns (x, y, z or a k = 3 positions column).
  * @param {{method?: string, k?: number, maxDistance: number, sigma?: number, iterations?: number,
- *   normals?: boolean, inPlace?: boolean, onProgress?: function(number, number)}} opts -
- *   method "bilateral" or "mls" (default "bilateral"), k 16, sigma measured, iterations 1.
+ *   normals?: boolean, inPlace?: boolean, onProgress?: function(number, number), signal?: AbortSignal}} opts -
+ *   method "bilateral" or "mls" (default "bilateral"), k 16, sigma measured, iterations 1. onProgress(done, total) counts
+ *   points x iterations, with the noise measure first when sigma is not given (a tenth of it) and each pass's tree build
+ *   (a tenth of the pass) on it; a signal is looked at as it ticks (ABORTED).
  * @returns {object} point columns: new x, y, z (or positions); with normals, a normal column (Float32, k = 3)
  */
 export function denoisePoints(cols, opts) {
@@ -51,9 +54,10 @@ export function denoisePoints(cols, opts) {
 	if (opts.sigma !== undefined && !(typeof opts.sigma === "number" && isFinite(opts.sigma) && opts.sigma > 0)) throw bad("sigma must be a positive finite number, not " + String(opts.sigma));
 	var maxDistance = opts.maxDistance, maxD2 = maxDistance * maxDistance;
 	var co = coordsOf(cols, "denoisePoints"), n = cols.count, positions = co.stride === 3;
-	var tick = progress(opts.onProgress, n * iterations);
+	var bar = sharedBar(opts.onProgress, opts.signal, n * iterations), MEASURE = opts.sigma !== undefined ? 0 : 0.1, BUILD = 0.1;
+	bar.at(0);
 	if (opts.inPlace && !positions) checkNoSharedMemory(cols, [{ name: "x" }, { name: "y" }, { name: "z" }]);
-	var sigma = opts.sigma !== undefined ? opts.sigma : estimateNoise(cols, { k: k, maxDistance: maxDistance });
+	var sigma = opts.sigma !== undefined ? opts.sigma : estimateNoise(cols, { k: k, maxDistance: maxDistance, onProgress: bar.sub(0, MEASURE), signal: opts.signal });
 	var move = sigma > 0;
 
 	// Coordinate buffers of the input's types: pass i reads src and writes dst
@@ -66,7 +70,9 @@ export function denoisePoints(cols, opts) {
 
 	for (var pass = 0; pass < iterations; pass++) {
 		var last = pass === iterations - 1;
-		var index = move || (last && normal) ? buildKdTree(src, "denoisePoints") : null;
+		// this pass's part of the bar: its tree build, then its points
+		var from = MEASURE + (1 - MEASURE) * pass / iterations, to = MEASURE + (1 - MEASURE) * (pass + 1) / iterations, tick = bar.ticker(from + BUILD * (to - from), to, n);
+		var index = move || (last && normal) ? buildKdTree(src, "denoisePoints", function (f) { bar.at(from + BUILD * (to - from) * f); }) : null;
 		var sc = index ? index.coords : coordsOf(src, "denoisePoints");
 		var X = sc.x, Y = sc.y, Z = sc.z, st = sc.stride;
 		var dc = coordsOf(dst, "denoisePoints"), OX = dc.x, OY = dc.y, OZ = dc.z;
@@ -105,7 +111,7 @@ export function denoisePoints(cols, opts) {
 			if (delta !== 0) { OX[d] = px + nx * delta; OY[d] = py + ny * delta; OZ[d] = pz + nz * delta; }
 			else { OX[d] = px; OY[d] = py; OZ[d] = pz; }
 			if (normal && last) { normal[3 * p] = nx; normal[3 * p + 1] = ny; normal[3 * p + 2] = nz; }
-			tick(pass * n + p + 1);
+			tick(p + 1);
 		}
 		if (!last) {
 			// the input is never written: pass 1 needs a second buffer, later passes swap the two
@@ -114,8 +120,23 @@ export function denoisePoints(cols, opts) {
 		}
 	}
 
-	var moved = dst;
-	if (opts.inPlace) {
+	bar.at(1);
+	return denoiseResult(cols, dst, normal, positions, opts.inPlace);
+}
+
+/**
+ * The columns denoisePoints returns: the new positions (written into cols with inPlace), every other column shared, and the normals.
+ * Internal (denoisePointsParallel); not exported from the package entry.
+ * @param {object} cols - the input columns.
+ * @param {object} dst - the new coordinates, { count, x, y, z } or { count, positions }.
+ * @param {Float32Array|null} normal - 3 values a point.
+ * @param {boolean} positions - the input holds a k = 3 positions column.
+ * @param {boolean} [inPlace]
+ * @returns {object}
+ */
+export function denoiseResult(cols, dst, normal, positions, inPlace) {
+	var moved = dst, n = cols.count;
+	if (inPlace) {
 		if (positions) cols.positions.set(dst.positions);
 		else { cols.x.set(dst.x); cols.y.set(dst.y); cols.z.set(dst.z); }
 		moved = cols;

@@ -18,69 +18,16 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { defaultThreads, createLazPool } from "../laz/pool.js";
 import { sharedBar } from "../progressBar.js";
+import { planFast } from "../index/planFast.js";
 import { dedupe, keepColumns } from "./dedupe.js";
 
 var MIN_POINTS = 400000;        // under this a pool does not pay: one sweep here
 var TILES_PER_THREAD = 4;       // more tiles than workers, for the uneven densities of a cloud
-var MAX_TILES = 4096;
 var RING = 2, CORE_RINGS = 50;  // the ring is RING tolerances wide; a tile's side is at least CORE_RINGS rings (the ring is a small part of it)
 var MAX_ROUNDS = 6, INNER = 1.01;
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 function stopped() { return new LasError(ERROR_CODES.ABORTED, "the run was stopped"); }
-
-/**
- * The tiles: for each, its points (ascending, core and ring) and where its ring points sit among them.
- * @returns {{NT: number, own: Uint16Array, members: Uint32Array[], ringAt: number[][], ringNear: number[][]}|null} null for one tile
- */
-function planDedupe(x, y, z, n, tolerance, use3d, targetTiles, side) {
-	var cols = [x, y, z], p, a, b;
-	var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity], dims = use3d ? 3 : 2;
-	for (p = 0; p < n; p++) for (a = 0; a < dims; a++) { var v = cols[a][p]; if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v; }
-	var axes = [0, 1, 2].slice(0, dims).sort(function (i, j) { return (hi[j] - lo[j]) - (hi[i] - lo[i]); });
-	a = axes[0]; b = axes[1];
-	var U = cols[a], V = cols[b], u0 = lo[a], v0 = lo[b], su = hi[a] - u0, sv = hi[b] - v0;
-	var M = RING * tolerance;
-	var T = side !== undefined ? side : (su > 0 && sv > 0 ? Math.sqrt(su * sv / targetTiles) : Math.max(su, sv) / targetTiles);
-	if (side === undefined) T = Math.max(T, CORE_RINGS * M); else T = Math.max(T, 2 * M);
-	var NU = Math.max(1, Math.ceil(su / T)), NV = Math.max(1, Math.ceil(sv / T));
-	while (NU * NV > MAX_TILES) { T *= 2; NU = Math.max(1, Math.ceil(su / T)); NV = Math.max(1, Math.ceil(sv / T)); }
-	var NT = NU * NV;
-	if (NT < 2) return null;
-	var iT = 1 / T, tin = tolerance * INNER;
-	var own = new Uint16Array(n), counts = new Uint32Array(NT);
-	// pass 1: the owner of each point and how many points each tile will hold
-	for (p = 0; p < n; p++) {
-		var fu = Math.floor((U[p] - u0) * iT), fv = Math.floor((V[p] - v0) * iT);
-		var ca = fu >= NU ? NU - 1 : fu < 0 ? 0 : fu, cb = fv >= NV ? NV - 1 : fv < 0 ? 0 : fv;
-		var ru = U[p] - u0 - ca * T, rv = V[p] - v0 - cb * T, t0 = cb * NU + ca;
-		own[p] = t0; counts[t0]++;
-		var lu = ca > 0 && ru < M, hu = ca < NU - 1 && ru > T - M, lv = cb > 0 && rv < M, hv = cb < NV - 1 && rv > T - M;
-		if (lu || hu || lv || hv) {
-			for (var db = lv ? -1 : 0; db <= (hv ? 1 : 0); db++) for (var da = lu ? -1 : 0; da <= (hu ? 1 : 0); da++) if (da || db) counts[(cb + db) * NU + ca + da]++;
-		}
-	}
-	var members = [], ringAt = [], ringNear = [], fill = new Uint32Array(NT), t;
-	for (t = 0; t < NT; t++) { members.push(new Uint32Array(counts[t])); ringAt.push([]); ringNear.push([]); }
-	// pass 2: fill them in the cloud's order
-	for (p = 0; p < n; p++) {
-		var t1 = own[p], cu = t1 % NU, cv = (t1 - cu) / NU;
-		var qu = U[p] - u0 - cu * T, qv = V[p] - v0 - cv * T;
-		members[t1][fill[t1]++] = p;
-		var l1 = cu > 0 && qu < M, h1 = cu < NU - 1 && qu > T - M, l2 = cv > 0 && qv < M, h2 = cv < NV - 1 && qv > T - M;
-		if (l1 || h1 || l2 || h2) {
-			for (var e2 = l2 ? -1 : 0; e2 <= (h2 ? 1 : 0); e2++) for (var e1 = l1 ? -1 : 0; e1 <= (h1 ? 1 : 0); e1++) {
-				if (!e1 && !e2) continue;
-				var t2 = (cv + e2) * NU + cu + e1, j = fill[t2]++;
-				members[t2][j] = p;
-				// near: within tolerance of the core in each axis it lies outside (it can be a core point's neighbour)
-				var near = (e1 === 0 || (e1 < 0 ? qu : T - qu) <= tin) && (e2 === 0 || (e2 < 0 ? qv : T - qv) <= tin);
-				ringAt[t2].push(j); ringNear[t2].push(near ? 1 : 0);
-			}
-		}
-	}
-	return { NT: NT, own: own, members: members, ringAt: ringAt, ringNear: ringNear };
-}
 
 /**
  * dedupe on the worker pool (browser Web Workers or Node worker_threads), the same points kept in the same order.
@@ -111,7 +58,8 @@ export async function dedupeParallel(cols, tolerance, opts) {
 	var isTyped = function (a) { return a instanceof Float32Array || a instanceof Float64Array; };
 	if (!isTyped(cols.x) || !isTyped(cols.y) || (use3d && !isTyped(cols.z))) return here();
 	var x = cols.x, y = cols.y, z = use3d ? cols.z : null;
-	var plan = planDedupe(x, y, z, n, tolerance, use3d, TILES_PER_THREAD * threads, o.tile);
+	var M = RING * tolerance;
+	var plan = planFast(x, y, z, n, { dims: use3d ? 3 : 2, M: M, targetTiles: TILES_PER_THREAD * threads, side: o.tile, minSide: o.tile === undefined ? CORE_RINGS * M : 2 * M, near: tolerance * INNER });
 	if (!plan) return here();
 	bar.at(0.04);
 	await Promise.resolve();   // the loop turns once: a stop that came in is seen

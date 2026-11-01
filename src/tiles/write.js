@@ -15,13 +15,16 @@ import { transformBounds } from "../ops/transform.js";
 import { recordFields } from "../read/decodeRecords.js";
 import { readTiles } from "./read.js";
 import { compareKeys as keyOrder } from "./octree.js";
+import { LasError, ERROR_CODES } from "../errors.js";
 
 
 /**
  * Write the store to a sink.
  * @param {object} store - a TileStore
  * @param {object} sink - as createLasWriter: an OPFS scratch writer, a Node FileHandle, or any { write(bytes, position) }
- * @param {{compress?: boolean, chunkSize?: number, threads?: number, version?: string, pointFormat?: number}} [opts]
+ * @param {{compress?: boolean, chunkSize?: number, threads?: number, version?: string, pointFormat?: number,
+ *   signal?: AbortSignal, onProgress?: function({phase: string, done: number, total: number})}} [opts] - signal: checked between tiles
+ *   (ABORTED; the sink holds a partial file); onProgress({ phase: "write", done, total }) in points, as each tile is written
  * @returns {Promise<{count: number}>}
  */
 export async function writeTilesLas(store, sink, opts) {
@@ -44,6 +47,19 @@ export async function writeTilesLas(store, sink, opts) {
 	var fields = recordFields(m.pointFormat).concat(["extra"]);
 	var keys = Object.keys(m.nodes).sort(keyOrder).filter(function (k) { return m.nodes[k].count > 0; });
 	// LAZ nodes decode on the store's pool, ahead of the writer
-	for await (var t of readTiles(store, keys, { fields: fields, threads: opts.threads })) await w.writePoints(t.points);
+	var total = 0, done = 0, signal = opts.signal;
+	keys.forEach(function (k) { total += m.nodes[k].count; });
+	if (opts.onProgress) opts.onProgress({ phase: "write", done: 0, total: total });
+	var gen = readTiles(store, keys, { fields: fields, threads: opts.threads });
+	try {
+		for (var got = await gen.next(); !got.done; got = await gen.next()) {
+			if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the write was stopped");
+			await w.writePoints(got.value.points);
+			done += got.value.points.count;
+			if (opts.onProgress) opts.onProgress({ phase: "write", done: done, total: total });
+		}
+	} finally {
+		await gen.return();
+	}
 	return w.close();
 }

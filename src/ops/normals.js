@@ -13,7 +13,8 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
-import { checkK, checkMaxDistance, progress } from "../index/knn.js";
+import { checkK, checkMaxDistance } from "../index/knn.js";
+import { sharedBar } from "../progressBar.js";
 import { buildKdTree, kdNearest } from "../index/kdtree.js";
 import { thinSelection } from "./select.js";
 
@@ -123,7 +124,7 @@ function options(opts, fn) {
 	var k = opts.k === undefined ? 16 : opts.k;
 	checkK(k, "k");
 	checkMaxDistance(opts.maxDistance);
-	return { k: k, maxD2: opts.maxDistance * opts.maxDistance, maxDistance: opts.maxDistance, onProgress: opts.onProgress, fn: fn };
+	return { k: k, maxD2: opts.maxDistance * opts.maxDistance, maxDistance: opts.maxDistance, onProgress: opts.onProgress, signal: opts.signal, fn: fn };
 }
 
 /**
@@ -160,14 +161,16 @@ function range(opts, count) {
  * whole cloud, so a range is that slice of the full run bit for bit (workers can split a cloud).
  * @param {object} cols - point columns (x, y, z or a k = 3 positions column).
  * @param {{k?: number, maxDistance: number, start?: number, end?: number,
- *   onProgress?: function(number, number)}} opts - k 16; start 0; end the point count.
+ *   onProgress?: function(number, number), signal?: AbortSignal}} opts - k 16; start 0; end the point count. onProgress(done, total)
+ *   counts the range's points, the tree build first (a tenth of it); a signal is looked at as it ticks (ABORTED).
  * @returns {{normal: Float32Array, residual: Float32Array}} for the range's points, the first at
  *   0: normal 3 values a point (0, 0, 0 with fewer than 3 neighbours); residual NaN there
  */
 export function pointNormals(cols, opts) {
 	var o = options(opts, "pointNormals"), r = range(opts, cols.count), m = r.end - r.start;
-	var tick = progress(o.onProgress, m);
-	var index = buildKdTree(cols, "pointNormals");
+	var bar = sharedBar(o.onProgress, o.signal, m), BUILD = 0.1;
+	bar.at(0);
+	var index = buildKdTree(cols, "pointNormals", function (f) { bar.at(BUILD * f); }), tick = bar.ticker(BUILD, 1, m);
 	var normal = new Float32Array(3 * m), residual = new Float32Array(m);
 	var P = new Uint32Array(o.k), D = new Float64Array(o.k), fit = new Float64Array(7);
 	for (var i = 0; i < m; i++) {
@@ -199,18 +202,22 @@ export function sliceNormals(nm, idx) {
  * The cloud's noise level: the median residual (lower median, finite ones) over up to
  * 100,000 points spread evenly through it.
  * @param {object} cols - point columns (x, y, z or a k = 3 positions column).
- * @param {{k?: number, maxDistance: number}} opts - k 16.
+ * @param {{k?: number, maxDistance: number, onProgress?: function(number, number), signal?: AbortSignal}} opts - k 16.
+ *   onProgress(done, total): a bar of 1000, the tree build first (most of it on a big cloud).
  * @returns {number} NaN when no sampled point has a plane
  */
 export function estimateNoise(cols, opts) {
-	var o = options(opts, "estimateNoise");
-	var index = buildKdTree(cols, "estimateNoise");
-	var sample = thinSelection(index.count, NOISE_SAMPLE), res = new Float64Array(sample.length), m = 0;
+	var o = options(opts, "estimateNoise"), bar = sharedBar(o.onProgress, o.signal), BUILD = 0.6;
+	bar.at(0);
+	var index = buildKdTree(cols, "estimateNoise", function (f) { bar.at(BUILD * f); });
+	var sample = thinSelection(index.count, NOISE_SAMPLE), res = new Float64Array(sample.length), m = 0, tick = bar.ticker(BUILD, 1, sample.length);
 	var P = new Uint32Array(o.k), D = new Float64Array(o.k), fit = new Float64Array(7);
 	for (var i = 0; i < sample.length; i++) {
+		tick(i);
 		// Float32, as pointNormals reports it
 		if (fitAt(index, sample[i], o, P, D, fit)) res[m++] = Math.fround(fit[3]);
 	}
+	bar.at(1);
 	if (m === 0) return NaN;
 	var s = res.subarray(0, m).sort();
 	return s[Math.floor((m - 1) / 2)];

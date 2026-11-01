@@ -13,6 +13,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf, buildGrid, lookup, checkPointCount } from "../index/grid.js";
 import { cellRange, visitBox, decode } from "../index/query.js";
+import { sharedBar } from "../progressBar.js";
 
 var FACE = 2e-6;   // in cells: nearer a face than this, a point gets its own cell lookup
 
@@ -25,7 +26,9 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  * dust survives too, and a higher minNeighbours removes small clumps at the
  * cost of thin features.
  * @param {object} cols - point columns with x, y, z, or a k = 3 positions column.
- * @param {{radius: number, minNeighbours?: number, xy?: boolean}} opts - radius in the columns' units (required); minNeighbours default 1; xy: count in 2D.
+ * @param {{radius: number, minNeighbours?: number, xy?: boolean, onProgress?: function(number, number), signal?: AbortSignal}} opts - radius in the
+ *   columns' units (required); minNeighbours default 1; xy: count in 2D. onProgress(done, total) counts points (the grid build first, a twentieth);
+ *   a signal is looked at as it ticks (ABORTED), where a stop can reach a run on this thread.
  * @returns {Uint32Array} selection of the sparse points
  */
 export function selectSparse(cols, opts) {
@@ -34,11 +37,12 @@ export function selectSparse(cols, opts) {
 	var minN = opts.minNeighbours === undefined ? 1 : opts.minNeighbours;
 	if (!(Number.isInteger(minN) && minN >= 1)) throw bad("selectSparse minNeighbours must be a whole number >= 1, not " + String(minN));
 	var xy = !!opts.xy;
-	var coords = coordsOf(cols, "selectSparse"), n = cols.count;
+	var coords = coordsOf(cols, "selectSparse"), n = cols.count, bar = sharedBar(opts.onProgress, opts.signal, n), BUILD = 0.05;
 	checkPointCount(n);
-	if (n === 0) return new Uint32Array(0);
-
-	var g = buildGrid(coords, n, radius, xy);
+	if (n === 0) { bar.at(1); return new Uint32Array(0); }
+	bar.at(0);
+	var g = buildGrid(coords, n, radius, xy), tick = bar.ticker(BUILD, 1, n), done = 0;
+	bar.at(BUILD);
 	var X = coords.x, Y = coords.y, Z = coords.z, st = coords.stride, order = g.order, start = g.start, length = g.length;
 	var r2 = radius * radius, sparse = new Uint8Array(n), nSparse = 0;
 	var dz = xy ? 0 : 1;
@@ -88,8 +92,10 @@ export function selectSparse(cols, opts) {
 			var slots = near;
 			if (fx < FACE || fx > 1 - FACE || fy < FACE || fy > 1 - FACE || fz < FACE || fz > 1 - FACE) slots = slotsAround(o, s);
 			if (!enough(p, slots)) { sparse[p] = 1; nSparse++; }
+			tick(++done);
 		}
 	}
+	bar.at(1);
 
 	var out = new Uint32Array(nSparse);
 	for (var i = 0, w = 0; i < n; i++) if (sparse[i]) out[w++] = i;

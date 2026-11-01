@@ -107,3 +107,41 @@ test("the worker's edit messages post progress and stop with the job", { timeout
 	assert.ok(done.length >= 1 && done[0].label === "editing" && done[done.length - 1].fraction === 1, JSON.stringify(done.slice(-1)));
 	assert.ok(msgs.filter(function (m) { return m.id === 4; }).pop().result.manifest);
 });
+
+test("addColumn and removeColumn report by tile and stop between groups, leaving the store as it was", { timeout: 120000 }, async function () {
+	var s = await store(), seen = [];
+	await s.addColumn("tag", "u16", 7, { onProgress: function (e) { seen.push(e); } });
+	assert.ok(seen.length >= 2 && seen[0].phase === "edit" && seen[0].done === 0 && seen[seen.length - 1].done === seen[0].total, JSON.stringify(seen.slice(-1)));
+	var t0 = Object.keys(s.manifest.nodes)[0], back = await s.readTile(t0, { fields: ["tag"] });
+	assert.ok(back.tag.every(function (v) { return v === 7; }));
+	var edits = s.manifest.edits, stop = new AbortController();
+	await assert.rejects(s.removeColumn("tag", { signal: stop.signal, onProgress: function (e) { if (e.done > 0) stop.abort(); } }), { code: "ABORTED" });
+	assert.equal(s.manifest.edits, edits);
+	assert.ok(s.manifest.columns.some(function (c) { return c.name === "tag"; }), "the column is still there");
+	await assert.rejects(s.addColumn("other", "u8", 0, { signal: AbortSignal.abort() }), { code: "ABORTED" });
+	assert.ok(!s.manifest.columns.some(function (c) { return c.name === "other"; }));
+	await s.removeColumn("tag");
+	assert.ok(!s.manifest.columns.some(function (c) { return c.name === "tag"; }));
+});
+
+test("writeLas reports the points it compresses and stops; the store's writeLas reports by tile and stops", { timeout: 120000 }, async function () {
+	var seen = [];
+	var bytes = await writeLas(CLOUD, { compress: true, chunkSize: 2000, threads: 2, onProgress: function (d, t) { seen.push([d, t]); } });
+	assert.ok(bytes.length > 1000);
+	assert.deepEqual(seen[0], [0, CLOUD.count]); assert.deepEqual(seen[seen.length - 1], [CLOUD.count, CLOUD.count]);
+	seen.forEach(function (e, i) { if (i) assert.ok(e[0] >= seen[i - 1][0]); });
+	var plain = [];
+	await writeLas(CLOUD, { onProgress: function (d, t) { plain.push([d, t]); } });
+	assert.deepEqual(plain[plain.length - 1], [CLOUD.count, CLOUD.count]);
+	var stop = new AbortController();
+	await assert.rejects(writeLas(CLOUD, { compress: true, chunkSize: 1000, threads: 2, signal: stop.signal, onProgress: function (d) { if (d > 2000) stop.abort(); } }), { code: "ABORTED" });
+	await assert.rejects(writeLas(CLOUD, { signal: AbortSignal.abort() }), { code: "ABORTED" });
+	await assert.rejects(writeLas(CLOUD, { onProgress: 3 }), { code: "INVALID_ARGUMENT" });
+
+	var s = await store(), got = [], sink = { write: function () {} };
+	var res = await s.writeLas(sink, { onProgress: function (e) { got.push(e); } });
+	assert.equal(res.count, CLOUD.count);
+	assert.ok(got.length >= 3 && got[0].done === 0 && got[got.length - 1].done === CLOUD.count && got[0].total === CLOUD.count && got.every(function (e) { return e.phase === "write"; }));
+	var halt = new AbortController();
+	await assert.rejects(s.writeLas({ write: function () {} }, { signal: halt.signal, onProgress: function (e) { if (e.done > 0) halt.abort(); } }), { code: "ABORTED" });
+});

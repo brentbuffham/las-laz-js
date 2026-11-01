@@ -24,6 +24,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { coordsOf, checkPointCount } from "../index/grid.js";
 import { countOf, columnsOf } from "./columns.js";
+import { sharedBar } from "../progressBar.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -252,29 +253,36 @@ function binValue(b) { return b === 0 ? GAP_LO / 2 : GAP_LO * Math.pow(GAP_RATIO
 /**
  * Count, per cell size, how large the biggest gap in heights is in each cell (see suggestDoubleLayer).
  * @param {object} cols - point columns with x, y, z, or a k = 3 positions column.
+ * @param {{onProgress?: function(number, number), signal?: AbortSignal}} [opts] - onProgress(done, total): a bar of 1000.
  * @returns {{points: number, area: number, cells: number[], hist: Uint32Array[]}} points; area: square metres the points occupy
  *   (0.5 m cells); cells[i], hist[i]: for cell size STAT_CELLS[i], the cells with enough points and a histogram of their biggest gaps.
  *   Several results add up (addStats), for a cloud read in pieces.
  */
-export function doubleLayerStats(cols) {
-	var coords = coordsOf(cols, "doubleLayerStats"), n = cols.count;
+export function doubleLayerStats(cols, opts) {
+	var coords = coordsOf(cols, "doubleLayerStats"), n = cols.count, bar = sharedBar(opts && opts.onProgress, opts && opts.signal);
 	checkPointCount(n);
+	bar.at(0);
 	var X = coords.x, Y = coords.y, Z = coords.z, st = coords.stride, i;
 	var out = { points: n, area: 0, cells: STAT_CELLS.map(function () { return 0; }), hist: STAT_CELLS.map(function () { return new Uint32Array(GAP_BINS); }) };
 	if (n === 0) return out;
 	var x0 = Infinity, y0 = Infinity;
 	for (i = 0; i < n; i++) { if (X[i * st] < x0) x0 = X[i * st]; if (Y[i * st] < y0) y0 = Y[i * st]; }
-	var occ = new Set();
-	for (i = 0; i < n; i++) occ.add(Math.floor((X[i * st] - x0) * 2) * 1048576 + Math.floor((Y[i * st] - y0) * 2));
+	// the bar: the area first (a twentieth), then each cell size a part of the rest (its points binned, then its cells measured)
+	var occ = new Set(), areaTick = bar.ticker(0, 0.05, n);
+	for (i = 0; i < n; i++) { occ.add(Math.floor((X[i * st] - x0) * 2) * 1048576 + Math.floor((Y[i * st] - y0) * 2)); areaTick(i); }
 	out.area = occ.size * 0.25;
 	STAT_CELLS.forEach(function (cell, ci) {
-		var inv = 1 / cell, map = new Map(), lists = [];
+		var inv = 1 / cell, map = new Map(), lists = [], share = 0.95 / STAT_CELLS.length, base = 0.05 + share * ci;
+		var binTick = bar.ticker(base, base + 0.6 * share, n);
 		for (var p = 0; p < n; p++) {
+			binTick(p);
 			var key = Math.floor((X[p * st] - x0) * inv) * 1048576 + Math.floor((Y[p * st] - y0) * inv), l = map.get(key);
 			if (l === undefined) { l = []; map.set(key, l); lists.push(l); }
 			l.push(Z[p * st]);
 		}
+		var cellTick = bar.ticker(base + 0.6 * share, base + share, lists.length), seen = 0;
 		lists.forEach(function (zs) {
+			cellTick(seen++);
 			if (zs.length < STAT_MIN_CELL) return;
 			zs.sort(function (a, b) { return a - b; });
 			var best = 0;
@@ -282,6 +290,7 @@ export function doubleLayerStats(cols) {
 			out.cells[ci]++; out.hist[ci][gapBin(best)]++;
 		});
 	});
+	bar.at(1);
 	return out;
 }
 
@@ -305,7 +314,8 @@ function histQuantile(h, total, q) {
  * The selectDoubleLayer options for a cloud, worked out from its points.
  * @param {object|{points: number, area: number, cells: number[], hist: Uint32Array[]}} source - point columns, or doubleLayerStats' result
  *   (for a cloud read in pieces).
- * @param {{strength?: string}} [opts] - strength: "gentle" (a larger gap, 4 points, twice the area: only clear ghosts), "normal"
+ * @param {{strength?: string, onProgress?: function(number, number), signal?: AbortSignal}} [opts] - onProgress(done, total) is a bar of 1000 over measuring
+ *   the cloud (the biggest part of the run; not for a doubleLayerStats result); a signal is looked at as it ticks (ABORTED). strength: "gentle" (a larger gap, 4 points, twice the area: only clear ghosts), "normal"
  *   (default), "thorough" (a smaller gap, 2 points, half the area: fainter ghosts, and a little real texture with them) or
  *   "aggressive" (half the gap, 2 points, a quarter of the area, a wider bridge and reach: the thin and scattered ghosts too,
  *   and more of the real texture with them; look at it with Show before fixing).
@@ -320,7 +330,7 @@ function histQuantile(h, total, q) {
 export function suggestDoubleLayer(source, opts) {
 	var strength = opts && opts.strength !== undefined ? opts.strength : "normal";
 	if (strength !== "gentle" && strength !== "normal" && strength !== "thorough" && strength !== "aggressive") throw bad("suggestDoubleLayer strength must be \"gentle\", \"normal\", \"thorough\" or \"aggressive\", not " + JSON.stringify(strength));
-	var stats = source && source.hist ? source : doubleLayerStats(source);
+	var stats = source && source.hist ? source : doubleLayerStats(source, opts);
 	if (stats.points < 2000 || !(stats.area > 0)) return { ok: false, reason: "too few points to measure (" + stats.points + ")" };
 	var density = stats.points / stats.area, ideal = Math.sqrt(POINTS_PER_CELL / density), ci = 0, i;
 	for (i = 1; i < STAT_CELLS.length; i++) if (Math.abs(Math.log(STAT_CELLS[i] / ideal)) < Math.abs(Math.log(STAT_CELLS[ci] / ideal))) ci = i;

@@ -27,9 +27,10 @@ function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, messag
  * Build a k-d tree over point columns.
  * @param {object} cols - point columns (x, y, z or a k = 3 positions column).
  * @param {string} fn - the calling function's name, for messages.
+ * @param {function(number)} [onBuild] - called with the share of the work done (0 to 1) about every 1 % of it; may throw to stop the build
  * @returns {{count: number, perm: Uint32Array, axis: Uint8Array, split: Float64Array, leafSize: number, coords: object}}
  */
-export function buildKdTree(cols, fn) {
+export function buildKdTree(cols, fn, onBuild) {
 	var coords = coordsOf(cols, fn), n = cols.count;
 	checkPointCount(n);
 	var A = [coords.x, coords.y, coords.z], st = coords.stride, i, o;
@@ -63,10 +64,15 @@ export function buildKdTree(cols, fn) {
 		}
 	}
 
+	// the work is every internal node's points, in all about n x d; it is reported about every 1 %
+	var work = 0, all = Math.max(1, n * d), nextReport = onBuild ? all / 100 : Infinity;
+	if (onBuild) onBuild(0);
 	var stack = [0, 0, n];
 	while (stack.length) {
 		var hi = stack.pop(), lo = stack.pop(), node = stack.pop();
 		if (hi - lo <= LEAF) continue;
+		work += hi - lo;
+		if (work >= nextReport) { nextReport = work + all / 100; onBuild(Math.min(1, work / all)); }
 		var best = 0, ext = -1;
 		for (var ax = 0; ax < 3; ax++) {
 			var V = A[ax], mn = Infinity, mx = -Infinity;
@@ -86,6 +92,7 @@ export function buildKdTree(cols, fn) {
 		split[node] = A[best][perm[mid] * st];
 		stack.push(2 * node + 1, lo, mid, 2 * node + 2, mid, hi);
 	}
+	if (onBuild) onBuild(1);
 	return { count: n, perm: perm, axis: axis, split: split, leafSize: LEAF, coords: coords };
 }
 

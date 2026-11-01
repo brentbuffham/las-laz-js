@@ -202,6 +202,7 @@ function boundsOfPoints(points, origin) {
  *   the Classification Lookup VLR), software, systemId, date, localOrigin, as ("bytes" | "blob"),
  *   compress (write LAZ), chunkSize (points per LAZ chunk, default 50000; only with compress),
  *   threads (LAZ compression workers: default automatic, from 4 chunks and at most 4 workers; 1 = this thread; n = n workers),
+ *   onProgress(done, total) in points as the chunks are written (LAZ), signal (an AbortSignal: ABORTED, the pool closed),
  *   extraBytes (fields after the point format: [{ name, type ("u8" … "f64", "raw"), column?, size? (raw), scale?, offset?,
  *   noData? (raw), description? }], values from points[column || name]; a reader's extraBytes can be passed as they are)
  * @returns {Promise<Uint8Array|Blob>}
@@ -209,6 +210,8 @@ function boundsOfPoints(points, origin) {
 export async function writeLas(points, opts) {
 	var s = settle(points, opts);
 	var o = s.opts;
+	if (o.onProgress !== undefined && typeof o.onProgress !== "function") throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "onProgress must be a function");
+	if (o.signal && o.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the write was stopped");
 	var so = (o.scale && o.offset) ? { scale: o.scale, offset: o.offset } : chooseScaleOffset(boundsOfPoints(points, o.localOrigin));
 	if (o.scale && !o.offset) so = { scale: o.scale, offset: chooseScaleOffset(boundsOfPoints(points, o.localOrigin)).offset };
 	var len = s.recordLength;
@@ -224,6 +227,7 @@ export async function writeLas(points, opts) {
 	encodeRecords(points, s.fmt, len, so, o.localOrigin, new DataView(out.buffer), headLength, totals, 0, extraFields(s));
 	totals.count = points.count;
 	out.set(headerBytes(s, so, totals), 0);
+	if (o.onProgress) { o.onProgress(0, points.count); o.onProgress(points.count, points.count); }
 	return o.as === "blob" ? new Blob([out], { type: "application/octet-stream" }) : out;
 }
 
@@ -399,8 +403,18 @@ async function lazParts(points, s, so, len, totals) {
 	var parts = [null, null];
 	var poolAt = t === 1 || (!t && count < AUTO_MIN_CHUNKS) ? Infinity : 1;
 	var loop = lazChunks(s, so, len, totals, function (bytes) { parts.push(bytes); }, poolAt, function () { return startPool(s.opts, count); });
-	var step = CHUNKS_PER_TASK * size;
-	for (var a = 0; a < points.count; a += step) await loop.write(rangeOf(points, a, Math.min(points.count, a + step)), a);
+	var step = CHUNKS_PER_TASK * size, signal = s.opts.signal, report = s.opts.onProgress;
+	try {
+		if (report) report(0, points.count);
+		for (var a = 0; a < points.count; a += step) {
+			if (signal && signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the write was stopped");
+			await loop.write(rangeOf(points, a, Math.min(points.count, a + step)), a);
+			if (report) report(Math.min(points.count, a + step), points.count);
+		}
+	} catch (err) {
+		loop.fail(err);   // the pool ends with the write
+		throw err;
+	}
 	var chunks = await loop.finish();
 	// the header's size does not depend on the totals
 	var tablePos = chunks.reduce(function (n, c) { return n + c.byteCount; }, headerBytes(s, so, totals).length + 8);

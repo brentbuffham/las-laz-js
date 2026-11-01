@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.19.10 (2026-11-01)
+
+The slow per-point tools never go silent, and run on every core:
+- `selectOutliers`, `selectSparse`, `pointNormals`, `estimateNoise`, `denoisePoints`, `suggestDoubleLayer` (and `doubleLayerStats`),
+  `pointSpacing` and `alignCloud`: `onProgress` ticks from the first moment (the k-d tree or grid build included: the build was the
+  longest silent stretch on a big cloud) to the end, never going back, and `signal` is looked at on each tick (ABORTED). The
+  callbacks keep their shape: `selectOutliers`, `selectSparse`, `pointNormals` and `denoisePoints` count points (x iterations); the
+  others report a bar of 1000. `selectSparse`, `estimateNoise`, `suggestDoubleLayer` and `pointSpacing` had no `onProgress` before.
+  The longest silent stretch of any of them at 1.5 million points is 0.1 s.
+- New `selectOutliersParallel`, `selectSparseParallel`, `pointNormalsParallel`, `denoisePointsParallel` and
+  `suggestDoubleLayerParallel`: the serial tool on tiles of the cloud with a ring of its neighbours, on the worker pool, with
+  `threads`, `tile`, `onProgress` (one bar of 1000) and `signal`. The same answers: `selectSparseParallel` and `pointNormalsParallel`
+  exactly, `denoisePointsParallel` exactly with a `sigma`, `selectOutliersParallel` exactly where a point's k nearest are within `overlap`.
+  1.5 million points on 16 workers: `selectOutliers` 2.4 s -> 0.6 s, `pointNormals` 4.9 s -> 0.7 s, `denoisePoints` (2 passes) 11.5 s -> 1.8 s.
+- `store.addColumn(name, type, fill, opts)` and `store.removeColumn(name, opts)`: `signal` (between groups of tiles, the store as it
+  was) and `onProgress({ phase: "edit", done, total })`, the tiles in groups of 16 at once instead of one by one.
+- `writeLas` takes `onProgress(done, total)` (points, as the LAZ chunks are written) and `signal` (the pool is closed with it);
+  `store.writeLas` takes `signal` and `onProgress({ phase: "write", done, total })` by tile.
+- Worker: `addColumn` and `removeColumn` post progress and stop with the job.
+- Internal: `src/index/planFast.js` (the tile planner `dedupeParallel` uses too), `src/index/density.js`, `src/index/tileJobs.js`.
+
 ## 0.19.9 (2026-11-01)
 
 Faster, and never a frozen bar (Remove duplicates on 30 million points sat at 2% for 45 s):

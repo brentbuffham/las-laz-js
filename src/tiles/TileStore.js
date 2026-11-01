@@ -243,9 +243,9 @@ TileStore.prototype.deletePoints = editing("deletePoints");
 TileStore.prototype.keepPoints = editing("keepPoints");
 /** Set a field for the selected points: a value, or { key: typed array }; opts { signal, onProgress } as deletePoints. @function */
 TileStore.prototype.setColumn = editing("setColumn");
-/** Add a column (name, type "u8" ... "f64", fill) to every point. @function */
+/** Add a column (name, type "u8" ... "f64", fill) to every point; opts { signal, onProgress } as deletePoints. @function */
 TileStore.prototype.addColumn = editing("addColumn");
-/** Remove an added column. @function */
+/** Remove an added column; opts { signal, onProgress } as deletePoints. @function */
 TileStore.prototype.removeColumn = editing("removeColumn");
 /** Compose a transform ({ m, t }, as makeTransform) onto the store's. @function */
 TileStore.prototype.transform = editing("transform");
@@ -278,7 +278,9 @@ TileStore.prototype.transformPoints = editing("transformPoints");
 /**
  * Write the store as LAS / LAZ, node by node (src/tiles/write.js).
  * @param {object} sink - as createLasWriter: an OPFS scratch writer, a Node FileHandle, or any { write(bytes, position) }
- * @param {{compress?: boolean, chunkSize?: number, threads?: number, version?: string, pointFormat?: number}} [opts]
+ * @param {{compress?: boolean, chunkSize?: number, threads?: number, version?: string, pointFormat?: number,
+ *   signal?: AbortSignal, onProgress?: function({phase: string, done: number, total: number})}} [opts] - signal stops it between tiles (ABORTED);
+ *   onProgress({ phase: "write", done, total }) in points
  * @returns {Promise<{count: number}>}
  */
 TileStore.prototype.writeLas = async function (sink, opts) {

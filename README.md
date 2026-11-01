@@ -451,6 +451,33 @@ worker. The tiles are checked against each other before the answer is trusted, a
 point was wrong is swept again, so the kept points are exactly `dedupe`'s, not close to them. `onProgress(done, total)`
 is one climbing bar of 1000. 10 million points in 3D: 3.8 s for `dedupe`, 0.9 s for `dedupeParallel` on 16 workers.
 
+### The slow per-point tools on every core
+
+```js
+import { selectOutliersParallel, selectSparseParallel, pointNormalsParallel, denoisePointsParallel, suggestDoubleLayerParallel } from "las-laz-js";
+
+var strays = await selectOutliersParallel(pts, { k: 8, multiplier: 2, onProgress, signal });   // as selectOutliers
+var dust = await selectSparseParallel(pts, { radius: 0.1, minNeighbours: 1 });                  // as selectSparse
+var { normal, residual } = await pointNormalsParallel(pts, { maxDistance: 0.3 });               // as pointNormals
+var smooth = await denoisePointsParallel(pts, { maxDistance: 0.3, iterations: 2, sigma });      // as denoisePoints
+var settings = await suggestDoubleLayerParallel(pts, { strength: "normal" });                   // as suggestDoubleLayer
+```
+
+The cloud is cut into tiles on its plan, each tile holds its own points and a ring of the points around it, and a pool worker
+runs the serial tool on each; only a tile's own points are taken from its result. `selectSparseParallel`, `pointNormalsParallel`
+and `denoisePointsParallel` (with a `sigma`) give the serial tool's answer bit for bit, because the ring covers every neighbour.
+`selectOutliersParallel` is exact for every point whose k nearest lie within `overlap` (default 30 point spacings, at least 0.5);
+a stray point farther from anything than that is an outlier either way. Without a `sigma`, `denoisePointsParallel` measures the noise
+on four tiles; `suggestDoubleLayerParallel` adds the tiles' measures, so its numbers differ a little from a run on the whole cloud.
+Each takes `threads` (1 runs the serial tool here), `tile`, `onProgress(done, total)` (one bar of 1000) and `signal`; under 200,000
+points, or for a positions column, it runs the serial tool on this thread. 1.5 million points: `selectOutliers` 2.4 s -> 0.6 s,
+`pointNormals` 4.9 s -> 0.7 s, `denoisePoints` (2 passes) 11.5 s -> 1.8 s on 16 workers.
+
+The serial tools tick steadily too: `selectOutliers`, `selectSparse`, `pointNormals`, `estimateNoise`, `denoisePoints`, `suggestDoubleLayer`,
+`pointSpacing` and `alignCloud` take `onProgress` and `signal`, count the tree build or grid build on the bar, and have no silent stretch
+(the longest at 1.5 million points was 0.1 s). A signal is looked at as they tick, which stops a run on the calling thread only where a stop can
+reach it (use the `...Parallel` tools to stop one from outside).
+
 ## Register
 
 Put a raw scan onto the mine grid, or onto another cloud, and see how well it fits. The result is

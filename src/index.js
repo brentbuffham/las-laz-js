@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.19.9";
+export var VERSION = "0.19.10";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -20,6 +20,7 @@ export { decodeRecords, DEFAULT_FIELDS, FIELD_TYPES } from "./read/decodeRecords
 export { makeKeep, countKept } from "./filter/filters.js";
 export { dedupe, dedupeSelection } from "./filter/dedupe.js";
 export { dedupeParallel } from "./filter/dedupeParallel.js";
+export { selectOutliersParallel, selectSparseParallel, pointNormalsParallel, denoisePointsParallel, suggestDoubleLayerParallel } from "./ops/parallel.js";
 export { buildIndex } from "./index/grid.js";
 export { pointsInRadius, nearestPoint, pointsNearRay } from "./index/query.js";
 export { nearestPoints } from "./index/knn.js";

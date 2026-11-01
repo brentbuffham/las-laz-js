@@ -190,8 +190,8 @@ export function createWorkerHandler(post) {
 		deletePoints: async function (id, payload, controller) { return changed(await needStore().deletePoints(payload.selection, editOptions(id, payload, controller))); },
 		keepPoints: async function (id, payload, controller) { return changed(await needStore().keepPoints(payload.selection, editOptions(id, payload, controller))); },
 		setColumn: async function (id, payload, controller) { await needStore().setColumn(payload.selection, payload.name, payload.value, editOptions(id, payload, controller)); return changed(); },
-		addColumn: async function (id, payload) { await needStore().addColumn(payload.name, payload.type, payload.fill); return changed(); },
-		removeColumn: async function (id, payload) { await needStore().removeColumn(payload.name); return changed(); },
+		addColumn: async function (id, payload, controller) { await needStore().addColumn(payload.name, payload.type, payload.fill, editOptions(id, payload, controller)); return changed(); },
+		removeColumn: async function (id, payload, controller) { await needStore().removeColumn(payload.name, editOptions(id, payload, controller)); return changed(); },
 		transform: async function (id, payload) { await needStore().transform(payload.transform); return changed(); },
 		findDoubleLayer: async function (id, payload, controller) {
 			var o = Object.assign({}, payload, {

@@ -230,6 +230,15 @@ export async function createLazPool(n, nodeUrl) {
 			return run(Object.assign({ op: "dedupe" }, task), transfer, function (m) { return { status: new Uint8Array(m.status) }; }, onProgress);
 		},
 		/**
+		 * One tile of a parallel run on a cloud in memory (src/ops/parallel.js): a job of src/index/tileJobs.js on the tile's points.
+		 * onProgress(share of the tile done).
+		 * @param {{job: string, params: object, count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer, f32: boolean}} task - buffers transferred
+		 * @returns {Promise<object>} the job's typed arrays
+		 */
+		tile: function (task, onProgress) {
+			return run(Object.assign({ op: "tile" }, task), [task.x, task.y, task.z], function (m) { return m.result; }, onProgress);
+		},
+		/**
 		 * One work tile of a parallel run on a tile store (src/tiles/parallelStore.js): the worker opens the store
 		 * at where (once a run), reads its region and runs op ("fragmentsRegion" or "facetsRegion").
 		 * @returns {Promise<object>} regionJobs' result

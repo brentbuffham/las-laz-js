@@ -586,7 +586,20 @@ function patchField(store, records, name, idx, values, value) {
 /**
  * Add a column every point holds, set to fill.
  */
-export function addColumn(store, name, type, fill) {
+// Run one() on each key, GROUP at a time (the tiles are independent), looking at the signal between groups and reporting each tile done
+var GROUP = 16;
+async function eachTile(keys, opts, one) {
+	var signal = opts && opts.signal, working = phase(opts && opts.onProgress, "edit", keys.length), finished = 0;
+	working.tick(0);
+	for (var k = 0; k < keys.length; k += GROUP) {
+		aborted(signal);
+		await Promise.all(keys.slice(k, k + GROUP).map(function (key) { return one(key).then(function () { working.tick(++finished); }); }));
+	}
+	working.finish();
+}
+
+// opts: signal (checked between groups of tiles: ABORTED, the store as it was), onProgress({ phase: "edit", done, total }) by tile
+export function addColumn(store, name, type, fill, opts) {
 	return queued(store, function () {
 		var m = store.manifest;
 		if (typeof name !== "string" || !name || name.length > 32 || /[^\x01-\xff]/.test(name)) throw bad("a column name is 1 to 32 characters, one byte each");
@@ -597,26 +610,27 @@ export function addColumn(store, name, type, fill) {
 		var f = checkTyped(type, fill, name, "fill");
 		return session(store, async function (put) {
 			var keys = Object.keys(m.nodes).sort(keyOrder);
-			for (var i = 0; i < keys.length; i++) {
-				var n = await readNodeColumns(store, keys[i]), col = new COLUMN_TYPES[type](n.t.count);
+			await eachTile(keys, opts, async function (key) {
+				var n = await readNodeColumns(store, key), col = new COLUMN_TYPES[type](n.t.count);
 				col.fill(f);
-				await put(keys[i], null, n.t.columns.concat([col]), n.t.size, n);
-			}
+				await put(key, null, n.t.columns.concat([col]), n.t.size, n);
+			});
 		}, function (body) { body.columns.push({ name: name, type: type, fill: typeof f === "bigint" ? String(f) : f }); });
 	});
 }
 
 /** Remove an added column from every node. */
-export function removeColumn(store, name) {
+// opts as addColumn
+export function removeColumn(store, name, opts) {
 	return queued(store, function () {
 		var m = store.manifest, ai = m.columns.map(function (c) { return c.name; }).indexOf(name);
 		if (ai < 0) throw bad("no added column " + name + " in the store");
 		return session(store, async function (put) {
 			var keys = Object.keys(m.nodes).sort(keyOrder);
-			for (var i = 0; i < keys.length; i++) {
-				var n = await readNodeColumns(store, keys[i]);
-				await put(keys[i], null, n.t.columns.filter(function (c, j) { return j !== ai; }), n.t.size, n);
-			}
+			await eachTile(keys, opts, async function (key) {
+				var n = await readNodeColumns(store, key);
+				await put(key, null, n.t.columns.filter(function (c, j) { return j !== ai; }), n.t.size, n);
+			});
 		}, function (body) { body.columns.splice(ai, 1); });
 	});
 }
