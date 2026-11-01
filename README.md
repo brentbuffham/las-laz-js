@@ -332,6 +332,8 @@ work tiles), and `fixDoubleLayerStore(store, { box, strength, mode, keep, maxPas
 runs the whole thing: the first pass joins a sparse sheet's pieces, a second normally finds nothing and ends it.
 Single double cells that never join a patch are left, as `selectDoubleLayer` leaves them. `settings` is laid over
 the suggested options (for a ghost further off than 0.5 m, `{ maxGap: 5 }`); `dryRun` finds and moves nothing.
+`onProgress(done, total)` is one bar over the whole fix (total 1000: the measuring, then each pass's find and write), and
+`threads` and `signal` reach the finds and the writes.
 
 `selectDoubleLayerStore(store, opts)` and `snapToLayerStore(store, found, { mode, blend })` do it over a tile
 store (`partner: true` for `"average"`). `box: { minX, maxX, minY, maxY, minZ, maxZ }` (file coordinates, any

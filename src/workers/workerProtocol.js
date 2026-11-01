@@ -229,8 +229,12 @@ export function createWorkerHandler(post) {
 			doubleFound = keep;
 			return out;
 		},
-		snapDoubleLayer: async function (id, payload) {
-			var r = await snapToLayerStore(needStore(), needDouble(), payload);
+		snapDoubleLayer: async function (id, payload, controller) {
+			var o = Object.assign({}, payload, {
+				signal: controller.signal,
+				onProgress: function (done, total) { post({ id: id, type: "progress", fraction: total ? done / total : 1, label: "moving" }); }
+			});
+			var r = await snapToLayerStore(needStore(), needDouble(), o);
 			return changed({ moved: r.moved, batches: r.batches });
 		},
 		writeTiles: async function (id, payload) {

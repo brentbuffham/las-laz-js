@@ -213,3 +213,52 @@ test("fixDoubleLayerStore on a clean store moves nothing, and bad options are re
 	for (var o of [{ maxPasses: 0 }, { maxPasses: 1.5 }, { strength: "x" }, { mode: "x" }])
 		await assert.rejects(fixDoubleLayerStore(await store(), Object.assign({ threads: 1, tile: 6, settings: { maxGap: 5 } }, o)), { code: "INVALID_ARGUMENT" });
 });
+
+test("fixDoubleLayerStore reports one climbing bar over the whole fix, from 0 to its total", async function () {
+	var s = await store(), seen = [];
+	var r = await fixDoubleLayerStore(s, Object.assign({}, FIX, { onProgress: function (d, t) { seen.push([d, t]); } }));
+	assert.equal(r.ok, true);
+	assert.ok(r.moved > 0);
+	assert.deepEqual(seen[0], [0, 1000]);
+	assert.deepEqual(seen[seen.length - 1], [1000, 1000]);
+	seen.forEach(function (e, i) {
+		assert.equal(e[1], 1000);
+		if (i) assert.ok(e[0] > seen[i - 1][0], "step " + i + ": " + seen[i - 1][0] + " then " + e[0]);
+	});
+	assert.ok(seen.length > 10, seen.length + " steps");
+	// the write is on the bar: something is reported between the end of the first pass's find and the pass's end
+	var findEnd = Math.round(1000 * (0.05 + 0.95 * 0.6 * 0.65)), passEnd = Math.round(1000 * (0.05 + 0.95 * 0.6));
+	assert.ok(seen.some(function (e) { return e[0] > findEnd && e[0] <= passEnd; }), "no step in the write's part");
+});
+
+test("fixDoubleLayerStore: a dry run and a clean store also end the bar at its total", async function () {
+	var dry = [], clean = [];
+	await fixDoubleLayerStore(await store(), Object.assign({}, FIX, { dryRun: true, onProgress: function (d, t) { dry.push([d, t]); } }));
+	await fixDoubleLayerStore(await cleanStore(), { threads: 1, tile: 6, onProgress: function (d, t) { clean.push([d, t]); } });
+	[dry, clean].forEach(function (seen) {
+		assert.deepEqual(seen[0], [0, 1000]);
+		assert.deepEqual(seen[seen.length - 1], [1000, 1000]);
+		seen.forEach(function (e, i) { if (i) assert.ok(e[0] > seen[i - 1][0]); });
+	});
+});
+
+test("snapToLayerStore reports the points it writes, runs on threads, and a stop before it starts leaves the store as it was", async function () {
+	var s = await store(), found = await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6 }, OPTS)), seen = [];
+	var r = await snapToLayerStore(s, found, { threads: 2, onProgress: function (d, t) { seen.push([d, t]); } });
+	assert.equal(r.moved, found.count);
+	assert.deepEqual(seen[0], [0, found.count]);
+	assert.deepEqual(seen[seen.length - 1], [found.count, found.count]);
+	seen.forEach(function (e, i) { if (i) assert.ok(e[0] >= seen[i - 1][0]); });
+	assert.ok(seen.length > 2, "progress while it writes: " + seen.length + " reports");
+
+	var t = await store(), again = await selectDoubleLayerStore(t, Object.assign({ threads: 1, tile: 6 }, OPTS));
+	await assert.rejects(snapToLayerStore(t, again, { signal: AbortSignal.abort() }), { code: "ABORTED" });
+	var left = await selectDoubleLayerStore(t, Object.assign({ threads: 1, tile: 6 }, OPTS));
+	assert.equal(left.count, again.count, "a stopped write leaves the store as it was");
+});
+
+test("fixDoubleLayerStore can be stopped part way through, and the store is as it was", async function () {
+	var s = await store(), stop = new AbortController(), before = (await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6 }, OPTS))).count;
+	await assert.rejects(fixDoubleLayerStore(s, Object.assign({}, FIX, { signal: stop.signal, onProgress: function (d) { if (d > 400) stop.abort(); } })), { code: "ABORTED" });
+	assert.equal((await selectDoubleLayerStore(s, Object.assign({ threads: 1, tile: 6 }, OPTS))).count, before);
+});

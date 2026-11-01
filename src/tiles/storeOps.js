@@ -35,6 +35,7 @@ import { suggestDoubleLayer, addDoubleLayerStats } from "../ops/doubleLayer.js";
 import { scratchBlobs } from "./scratchBlobs.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
+function stopped() { return new LasError(ERROR_CODES.ABORTED, "the run was stopped"); }
 var BATCH_POINTS = 10000000;
 
 /**
@@ -62,7 +63,7 @@ export async function dedupeStore(store, tolerance, opts) {
 		var a = Uint32Array.from(l).sort();
 		sel.tiles[L.nodes.keys[i]] = a; sel.count += a.length;
 	});
-	if (o.apply !== false && sel.count) await store.deletePoints(sel);
+	if (o.apply !== false && sel.count) await store.deletePoints(sel, { threads: o.threads, signal: o.signal });
 	return { removed: sel.count, selection: sel, tiles: L.tiles.length, threads: ran };
 }
 
@@ -100,7 +101,7 @@ export async function smoothStore(store, opts) {
 			value[L.nodes.keys[nd]] = v;
 		});
 		batches++;
-		await store.setPositions(value);
+		await store.setPositions(value, { threads: o.threads, signal: o.signal });
 	}
 	try {
 		// a tile's moved points to scratch: count, node, index (u32), x, y, z (f32, local)
@@ -337,8 +338,10 @@ export async function selectDoubleLayerStore(store, opts) {
  * snapToLayer over a whole tile store: move the ghost points selectDoubleLayerStore found (setPositions).
  * @param {object} store - the open TileStore the run was on, not edited since.
  * @param {object} found - selectDoubleLayerStore's result.
- * @param {{mode?: string, blend?: number, batchPoints?: number}} [opts] - as snapToLayer; "average" needs the run's partner: true;
- *   batchPoints (10 M): moved points a write.
+ * @param {{mode?: string, blend?: number, batchPoints?: number, threads?: number, signal?: AbortSignal, onProgress?: function(number, number)}} [opts] -
+ *   as snapToLayer; "average" needs the run's partner: true; batchPoints (10 M): moved points a write; threads, signal as
+ *   setPositions (the writes run on the store's worker pool; a stop leaves the batches written so far); onProgress(done, total)
+ *   in points moved.
  * @returns {Promise<{moved: number, batches: number}>}
  */
 export async function snapToLayerStore(store, found, opts) {
@@ -348,14 +351,23 @@ export async function snapToLayerStore(store, found, opts) {
 	if (!found || !found.ghost || !found.keys || !found.origin) throw bad("snapToLayerStore needs the result of selectDoubleLayerStore");
 	if (mode === "average" && blend > 0 && !found.partner) throw bad("mode \"average\" needs selectDoubleLayerStore to run with partner: true");
 	var batch = o.batchPoints || BATCH_POINTS, org = found.origin, move = mode === "average" ? 1 - blend : 1;
-	var moved = 0, batches = 0, held = 0, value = {};
+	var moved = 0, batches = 0, held = 0, value = {}, written = 0, total = 0, signal = o.signal, progress = o.onProgress;
+	var partnerOf = function (i) { return mode === "average" && blend > 0 && found.partner ? found.partner[i] : null; };
+	if (signal && signal.aborted) throw stopped();
+	for (var j = 0; j < found.keys.length; j++) {
+		var gj = found.ghost[j], pj = partnerOf(j);
+		total += (gj ? gj.index.length : 0) + (pj ? pj.index.length : 0);
+	}
+	if (progress) progress(0, total);
 	async function flush() {
 		if (!held) return;
-		var v = value; value = {}; held = 0; batches++;
-		await store.setPositions(v);
+		var v = value, n = held; value = {}; held = 0; batches++;
+		await store.setPositions(v, { threads: o.threads, signal: signal, onProgress: progress && function (e) { progress(written + n * (e.total ? e.done / e.total : 1), total); } });
+		written += n;
+		if (progress) progress(written, total);
 	}
 	for (var i = 0; i < found.keys.length; i++) {
-		var g = found.ghost[i], p = mode === "average" && blend > 0 && found.partner ? found.partner[i] : null;
+		var g = found.ghost[i], p = partnerOf(i);
 		if (!g && !p) continue;
 		var m = (g ? g.index.length : 0) + (p ? p.index.length : 0), entries = [], a;
 		if (g) for (a = 0; a < g.index.length; a++) entries.push([g.index[a], g.x[a], g.y[a], mode === "surface" ? g.dom[a] : g.z[a] + g.dz[a] * move]);
@@ -371,6 +383,18 @@ export async function snapToLayerStore(store, found, opts) {
 }
 
 var SAMPLE_TILES = 8;
+
+// One 0..1 bar over a run of steps, as onProgress(done, total) of 1000 that never goes back; sub(from, to) is the
+// onProgress of a step that fills that part of it
+function sharedBar(onProgress) {
+	var last = -1;
+	function at(f) {
+		if (!onProgress) return;
+		var done = Math.round(Math.min(1, Math.max(0, f)) * 1000);
+		if (done > last) { last = done; onProgress(done, 1000); }
+	}
+	return { at: at, sub: function (from, to) { return function (d, t) { at(from + (to - from) * (t > 0 ? d / t : 1)); }; } };
+}
 
 /**
  * The selectDoubleLayerStore options for a store, or for the part of it inside opts.box, worked out from its points (suggestDoubleLayer).
@@ -405,27 +429,35 @@ export async function suggestDoubleLayerStore(store, opts) {
  *   threads?: number, tile?: number, tilePoints?: number, onProgress?: function(number, number), onPass?: function(object),
  *   signal?: AbortSignal}} [opts] - strength: as suggestDoubleLayer; mode: snapToLayer's (default "offset"); keep: default
  *   "auto"; maxPasses (default 4); settings: selectDoubleLayer options laid over the suggested ones; dryRun: find, move nothing
- *   (one pass); onPass: called with each pass's { pass, found, moved }.
+ *   (one pass); onPass: called with each pass's { pass, found, moved }. onProgress(done, total) is one climbing bar over the
+ *   whole fix (total 1000): the measuring first, then each pass's find and its write, the first pass the most of what is left
+ *   and each later pass 0.4 of the one before; it ends at 1000. threads (default: the store's pool) and signal reach the finds
+ *   and the writes; a stop leaves the batches written so far (a pass writes one batch for up to 10 M points).
  * @returns {Promise<{ok: boolean, reason?: string, settings?: object, passes: object[], found: number, moved: number}>} found: the
  *   ghost points of the first pass (what a dry run reports); moved: the points moved over all passes.
  */
 export async function fixDoubleLayerStore(store, opts) {
 	var o = opts || {}, maxPasses = o.maxPasses === undefined ? 4 : o.maxPasses;
 	if (!(Number.isInteger(maxPasses) && maxPasses >= 1)) throw bad("maxPasses must be a whole number >= 1, not " + JSON.stringify(o.maxPasses));
-	var s = await suggestDoubleLayerStore(store, o);
-	if (!s.ok) return { ok: false, reason: s.reason, passes: [], found: 0, moved: 0 };
+	var bar = sharedBar(o.onProgress), MEASURE = 0.05, FIND = 0.65, LATER = 0.4;   // measuring's share; a pass's share that is finding; what each pass leaves
+	var s = await suggestDoubleLayerStore(store, Object.assign({}, o, { onProgress: bar.sub(0, MEASURE) }));
+	if (!s.ok) { bar.at(1); return { ok: false, reason: s.reason, passes: [], found: 0, moved: 0 }; }
 	var settings = Object.assign({ cell: s.cell, minGap: s.minGap, minPoints: s.minPoints, minArea: s.minArea, bridge: s.bridge, maxGap: s.maxGap, keep: o.keep || "auto" }, o.settings || {});
-	var run = Object.assign({}, settings, { box: o.box, threads: o.threads, tile: o.tile, tilePoints: o.tilePoints, signal: o.signal, onProgress: o.onProgress });
+	var run = Object.assign({}, settings, { box: o.box, threads: o.threads, tile: o.tile, tilePoints: o.tilePoints, signal: o.signal });
 	var passes = [], moved = 0, found = 0, last = Infinity;
 	for (var pass = 1; pass <= maxPasses; pass++) {
-		var f = await selectDoubleLayerStore(store, run), p = { pass: pass, found: f.count, moved: 0 };
+		// this pass's part of the bar: the pass 1 the most of what is left after the measuring, the last pass the rest
+		var from = MEASURE + (1 - MEASURE) * (1 - Math.pow(LATER, pass - 1)), to = pass === maxPasses || o.dryRun ? 1 : MEASURE + (1 - MEASURE) * (1 - Math.pow(LATER, pass));
+		var mid = o.dryRun ? to : from + FIND * (to - from);
+		var f = await selectDoubleLayerStore(store, Object.assign({}, run, { onProgress: bar.sub(from, mid) })), p = { pass: pass, found: f.count, moved: 0 };
 		if (pass === 1) found = f.count;
 		if (!f.count || o.dryRun) { passes.push(p); if (o.onPass) o.onPass(p); break; }
-		var r = await snapToLayerStore(store, f, { mode: o.mode });
+		var r = await snapToLayerStore(store, f, { mode: o.mode, threads: o.threads, signal: o.signal, onProgress: bar.sub(mid, to) });
 		p.moved = r.moved; moved += r.moved; passes.push(p);
 		if (o.onPass) o.onPass(p);
 		if (f.count >= 0.9 * last) break;      // no longer getting smaller: stop
 		last = f.count;
 	}
+	bar.at(1);
 	return { ok: true, settings: settings, passes: passes, found: found, moved: moved };
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.8 (2026-11-01)
+
+Fixed (Fix ghosting on a large tiled cloud looked hung):
+- `fixDoubleLayerStore`: `onProgress(done, total)` is now one climbing bar over the whole fix (`total` is 1000, and it ends at
+  1000). The measuring takes the first 5%; each pass then gets its find (65%) and its write (35%), the first pass 60% of what
+  is left and each later pass 40% of the one before (the last one the rest), so a second pass that finds nothing does not
+  rewind the bar. Before, every pass sent the find's 0 to 1 again and the write sent nothing.
+- `snapToLayerStore` writes through `setPositions` with `threads`, `signal` and `onProgress(done, total)` (points moved), so
+  the writes run on the store's worker pool like every other tiled edit, can be stopped, and report. A stop leaves the batches
+  already written (up to 10 M points a batch), none of the one it was in. `fixDoubleLayerStore` passes its `threads` and
+  `signal` down to the finds and the writes.
+- `dedupeStore` (its delete) and `smoothStore` (its writes) pass `threads` and `signal` to the store edit too.
+- Worker: `snapDoubleLayer` posts progress and takes the job's abort.
+
 ## 0.19.7 (2026-11-01)
 
 Added (an edit you can take back with no copy of the store):
