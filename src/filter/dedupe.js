@@ -12,7 +12,7 @@
 
 import { LasError, ERROR_CODES } from "../errors.js";
 import { columnsOf, gather, sameType } from "../ops/columns.js";
-import { hash32 } from "../index/grid.js";
+import { dedupeSweep, stoppedDedupe } from "./dedupeCore.js";
 
 /**
  * The points dedupe keeps, and where every input point went.
@@ -21,134 +21,60 @@ import { hash32 } from "../index/grid.js";
  * (lowest number on a tie); a kept point maps to itself.
  * @param {object} cols - PointColumns ({ count, x, y, z?, ... }).
  * @param {number} tolerance - distance below which points merge (> 0).
- * @param {{z?: boolean, map?: boolean}} [opts] - z: compare in 3D. map: false skips the map
- *   (the nearest-kept-point search for every dropped point, as costly as the keep itself on a
- *   cloud that thins to a third) and returns map: null; dedupe() needs only the keep.
+ * @param {{z?: boolean, map?: boolean, onProgress?: function(number, number), signal?: AbortSignal}} [opts] - z: compare in 3D. map: false
+ *   skips the map (the nearest-kept-point search for every dropped point, as costly as the keep itself on a
+ *   cloud that thins to a third) and returns map: null; dedupe() needs only the keep. onProgress(done, total) in
+ *   points, steadily (total is n, or 2 n with the map); signal is looked at as it ticks (ABORTED), for a caller
+ *   that runs this in a place a stop can reach.
  * @returns {{keep: Uint32Array, map: (Uint32Array|null)}}
  */
 export function dedupeSelection(cols, tolerance, opts) {
 	if (!(tolerance > 0)) throw new LasError(ERROR_CODES.INVALID_ARGUMENT, "dedupe tolerance must be > 0");
-	var use3d = !!(opts && opts.z && cols.z);
-	var wantMap = !(opts && opts.map === false);
-	var tol2 = tolerance * tolerance;
-	var n = cols.count;
-	var x = cols.x, y = cols.y, z = cols.z;
-	var dzRange = use3d ? 1 : 0;
-
-	// Cell indices, shifted so every neighbour is >= 0
-	var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
-	for (var p = 0; p < n; p++) {
-		var a0 = Math.floor(x[p] / tolerance), a1 = Math.floor(y[p] / tolerance), a2 = use3d ? Math.floor(z[p] / tolerance) : 0;
-		if (a0 < lo[0]) lo[0] = a0; if (a0 > hi[0]) hi[0] = a0;
-		if (a1 < lo[1]) lo[1] = a1; if (a1 > hi[1]) hi[1] = a1;
-		if (a2 < lo[2]) lo[2] = a2; if (a2 > hi[2]) hi[2] = a2;
-	}
-	var SY = hi[1] - lo[1] + 3, SZ = hi[2] - lo[2] + 3;
-	// A dense numeric key when the cell count fits 2^53; else a hashed one —
-	// two cells may then share a key, which only adds candidates: every
-	// candidate is still distance-checked, so the result is exact either way
-	var dense = (hi[0] - lo[0] + 3) * SY * SZ <= 9007199254740992;
-	function key(i, j, k) { return dense ? (i * SY + j) * SZ + k : (i * 73856093 + j * 19349663 + k * 83492791) % 9007199254740881; }
-
-	function cellKey(p) {
-		return key(Math.floor(x[p] / tolerance) - lo[0] + 1, Math.floor(y[p] / tolerance) - lo[1] + 1, use3d ? Math.floor(z[p] / tolerance) - lo[2] + 1 : 1);
-	}
-
-	// Each cell is a linked list of kept points through next[]. Its newest point sits in
-	// an open-addressing table (linear probing, power-of-two capacity, at most half
-	// full). A slot holds the point number and an 8-bit tag of its key's hash; the key
-	// itself is recomputed from the point's cell, only when the tag matches. 5 bytes a
-	// slot. (A Map stops at 2^24 cells.)
-	var cells = (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1);
-	var cap = 16;
-	while (cap < Math.min(n, cells)) cap *= 2;
-	var mask = cap - 1, used = 0, table = new Int32Array(cap).fill(-1), tags = new Uint8Array(cap);
-	var tag = 0;   // the tag of the key find() last looked up
-	// The slot of cell key c: its newest kept point, or -1 (the free slot c would take)
-	function find(c) {
-		var g = hash32(c), h = g & mask;
-		tag = Math.imul(g, 0x9E3779B1) >>> 24;   // top bits of a multiply mix every bit of g
-		while (table[h] >= 0 && (tags[h] !== tag || cellKey(table[h]) !== c)) h = (h + 1) & mask;
-		return h;
-	}
-	function grow() {
-		var old = table, oldTags = tags;
-		cap *= 2; mask = cap - 1; table = new Int32Array(cap).fill(-1); tags = new Uint8Array(cap);
-		for (var s = 0; s < old.length; s++) {
-			if (old[s] < 0) continue;
-			var h = hash32(cellKey(old[s])) & mask;
-			while (table[h] >= 0) h = (h + 1) & mask;
-			table[h] = old[s]; tags[h] = oldTags[s];
+	var o = opts || {}, use3d = !!(o.z && cols.z), wantMap = o.map !== false, n = cols.count, signal = o.signal, report = o.onProgress;
+	var total = wantMap ? 2 * n : n;
+	var swept = dedupeSweep(cols.x, cols.y, use3d ? cols.z : null, n, tolerance, {
+		onTick: function (done) {
+			if (signal && signal.aborted) throw stoppedDedupe();
+			if (report) report(done, total);
 		}
-	}
-	var next = new Int32Array(n);
-	var kept = new Uint32Array(n);
-	var map = wantMap ? new Uint32Array(n) : null;
-	var nKept = 0;
-	for (var i = 0; i < n; i++) {
-		var cx = Math.floor(x[i] / tolerance) - lo[0] + 1, cy = Math.floor(y[i] / tolerance) - lo[1] + 1;
-		var cz = use3d ? Math.floor(z[i] / tolerance) - lo[2] + 1 : 1;
-		var dup = false;
-		for (var dx = -1; dx <= 1 && !dup; dx++) {
-			for (var dy = -1; dy <= 1 && !dup; dy++) {
-				for (var dz = -dzRange; dz <= dzRange && !dup; dz++) {
-					var k = table[find(key(cx + dx, cy + dy, cz + dz))];
-					while (k >= 0) {
-						var ex = x[k] - x[i], ey = y[k] - y[i];
-						var ez = use3d ? z[k] - z[i] : 0;
-						if (ex * ex + ey * ey + ez * ez <= tol2) { dup = true; break; }
-						k = next[k];
-					}
-				}
+	});
+	var kept = swept.kept, nKept = kept.length, map = null;
+	if (wantMap) {
+		// Each dropped point (every point not in kept) maps to its nearest kept point
+		map = new Uint32Array(n);
+		for (var q = 0; q < nKept; q++) map[kept[q]] = q;   // a kept point maps to itself (a dropped one may merge into a later kept point)
+		for (var i = 0, p = 0; i < n; i++) {
+			if (!(i & 65535)) {
+				if (signal && signal.aborted) throw stoppedDedupe();
+				if (report) report(n + i, total);
 			}
+			if (p < nKept && kept[p] === i) { map[i] = p++; continue; }
+			map[i] = map[swept.nearest(i)];
 		}
-		if (dup) continue;
-		var own = key(cx, cy, cz), h = find(own);
-		if (table[h] < 0) {
-			if (2 * (used + 1) > cap) { grow(); h = find(own); }
-			used++;
-			tags[h] = tag;
-		}
-		next[i] = table[h];
-		table[h] = i;
-		if (wantMap) map[i] = nKept;
-		kept[nKept++] = i;
 	}
-
-	// Each dropped point (every point not in kept) maps to its nearest kept point;
-	// the cell lists hold kept points only
-	for (i = 0, p = 0; wantMap && i < n; i++) {
-		if (p < nKept && kept[p] === i) { p++; continue; }
-		var cx = Math.floor(x[i] / tolerance) - lo[0] + 1, cy = Math.floor(y[i] / tolerance) - lo[1] + 1;
-		var cz = use3d ? Math.floor(z[i] / tolerance) - lo[2] + 1 : 1;
-		var best = -1, bd = Infinity;
-		for (var dx = -1; dx <= 1; dx++) {
-			for (var dy = -1; dy <= 1; dy++) {
-				for (var dz = -dzRange; dz <= dzRange; dz++) {
-					var k = table[find(key(cx + dx, cy + dy, cz + dz))];
-					while (k >= 0) {
-						var ex = x[k] - x[i], ey = y[k] - y[i];
-						var ez = use3d ? z[k] - z[i] : 0;
-						var d = ex * ex + ey * ey + ez * ez;
-						if (d <= tol2 && (d < bd || (d === bd && k < best))) { bd = d; best = k; }
-						k = next[k];
-					}
-				}
-			}
-		}
-		map[i] = map[best];
-	}
-	return { keep: kept.slice(0, nKept), map: map };
+	if (report) report(total, total);
+	return { keep: kept, map: map };
 }
 
 /**
  * @param {object} cols - PointColumns ({ count, x, y, z?, ... }).
  * @param {number} tolerance - distance below which points merge (> 0).
- * @param {{z?: boolean}} [opts]
+ * @param {{z?: boolean, onProgress?: function(number, number), signal?: AbortSignal}} [opts] - onProgress(done, total) in
+ *   points as the sweep goes (see dedupeSelection); dedupeParallel runs it on the worker pool
  * @returns {object} PointColumns with only the kept points
  */
 export function dedupe(cols, tolerance, opts) {
-	var sel = dedupeSelection(cols, tolerance, Object.assign({}, opts, { map: false })).keep, nKept = sel.length;
+	return keepColumns(cols, dedupeSelection(cols, tolerance, Object.assign({}, opts, { map: false })).keep);
+}
+
+/**
+ * The columns of the points in sel (ascending): every column that holds k values a point follows them; anything else passes through.
+ * @param {object} cols - PointColumns.
+ * @param {Uint32Array} sel - the points to keep, ascending.
+ * @returns {object} PointColumns with only those points
+ */
+export function keepColumns(cols, sel) {
+	var nKept = sel.length;
 
 	// Every column (k values per point) follows the kept points; anything else passes through
 	var ks = Object.create(null);   // a column may be named like an Object.prototype member

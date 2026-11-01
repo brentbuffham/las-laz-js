@@ -17,6 +17,8 @@
 //      (counts: each chunk's points, back to back from the start of records)
 // In (move): { id, op: "move", vlr, recordLength, count, packed: ArrayBuffer, scale, offset, storeT, inv, index: ArrayBuffer,
 //      and T, or x / y / z: ArrayBuffers } (one packed tile with some points moved: src/tiles/movePoints.js)
+// In (dedupe): { id, op: "dedupe", count, x, y, z (or null): ArrayBuffers, f32, tolerance, frozen?: ArrayBuffer }
+//      (one tile of dedupeParallel: src/filter/dedupeParallel.js; Out: { id, status: ArrayBuffer }, a byte 1 for each point kept)
 // In (octree): { id, op: "octree", records: ArrayBuffer, recordLength, cube, rootKey, opts, laz }
 //      (a tile build's chunk: src/tiles/chunkNodes.js)
 // In (bucket): { id, op: "bucket", records: ArrayBuffer, recordLength, cube, chunks: keys, plan }
@@ -39,6 +41,7 @@ import { openTiles } from "../tiles/TileStore.js";
 import { REGION_JOBS } from "../tiles/regionJobs.js";
 import { movePoints } from "../tiles/movePoints.js";
 import { tightBox } from "../tiles/tightBox.js";
+import { dedupeSweep } from "../filter/dedupeCore.js";
 
 // node:worker_threads is named at run time so browser bundlers leave it alone
 var NODE_WORKER_THREADS = ["node", "worker_threads"].join(":");
@@ -73,6 +76,7 @@ function handle(m) {
 		else if (m.op === "move") move(m);
 		else if (m.op === "fragments") fragments(m);
 		else if (m.op === "facets") facets(m);
+		else if (m.op === "dedupe") dedupeTile(m);
 		else if (REGION_JOBS[m.op]) region(m);
 		else decode(m);
 	} catch (err) {
@@ -141,6 +145,15 @@ function fragments(m) {
 	var fragment = r.fragment.buffer;
 	r.fragment = null; r.facets = null;
 	port.post({ id: m.id, result: r, fragment: fragment }, [fragment]);
+}
+
+// one tile of dedupeParallel: its points swept in order; which were kept goes back as bytes
+function dedupeTile(m) {
+	var A = m.f32 ? Float32Array : Float64Array, n = m.count, report = tileProgress(m, 0, 1);
+	var swept = dedupeSweep(new A(m.x), new A(m.y), m.z ? new A(m.z) : null, n, m.tolerance, { frozen: m.frozen ? new Uint8Array(m.frozen) : null, onTick: report });
+	var status = new Uint8Array(n), kept = swept.kept;
+	for (var i = 0; i < kept.length; i++) status[kept[i]] = 1;
+	port.post({ id: m.id, status: status.buffer }, [status.buffer]);
 }
 
 // one tile of findFacetsParallel: the result with its facet column sent as a buffer

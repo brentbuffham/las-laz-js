@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.19.9 (2026-11-01)
+
+Faster, and never a frozen bar (Remove duplicates on 30 million points sat at 2% for 45 s):
+- `dedupe` / `dedupeSelection`: `onProgress(done, total)` ticks through the sweep (and the map pass), and `signal` is looked at on
+  each tick. The sweep is 2 to 4 times quicker on one thread: kept points sit in cells whose size is chosen from the cloud's
+  density (about 3 points a cell; a box meets 4 cells in plan, 8 in 3D, where 9 and 27 were looked up), the same points kept
+  (checked against the old sweep on 600 random clouds, ties at exactly the tolerance included). 5 million points in scanline
+  order, 3D: 5.6 s -> 1.6 s; plan: 2.4 s -> 1.1 s. In random order about 2 times quicker.
+- `dedupeParallel(cols, tolerance, { z, threads, tile, onProgress, signal })`: dedupe on the worker pool, the same kept points in
+  the same order with every column. Tiles on the plan each hold a ring of their neighbours' points; before the answer is
+  trusted, every tile's belief about each ring point near its core is checked against the tile that owns the point, and a tile
+  that disagreed is swept again with the owners' answers frozen (a chain of points a tolerance apart across several seams takes
+  several rounds; after six the cloud is swept on this thread). 10 million points, 3D: 3.8 s on one thread, 0.86 s on 16
+  workers. With `threads: 1`, or under 400,000 points, the cloud is swept on this thread.
+- `mergeStores` / `splitStore`: the bar no longer rewinds or ends at 67% with `compress: true` (the pack phase had no place on
+  it). `onProgress` is one bar of 1000 (copy, build, and for a split the delete from the source), and the split's delete takes
+  `threads` and `signal`.
+- `dedupeStore` and `smoothStore`: their closing delete / position writes are on the same bar as the region pass (the delete had
+  been silent). `roughnessStore`, `findFragmentsParallel` and `findFacetsParallel` with a `column`: the column write takes
+  `threads`, `signal` and progress, on one bar of 1000.
+- `findFragmentsParallel` on one tile (small cloud or `threads: 1`) now passes `onProgress` to `findFragments`.
+- Worker: `deletePoints`, `keepPoints` and `setColumn` post progress and stop with the job.
+- New internal `src/progressBar.js` (one shared 0..1000 bar), used by these and `fixDoubleLayerStore`.
+
 ## 0.19.8 (2026-11-01)
 
 Fixed (Fix ghosting on a large tiled cloud looked hung):

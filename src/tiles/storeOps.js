@@ -33,6 +33,7 @@ import { layout, runAll, common } from "./parallelStore.js";
 import { estimateNoise } from "../ops/normals.js";
 import { suggestDoubleLayer, addDoubleLayerStats } from "../ops/doubleLayer.js";
 import { scratchBlobs } from "./scratchBlobs.js";
+import { sharedBar } from "../progressBar.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 function stopped() { return new LasError(ERROR_CODES.ABORTED, "the run was stopped"); }
@@ -51,11 +52,14 @@ export async function dedupeStore(store, tolerance, opts) {
 	var o = opts || {};
 	if (!(typeof tolerance === "number" && tolerance > 0 && isFinite(tolerance))) throw bad("tolerance must be a distance > 0, not " + JSON.stringify(tolerance));
 	var threads = await common(store, o, "dedupeStore");
+	// onProgress is one bar (total 1000) when the points are deleted: the regions, then the delete
+	var bar = sharedBar(o.onProgress), applying = o.apply !== false, REGIONS = 0.6;
+	bar.at(0);
 	var L = await layout(store, o, threads, 2 * tolerance);
 	var sel = { deletes: store.manifest.deletes, count: 0, tiles: {} };
-	if (!L.n) return { removed: 0, selection: sel, tiles: 0, threads: 1 };
+	if (!L.n) { bar.at(1); return { removed: 0, selection: sel, tiles: 0, threads: 1 }; }
 	var lists = L.nodes.keys.map(function () { return []; });
-	var ran = await runAll(store, L, o, threads, "dedupeRegion", function (t) {
+	var ran = await runAll(store, L, o.onProgress ? Object.assign({}, o, { onProgress: bar.sub(0, applying ? REGIONS : 1) }) : o, threads, "dedupeRegion", function (t) {
 		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, tolerance: tolerance, z: !!o.z };
 	}, function (r) { for (var q = 0; q < r.node.length; q++) lists[r.node[q]].push(r.index[q]); });
 	lists.forEach(function (l, i) {
@@ -63,7 +67,10 @@ export async function dedupeStore(store, tolerance, opts) {
 		var a = Uint32Array.from(l).sort();
 		sel.tiles[L.nodes.keys[i]] = a; sel.count += a.length;
 	});
-	if (o.apply !== false && sel.count) await store.deletePoints(sel, { threads: o.threads, signal: o.signal });
+	if (applying && sel.count) {
+		await store.deletePoints(sel, { threads: o.threads, signal: o.signal, onProgress: function (e) { bar.at(REGIONS + (1 - REGIONS) * (e.total ? e.done / e.total : 1)); } });
+	}
+	bar.at(1);
 	return { removed: sel.count, selection: sel, tiles: L.tiles.length, threads: ran };
 }
 
@@ -82,8 +89,11 @@ export async function smoothStore(store, opts) {
 	if (!(Number.isInteger(batch) && batch >= 1)) throw bad("batchPoints must be a whole number >= 1, not " + JSON.stringify(o.batchPoints));
 	if (!(Number.isInteger(iterations) && iterations >= 1)) throw bad("iterations must be a whole number >= 1, not " + JSON.stringify(o.iterations));
 	var threads = await common(store, o, "smoothStore");
+	// onProgress is one bar (total 1000): the regions, then the writes of the moved points
+	var bar = sharedBar(o.onProgress), REGIONS = 0.6, written = 0;
+	bar.at(0);
 	var L = await layout(store, o, threads, (iterations + 1) * o.maxDistance);
-	if (!L.n) return { moved: 0, sigma: NaN, batches: 0, tiles: 0, threads: 1 };
+	if (!L.n) { bar.at(1); return { moved: 0, sigma: NaN, batches: 0, tiles: 0, threads: 1 }; }
 	var sigma = o.sigma !== undefined ? o.sigma : estimateNoise(L.sample, { k: k, maxDistance: o.maxDistance });
 	var den = { method: o.method, k: k, maxDistance: o.maxDistance, iterations: iterations };
 	if (sigma > 0) den.sigma = sigma;
@@ -101,11 +111,13 @@ export async function smoothStore(store, opts) {
 			value[L.nodes.keys[nd]] = v;
 		});
 		batches++;
-		await store.setPositions(value, { threads: o.threads, signal: o.signal });
+		var batchMoved = parts.reduce(function (a, r) { return a + r.node.length; }, 0);
+		await store.setPositions(value, { threads: o.threads, signal: o.signal, onProgress: function (e) { bar.at(REGIONS + (1 - REGIONS) * (written + batchMoved * (e.total ? e.done / e.total : 1)) / Math.max(1, moved)); } });
+		written += batchMoved;
 	}
 	try {
 		// a tile's moved points to scratch: count, node, index (u32), x, y, z (f32, local)
-		var ran = await runAll(store, L, o, threads, "smoothRegion", function (t) {
+		var ran = await runAll(store, L, o.onProgress ? Object.assign({}, o, { onProgress: bar.sub(0, REGIONS) }) : o, threads, "smoothRegion", function (t) {
 			return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, denoise: den };
 		}, function (r, i) {
 			var m = r.node.length;
@@ -131,6 +143,7 @@ export async function smoothStore(store, opts) {
 	} finally {
 		await blobs.close();
 	}
+	bar.at(1);
 	return { moved: moved, sigma: sigma, batches: batches, tiles: L.tiles.length, threads: ran };
 }
 
@@ -211,7 +224,9 @@ export async function roughnessStore(store, opts) {
 	var L = await layout(store, o, threads, o.maxDistance * 1.01);
 	if (!L.n) return { byTile: {}, tiles: 0, threads: 1 };
 	var rough = perNode(L, Float32Array, NaN);
-	var ran = await runAll(store, L, o, threads, "roughRegion", function (t) {
+	// with a column, onProgress is one bar (total 1000): the regions, then the column write
+	var bar = sharedBar(o.onProgress), WRITE = 0.85;
+	var ran = await runAll(store, L, o.onProgress && o.column ? Object.assign({}, o, { onProgress: bar.sub(0, WRITE) }) : o, threads, "roughRegion", function (t) {
 		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, normals: { k: o.k, maxDistance: o.maxDistance } };
 	}, function (r) { for (var q = 0; q < r.node.length; q++) rough[r.node[q]][r.index[q]] = r.value[q]; });
 	var byTile = {};
@@ -222,7 +237,8 @@ export async function roughnessStore(store, opts) {
 		if (!has) await store.addColumn(o.column, "f32", 0);
 		var sel = { deletes: store.manifest.deletes, count: 0, tiles: {} };
 		Object.keys(byTile).forEach(function (key) { var idx = new Uint32Array(byTile[key].length); for (var j = 0; j < idx.length; j++) idx[j] = j; sel.tiles[key] = idx; sel.count += idx.length; });
-		await store.setColumn(sel, o.column, byTile);
+		await store.setColumn(sel, o.column, byTile, { threads: o.threads, signal: o.signal, onProgress: function (e) { bar.at(WRITE + (1 - WRITE) * (e.total ? e.done / e.total : 1)); } });
+		bar.at(1);
 	}
 	return { byTile: byTile, tiles: L.tiles.length, threads: ran };
 }
@@ -383,18 +399,6 @@ export async function snapToLayerStore(store, found, opts) {
 }
 
 var SAMPLE_TILES = 8;
-
-// One 0..1 bar over a run of steps, as onProgress(done, total) of 1000 that never goes back; sub(from, to) is the
-// onProgress of a step that fills that part of it
-function sharedBar(onProgress) {
-	var last = -1;
-	function at(f) {
-		if (!onProgress) return;
-		var done = Math.round(Math.min(1, Math.max(0, f)) * 1000);
-		if (done > last) { last = done; onProgress(done, 1000); }
-	}
-	return { at: at, sub: function (from, to) { return function (d, t) { at(from + (to - from) * (t > 0 ? d / t : 1)); }; } };
-}
 
 /**
  * The selectDoubleLayerStore options for a store, or for the part of it inside opts.box, worked out from its points (suggestDoubleLayer).

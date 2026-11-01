@@ -433,6 +433,24 @@ var unique = keepPoints(pts, keep);               // what dedupe(pts, 0.01) retu
 dedupeSelection(pts, 0.01, { map: false });       // keep only, about 2.5x faster on a cloud that thins a lot; map is null
 ```
 
+`dedupe` and `dedupeSelection` take `onProgress(done, total)` (points; total is twice the points with the map) and a
+`signal` that is looked at as the sweep ticks (a run on this thread can only be stopped from inside; use `dedupeParallel`
+to stop it from outside).
+
+### Dedupe on every core
+
+```js
+import { dedupeParallel } from "las-laz-js";
+
+var unique = await dedupeParallel(pts, 0.01, { z: true, onProgress, signal });   // the same points, order and columns as dedupe
+// unique.tiles, unique.threads, unique.rounds say how it ran; threads: 1 sweeps on this thread
+```
+
+The cloud is cut into tiles on its plan, each with a ring of the points around it, and every tile sweeps on a pool
+worker. The tiles are checked against each other before the answer is trusted, and a tile whose belief about a seam
+point was wrong is swept again, so the kept points are exactly `dedupe`'s, not close to them. `onProgress(done, total)`
+is one climbing bar of 1000. 10 million points in 3D: 3.8 s for `dedupe`, 0.9 s for `dedupeParallel` on 16 workers.
+
 ## Register
 
 Put a raw scan onto the mine grid, or onto another cloud, and see how well it fits. The result is

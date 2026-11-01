@@ -24,6 +24,7 @@
 //==========================================================
 
 import { LasError, ERROR_CODES } from "../errors.js";
+import { sharedBar } from "../progressBar.js";
 import { createLazPool, defaultThreads } from "../laz/pool.js";
 import { storeNodes, nodesMeeting, readRegion } from "./region.js";
 import { REGION_JOBS } from "./regionJobs.js";
@@ -122,8 +123,20 @@ export async function runAll(store, L, opts, threads, op, task, apply) {
 function labelArrays(L) { return L.nodes.counts.map(function (c) { return new Uint32Array(c); }); }
 function byTile(L, labels) { var out = {}; L.nodes.keys.forEach(function (k, i) { out[k] = labels[i]; }); return out; }
 
+// With a column to write, onProgress is one bar (total 1000): the regions first, then the write. Returns the options for
+// runAll, those for the column write, and finish() to end the bar.
+function barred(opts) {
+	if (!opts.onProgress || !opts.column) return { run: opts, write: { threads: opts.threads, signal: opts.signal }, finish: function () {} };
+	var bar = sharedBar(opts.onProgress), RUN = 0.85;
+	return {
+		run: Object.assign({}, opts, { onProgress: bar.sub(0, RUN) }),
+		write: { threads: opts.threads, signal: opts.signal, onProgress: function (e) { bar.at(RUN + (1 - RUN) * (e.total ? e.done / e.total : 1)); } },
+		finish: function () { bar.at(1); }
+	};
+}
+
 // the labels as an added u32 column of the store (made, or set again)
-async function writeColumn(store, name, out) {
+async function writeColumn(store, name, out, wopts) {
 	var has = store.manifest.columns.filter(function (c) { return c.name === name; })[0];
 	if (has && has.type !== "u32") throw bad("column " + name + " is taken by an added " + has.type + " column; give another name");
 	if (!has) await store.addColumn(name, "u32", 0);   // refuses a name a standard field or the file's extra bytes hold
@@ -133,7 +146,7 @@ async function writeColumn(store, name, out) {
 		for (var i = 0; i < idx.length; i++) idx[i] = i;
 		sel.tiles[k] = idx; sel.count += idx.length;
 	});
-	await store.setColumn(sel, name, out);
+	await store.setColumn(sel, name, out, wopts);
 }
 
 export async function common(store, opts, name) {
@@ -170,7 +183,8 @@ export async function fragmentsOnStore(store, opts) {
 	while (GW * GH > MAX_CELLS) { px *= 2; GW = Math.floor(L.du / px) + 1; GH = Math.floor(L.dv / px) + 1; }
 	var grid = { px: px, u0: L.u0, v0: L.v0, W: GW, H: GH }, hit = new Uint8Array(GW * GH), held = new Uint8Array(GW * GH);
 	var labels = labelArrays(L), kept = [], planeDistances = [], cell = NaN, sideOn = false, tileOpts = Object.assign(strip(opts), { spacing: spacing });
-	var ran = await runAll(store, L, opts, threads, "fragmentsRegion", function (t) {
+	var bars = barred(opts);
+	var ran = await runAll(store, L, bars.run, threads, "fragmentsRegion", function (t) {
 		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, opts: tileOpts, grid: grid };
 	}, function (r) {
 		var base = kept.length;
@@ -207,7 +221,8 @@ export async function fragmentsOnStore(store, opts) {
 	var given = { sideOn: sideOn };
 	if (method !== "watershed" && opts.maxDistance !== undefined) given.maxDistance = opts.maxDistance;
 	if (method === "watershed") given.ignored = FACET_ONLY.filter(function (key) { return opts[key] !== undefined; });
-	if (opts.column) await writeColumn(store, opts.column, out.byTile);
+	if (opts.column) await writeColumn(store, opts.column, out.byTile, bars.write);
+	bars.finish();
 	return Object.assign(resultFields(out, spacing, given), { tiles: L.tiles.length, threads: ran });
 }
 
@@ -229,7 +244,8 @@ export async function facetsOnStore(store, opts) {
 	var pd = o.planeDistance;
 	if (pd === undefined) { var noise = estimateNoise(L.sample, { k: o.k, maxDistance: o.maxDistance }); pd = noise > 0 ? 3 * noise : o.maxDistance / 10; }
 	var tileOpts = Object.assign(strip(opts), { planeDistance: pd }), labels = labelArrays(L), pieces = [], ofTile = [];
-	var ran = await runAll(store, L, opts, threads, "facetsRegion", function (t) {
+	var bars = barred(opts);
+	var ran = await runAll(store, L, bars.run, threads, "facetsRegion", function (t) {
 		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, opts: tileOpts, seam: o.maxDistance };
 	}, function (r, ti) {
 		var base = pieces.length;
@@ -293,6 +309,7 @@ export async function facetsOnStore(store, opts) {
 	var facets = found.map(function (e, w) { idOf[e.rt] = w + 1; return Object.assign(e.f, { id: w + 1 }); });
 	labels.forEach(function (lab) { for (var q = 0; q < lab.length; q++) if (lab[q]) lab[q] = idOf[find(lab[q])]; });
 	var out = { byTile: byTile(L, labels), facets: facets, planeDistance: pd, origin: L.origin, tiles: L.tiles.length, threads: ran };
-	if (opts.column) await writeColumn(store, opts.column, out.byTile);
+	if (opts.column) await writeColumn(store, opts.column, out.byTile, bars.write);
+	bars.finish();
 	return out;
 }

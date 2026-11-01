@@ -55,7 +55,7 @@ export async function findFragmentsParallel(cols, opts) {
 	// precomputed normals are per point of the whole cloud; too few points or one thread: findFragments as it is
 	if (opts.normals !== undefined) checkNormals(opts.normals, n);
 	if (opts.signal && opts.signal.aborted) throw new LasError(ERROR_CODES.ABORTED, "the run was stopped");
-	if (!(spacing > 0) || n < 2 * MIN_TILE_POINTS && opts.tile === undefined) return Object.assign(findFragments(cols, opts.normals ? Object.assign(strip(opts), { normals: opts.normals }) : strip(opts)), { tiles: 1, threads: 1 });
+	if (!(spacing > 0) || n < 2 * MIN_TILE_POINTS && opts.tile === undefined) return Object.assign(findFragments(cols, Object.assign(strip(opts), { onProgress: opts.onProgress }, opts.normals ? { normals: opts.normals } : {})), { tiles: 1, threads: 1 });
 
 	var rr = opts.reliefRadius === undefined ? 1 : opts.reliefRadius;
 	var M = opts.overlap === undefined ? Math.max(2.5, rr + 1.5) : opts.overlap;
@@ -63,7 +63,7 @@ export async function findFragmentsParallel(cols, opts) {
 	if (opts.tile !== undefined && !(typeof opts.tile === "number" && opts.tile > 0 && isFinite(opts.tile))) throw bad("tile must be a positive distance, not " + JSON.stringify(opts.tile));
 	var plan = planTiles(cols, opts.tile !== undefined ? opts.tile : function (du, dv) { return Math.max(4 * M, Math.sqrt(du * dv / (2 * threads))); }, M, "findFragmentsParallel");
 	var NT = plan.NT, members = plan.members, order = plan.order, U = plan.U, V = plan.V, u0 = plan.u0, v0 = plan.v0, du = plan.du, dv = plan.dv, i, k;
-	if (NT === 1 || threads === 1 && opts.tile === undefined) return Object.assign(findFragments(cols, Object.assign(strip(opts), { spacing: spacing }, opts.normals ? { normals: opts.normals } : {})), { tiles: 1, threads: 1 });
+	if (NT === 1 || threads === 1 && opts.tile === undefined) return Object.assign(findFragments(cols, Object.assign(strip(opts), { spacing: spacing, onProgress: opts.onProgress }, opts.normals ? { normals: opts.normals } : {})), { tiles: 1, threads: 1 });
 
 	// run them: the pool, or here
 	var tileOpts = Object.assign(strip(opts), { spacing: spacing });

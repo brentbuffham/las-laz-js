@@ -219,6 +219,17 @@ export async function createLazPool(n, nodeUrl) {
 			}, onProgress);
 		},
 		/**
+		 * One tile of dedupeParallel (src/filter/dedupeParallel.js): its points swept in order, first point wins.
+		 * onProgress(share of the tile done).
+		 * @param {{count: number, x: ArrayBuffer, y: ArrayBuffer, z: ArrayBuffer|null, f32: boolean, tolerance: number, frozen?: ArrayBuffer}} task -
+		 *   buffers transferred; frozen: per point 0 sweep it, 1 kept, 2 dropped (answers of other tiles)
+		 * @returns {Promise<{status: Uint8Array}>} 1 for each point kept
+		 */
+		dedupe: function (task, onProgress) {
+			var transfer = [task.x, task.y].concat(task.z ? [task.z] : [], task.frozen ? [task.frozen] : []);
+			return run(Object.assign({ op: "dedupe" }, task), transfer, function (m) { return { status: new Uint8Array(m.status) }; }, onProgress);
+		},
+		/**
 		 * One work tile of a parallel run on a tile store (src/tiles/parallelStore.js): the worker opens the store
 		 * at where (once a run), reads its region and runs op ("fragmentsRegion" or "facetsRegion").
 		 * @returns {Promise<object>} regionJobs' result

@@ -23,6 +23,7 @@ import { keepPoints } from "../ops/apply.js";
 import { openLas } from "../LasReader.js";
 import { openScratchSyncWriter, getScratchFile, removeScratchFile } from "../io/ScratchBinaryFile.js";
 import { buildTiles } from "./build.js";
+import { sharedBar } from "../progressBar.js";
 import { storeNodes } from "./region.js";
 
 var NODE_FS = ["node", "fs"].join(":"), NODE_OS = ["node", "os"].join(":"), NODE_PATH = ["node", "path"].join(":");
@@ -70,8 +71,11 @@ function plan(sources) {
 	return { pointFormat: FORMAT[gps + "," + rgb], scale: scale, offset: chooseScaleOffset(bounds).offset, extra: sameExtra ? first.extraBytes : null, first: first };
 }
 
-// sources [{ store, sel? }] into a new store at opts.where
-async function copyToStore(sources, opts, name) {
+// The build's phases, each a share of the build's part of the bar (the count pass, the distribute pass, the tiles, and with compress the pack)
+var BUILD_PHASES = { count: [0, 0.1], distribute: [0.1, 0.4], tiles: [0.4, 0.8], pack: [0.8, 1] };
+
+// sources [{ store, sel? }] into a new store at opts.where; the copy and the build fill bar from `from` to `to`
+async function copyToStore(sources, opts, name, bar, from, to) {
 	if (!opts || !opts.where) throw bad(name + " needs a where for the new store: { opfs: id }, { dir: path } or { memory: true }");
 	var p = plan(sources), sc = await scratch(opts.where), signal = opts.signal, store = null, count = 0, total = 0;
 	sources.forEach(function (s) { total += s.sel ? s.sel.count : storeNodes(s.store.manifest).counts.reduce(function (a, b) { return a + b; }, 0); });
@@ -91,7 +95,7 @@ async function copyToStore(sources, opts, name) {
 					if (pick) pts = keepPoints(pts, pick);
 					await w.writePoints(pts);
 					count += pts.count;
-					if (opts.onProgress) opts.onProgress(count, 2 * total);   // the copy is half the work, the build the rest
+					bar.at(from + (to - from) * 0.5 * (total ? count / total : 1));   // the copy is half the work, the build the rest
 				}
 			} finally {
 				await gen.return();
@@ -101,8 +105,12 @@ async function copyToStore(sources, opts, name) {
 		aborted(signal);
 		var las = await sc.open();
 		store = await buildTiles(las, { where: opts.where, compress: opts.compress, tilePoints: opts.tilePoints, threads: opts.threads, signal: signal, replace: opts.replace, name: opts.name,
-			onProgress: opts.onProgress ? function (q) { opts.onProgress(total + (q.total ? total * q.done / q.total : 0) / 3 + (q.phase === "distribute" ? total / 3 : q.phase === "tiles" ? 2 * total / 3 : 0), 2 * total); } : undefined });
+			onProgress: function (q) {
+				var ph = BUILD_PHASES[q.phase] || BUILD_PHASES.tiles, f = ph[0] + (ph[1] - ph[0]) * (q.total ? q.done / q.total : 1);
+				bar.at(from + (to - from) * (0.5 + 0.5 * f));
+			} });
 		if (las.close) await las.close();
+		bar.at(to);
 		return store;
 	} finally {
 		try { await sc.remove(); } catch (e) { /* gone already */ }
@@ -113,25 +121,36 @@ async function copyToStore(sources, opts, name) {
  * Merge tile stores into a new one.
  * @param {object[]} stores - open TileStores (each one's transform applied).
  * @param {{where: object, compress?: boolean, tilePoints?: number, threads?: number, replace?: boolean, name?: string,
- *   onProgress?: function(number, number), signal?: AbortSignal}} opts - where: the new store's (buildTiles' options).
+ *   onProgress?: function(number, number), signal?: AbortSignal}} opts - where: the new store's (buildTiles' options);
+ *   onProgress(done, total): one climbing bar, total 1000: the copy to a scratch file, then the build's passes.
  * @returns {Promise<object>} the new TileStore
  */
 export async function mergeStores(stores, opts) {
 	if (!Array.isArray(stores) || stores.length < 1 || !stores.every(isStore)) throw bad("mergeStores needs an array of open tile stores");
-	return copyToStore(stores.map(function (s) { return { store: s }; }), opts, "mergeStores");
+	var bar = sharedBar(opts && opts.onProgress);
+	bar.at(0);
+	var out = await copyToStore(stores.map(function (s) { return { store: s }; }), opts, "mergeStores", bar, 0, 1);
+	bar.at(1);
+	return out;
 }
 
 /**
  * A selection of a tile store into a new store, then (by default) deleted from it.
  * @param {object} store - an open TileStore.
  * @param {object} sel - a selection of it (store.selectPolygon, selectBox, …).
- * @param {object} opts - as mergeStores, and keep (true: the points stay in the source too).
+ * @param {object} opts - as mergeStores, and keep (true: the points stay in the source too); onProgress is one bar
+ *   (total 1000) over the copy, the build and the delete from the source.
  * @returns {Promise<object>} the new TileStore
  */
 export async function splitStore(store, sel, opts) {
 	if (!isStore(store)) throw bad("splitStore needs an open tile store");
 	if (!sel || !sel.tiles || sel.deletes !== store.manifest.deletes) throw bad("splitStore needs a current selection of the store (store.selectPolygon, selectBox, …)");
-	var out = await copyToStore([{ store: store, sel: sel }], opts || {}, "splitStore");
-	if (!(opts && opts.keep) && sel.count) await store.deletePoints(sel);
+	var o = opts || {}, bar = sharedBar(o.onProgress), removing = !o.keep && sel.count > 0;
+	bar.at(0);
+	var out = await copyToStore([{ store: store, sel: sel }], o, "splitStore", bar, 0, removing ? 0.85 : 1);
+	if (removing) {
+		await store.deletePoints(sel, { threads: o.threads, signal: o.signal, onProgress: function (e) { bar.at(0.85 + 0.15 * (e.total ? e.done / e.total : 1)); } });
+	}
+	bar.at(1);
 	return out;
 }

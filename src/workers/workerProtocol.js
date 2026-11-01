@@ -119,6 +119,14 @@ export function createWorkerHandler(post) {
 		return cols;
 	}
 
+	// a store edit's options: the job's abort, progress posted as the edit goes, threads when the caller gave them
+	function editOptions(id, payload, controller) {
+		return {
+			signal: controller.signal, threads: payload && payload.threads,
+			onProgress: function (p) { post({ id: id, type: "progress", phase: p.phase, done: p.done, total: p.total, fraction: p.total ? p.done / p.total : 1, label: "editing" }); }
+		};
+	}
+
 	var handlers = {
 		open: async function (id, payload) {
 			if (reader) await reader.close();
@@ -179,9 +187,9 @@ export function createWorkerHandler(post) {
 		selectBox: async function (id, payload) { return selection(await needStore().selectBox(payload.box)); },
 		selectPolygon: async function (id, payload) { return selection(await needStore().selectPolygon(payload.polygon, payload.options)); },
 		selectClasses: async function (id, payload) { return selection(await needStore().selectClasses(payload.classes)); },
-		deletePoints: async function (id, payload) { return changed(await needStore().deletePoints(payload.selection)); },
-		keepPoints: async function (id, payload) { return changed(await needStore().keepPoints(payload.selection)); },
-		setColumn: async function (id, payload) { await needStore().setColumn(payload.selection, payload.name, payload.value); return changed(); },
+		deletePoints: async function (id, payload, controller) { return changed(await needStore().deletePoints(payload.selection, editOptions(id, payload, controller))); },
+		keepPoints: async function (id, payload, controller) { return changed(await needStore().keepPoints(payload.selection, editOptions(id, payload, controller))); },
+		setColumn: async function (id, payload, controller) { await needStore().setColumn(payload.selection, payload.name, payload.value, editOptions(id, payload, controller)); return changed(); },
 		addColumn: async function (id, payload) { await needStore().addColumn(payload.name, payload.type, payload.fill); return changed(); },
 		removeColumn: async function (id, payload) { await needStore().removeColumn(payload.name); return changed(); },
 		transform: async function (id, payload) { await needStore().transform(payload.transform); return changed(); },
