@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.20.1 (2026-11-03)
+
+- `parseControlPointPairs` skips lines starting `*` as comments, as it does `#`. Vulcan's Transparams3D pair files open with
+  `*` lines (`* Full XYZ data, with station names`, the column names), and 0.20.0 refused them as bad rows.
+
 ## 0.20.0 (2026-11-03)
 
 Control-point pairs for a local (mine) grid to a map grid:

@@ -539,7 +539,8 @@ p.blocks.forEach(function (b) {                               // a Vulcan report
 
 Both sides of each point on one line: `name x y z E N RL` rows (tab, comma, semicolon or spaces;
 the name may end in `:`, and may hold spaces in a tab, comma or semicolon file or when the six
-numbers end a space-separated line; a header line, blank lines and `#` comments are skipped), or a
+numbers end a space-separated line; a header line, blank lines and `#` or `*` comment lines, as
+Vulcan's pair files open with, are skipped), or a
 Vulcan transformation error report: blocks headed `Error report for in transformation : NAME`,
 rows `name : residual [x y z -> x' y' z']` and `RMS error = r`. The `->` side of a Vulcan report is
 not the surveyed target but the from point under Vulcan's fitted transform, the residual its

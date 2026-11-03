@@ -7,6 +7,7 @@
 //   a) name x y z E N RL, tab / comma / semicolon / space separated;
 //      the name may end in ':' and (tab, comma or semicolon files, or
 //      the six numbers last on a space-separated line) may hold spaces.
+//      Lines starting # or * are comments (* as in Vulcan's pair files).
 //   b) Vulcan's transformation error report: blocks headed
 //      "Error report for in transformation : <NAME>", rows
 //      "<name> : <residual> [x y z -> x' y' z']" and "RMS error = r".
@@ -44,7 +45,8 @@ function parsePlain(lines) {
 	var names = [], from = [], to = [], seen = Object.create(null), first = true;
 	for (var ln = 0; ln < lines.length; ln++) {
 		var raw = lines[ln], at = "line " + (ln + 1);
-		if (!raw.trim() || raw.trim()[0] === "#") continue;
+		// # comments, and Vulcan's * comment lines (a Transparams3D pair file opens with them)
+		if (!raw.trim() || raw.trim()[0] === "#" || raw.trim()[0] === "*") continue;
 		var p = fieldsOf(raw), f = p.fields, nums = f.slice(-6);
 		var numeric = f.length >= 6 && nums.every(function (s) { return IS_NUM.test(s); });
 		// a header (a first line that is not a pair) is skipped
@@ -141,7 +143,7 @@ function reverseTitles(a, b) {
 /**
  * Read control-point pairs from text, each point's from (local) and to (grid) on one line.
  * @param {string} text - layout a) "name x y z E N RL" rows (tab, comma, semicolon or spaces; a
- *   name may end in ':'; a header line, blank lines and # comments are skipped), or b) a Vulcan
+ *   name may end in ':'; a header line, blank lines and lines starting # or * are skipped), or b) a Vulcan
  *   transformation error report. A UTF-8 BOM and CRLF are accepted.
  * @returns {{format: string, names: string[], from: Float64Array, to: Float64Array, measured: boolean,
  *   blocks: Array<{title: (string|null), names: string[], from: Float64Array, computed: Float64Array,

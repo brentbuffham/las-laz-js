@@ -53,6 +53,16 @@ test("pairs: a header, blank lines and # comments are skipped", function () {
 	expectPairs(parseControlPointPairs(t), PAIRS);
 });
 
+test("pairs: Vulcan's * comment lines are skipped (a Transparams3D pair file)", function () {
+	var t = ["*", "* Full XYZ data, with station names", "*", "* Name   X   Y   Z   X'   Y'   Z'", "*"].concat(
+		PAIRS.map(function (r) { return (r[0] + "        ").slice(0, 8) + ": " + r.slice(1).join(" "); })).join("\r\n") + "\r\n";
+	expectPairs(parseControlPointPairs(t), PAIRS);
+	// a * line after the data is a comment too, not a bad row
+	expectPairs(parseControlPointPairs(t + "* end\r\n"), PAIRS);
+	// without the fix the first * line after a header-less start was refused as a bad row
+	expectPairs(parseControlPointPairs(PAIRS.map(function (r) { return r.join(" "); }).join("\n") + "\n*\n"), PAIRS);
+});
+
 test("pairs: bad rows are named by line", function () {
 	var good = PAIRS.map(function (r) { return r.join(","); });
 	assert.throws(function () { parseControlPointPairs(good.concat(["CP4,9,8,7,6,5"]).join("\n")); }, /line 4: expected a name then six numbers/);
