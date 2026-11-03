@@ -278,3 +278,114 @@ test("to is checked as from is", function () {
 	var bad = a.slice(); bad[4] = Infinity;
 	assert.throws(function () { fitTransform(a, bad); }, /pair 1: to/);
 });
+
+// ---- the 2D models: levelScale (2D Helmert) and affine2d ----
+
+// A synthetic mine grid to map grid transform: rotation 46.8214 deg, scale 0.999996865, shift,
+// Z down 5000 (made-up numbers, no real site)
+var GRID_DEG = 46.8214, GRID_K = 0.999996865, GRID_T = [312000.25, 6608000.75, -5000];
+function gridTransform(deg, k, t) {
+	var r = (deg * Math.PI) / 180, c = k * Math.cos(r), s = k * Math.sin(r);
+	return { m: [c, -s, 0, s, c, 0, 0, 0, 1], t: t };
+}
+function minePoints(r, n) {
+	// a 2 km x 1.5 km mine grid near (10000, 20000), RL 5300..5500
+	var a = new Float64Array(n * 3);
+	for (var i = 0; i < n; i++) { a[3 * i] = 9000 + 2000 * r(); a[3 * i + 1] = 19000 + 1500 * r(); a[3 * i + 2] = 5300 + 200 * r(); }
+	return a;
+}
+
+test("levelScale recovers a known rotation, grid scale factor, shift and dZ", function () {
+	var T = gridTransform(GRID_DEG, GRID_K, GRID_T), from = minePoints(rng(41), 12), to = applyT(T, from);
+	var f = fitTransform(from, to, { model: "levelScale" });
+	assert.equal(f.model, "levelScale");
+	close(f.transform.m, T.m, 1e-12, "m");
+	close(f.transform.t, T.t, 1e-6, "t");
+	assert.ok(Math.abs(f.scale - GRID_K) < 1e-12, "scale " + f.scale);
+	assert.ok(Math.abs(f.rotateZ - GRID_DEG) < 1e-9, "rotateZ " + f.rotateZ);
+	assert.ok(f.rms < 1e-6, "rms " + f.rms);
+	assert.deepEqual([f.transform.m[2], f.transform.m[5], f.transform.m[6], f.transform.m[7], f.transform.m[8]], [0, 0, 0, 0, 1]);
+	assert.ok(f.looResiduals.every(function (v) { return v < 1e-6; }));
+});
+
+test("level on the same pairs misses the scale by ~3 mm per km; levelScale removes it", function () {
+	var T = gridTransform(GRID_DEG, GRID_K, GRID_T), from = minePoints(rng(42), 12), to = applyT(T, from);
+	var lv = fitTransform(from, to, { model: "level" }), ls = fitTransform(from, to, { model: "levelScale" });
+	// 1 - k = 3.135e-6, 3.1 mm per km: level's rms is that times the points' rms distance from their centre
+	var spread = 0, cx = 0, cy = 0, n = from.length / 3, i;
+	for (i = 0; i < n; i++) { cx += from[3 * i] / n; cy += from[3 * i + 1] / n; }
+	for (i = 0; i < n; i++) spread += (Math.pow(from[3 * i] - cx, 2) + Math.pow(from[3 * i + 1] - cy, 2)) / n;
+	var expected = (1 - GRID_K) * Math.sqrt(spread);
+	assert.ok(Math.abs(lv.rms - expected) < 1e-3 * expected, "level rms " + lv.rms + " vs " + expected);
+	assert.ok(lv.rms > 1e-3, "level rms " + lv.rms);
+	assert.ok(ls.rms < 1e-6, "levelScale rms " + ls.rms);
+	assert.ok(Math.abs(lv.rotateZ - GRID_DEG) < 1e-9);
+	assert.equal(lv.scale, 1);
+});
+
+test("levelScale: two pairs fit exactly; with noise it is least squares (no nearby similarity scores lower)", function () {
+	var T = gridTransform(-123.5, 1.0004, [5, -7, 2.5]), from = [100, 200, 10, 900, -300, 12], to = applyT(T, from);
+	var f = fitTransform(from, to, { model: "levelScale" });
+	close(f.transform.m, T.m, 1e-12, "m");
+	assert.ok(f.rms < 1e-9);
+	assert.ok(f.looResiduals.every(function (v) { return v !== v; }), "NaN at the minimum");
+	var r = rng(43), a = minePoints(r, 20), b = applyT(T, a);
+	for (var i = 0; i < b.length; i++) b[i] += 0.02 * gauss(r);
+	var g = fitTransform(a, b, { model: "levelScale" }), best = ssq(g.transform, a, b), m = g.transform.m, t = g.transform.t;
+	// a similarity is linear in (a, b, tx, ty, tz) with m = [a -b; b a]: step each a little
+	for (var k = 0; k < 40; k++) {
+		var da = 1e-8 * gauss(r), db = 1e-8 * gauss(r);
+		var P = { m: [m[0] + da, m[1] - db, 0, m[3] + db, m[4] + da, 0, 0, 0, 1], t: [t[0] + 1e-4 * gauss(r), t[1] + 1e-4 * gauss(r), t[2] + 1e-4 * gauss(r)] };
+		assert.ok(ssq(P, a, b) >= best * (1 - 1e-12), "nearby transform scored lower");
+	}
+});
+
+test("affine2d recovers an XY affine with shear and separate X / Y scale", function () {
+	var A = { m: [1.0003, 0.0021, 0, -0.0017, 0.9991, 0, 0, 0, 1], t: [205000.5, 7700000.25, -12.5] };
+	var from = minePoints(rng(44), 9), to = applyT(A, from);
+	var f = fitTransform(from, to, { model: "affine2d" });
+	assert.equal(f.model, "affine2d");
+	close(f.transform.m, A.m, 1e-12, "m");
+	close(f.transform.t, A.t, 1e-6, "t");
+	assert.ok(Math.abs(f.scale - Math.sqrt(1.0003 * 0.9991 + 0.0021 * 0.0017)) < 1e-12, "scale = sqrt|det|");
+	assert.ok(Math.abs(f.rotateZ - (Math.atan2(-0.0017 - 0.0021, 1.0003 + 0.9991) * 180) / Math.PI) < 1e-9, "rotateZ " + f.rotateZ);
+	assert.ok(f.rms < 1e-6);
+	// a mirror (negative determinant) is an affine too
+	var M = { m: [-1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0] };
+	var g = fitTransform(from, applyT(M, from), { model: "affine2d" });
+	close(g.transform.m, M.m, 1e-12, "mirror m");
+	assert.ok(Math.abs(g.scale - 1) < 1e-12);
+});
+
+test("affine2d on a pure similarity equals levelScale; with noise it never fits worse", function () {
+	var T = gridTransform(GRID_DEG, GRID_K, GRID_T), r = rng(45), from = minePoints(r, 15), exact = applyT(T, from);
+	var a = fitTransform(from, exact, { model: "affine2d" }), s = fitTransform(from, exact, { model: "levelScale" });
+	close(a.transform.m, s.transform.m, 1e-12, "m");
+	close(a.transform.t, s.transform.t, 1e-6, "t");
+	assert.ok(Math.abs(a.scale - s.scale) < 1e-12 && Math.abs(a.rotateZ - s.rotateZ) < 1e-9);
+	var to = exact.slice();
+	for (var i = 0; i < to.length; i++) to[i] += 0.01 * gauss(r);
+	var an = fitTransform(from, to, { model: "affine2d" }), sn = fitTransform(from, to, { model: "levelScale" });
+	assert.ok(ssq(an.transform, from, to) <= ssq(sn.transform, from, to) * (1 + 1e-12));
+});
+
+test("2D models: Z is shifted by the weighted mean dZ, never scaled or tilted", function () {
+	var from = [0, 0, 10, 100, 0, 20, 0, 100, 30, 100, 100, 40], to = [0, 0, 11, 100, 0, 21, 0, 100, 31, 100, 100, 45];
+	["level", "levelScale", "affine2d"].forEach(function (model) {
+		var f = fitTransform(from, to, { model: model, weights: [1, 1, 1, 0] });
+		assert.deepEqual(f.transform.m.slice(6), [0, 0, 1], model);
+		assert.ok(Math.abs(f.transform.t[2] - 1) < 1e-12, model + " tz " + f.transform.t[2]);
+		assert.ok(Math.abs(f.dZ[3] + 4) < 1e-9, model + ": a weight-0 pair is still reported");
+	});
+});
+
+test("2D models: minimum pairs and degenerate sets", function () {
+	assert.deepEqual(lib.MIN_PAIRS, { rigid: 3, level: 2, scale: 3, levelScale: 2, affine2d: 3 });
+	assert.ok(Object.isFrozen(lib.MIN_PAIRS));
+	assert.throws(function () { fitTransform([0, 0, 0], [0, 0, 0], { model: "levelScale" }); }, /levelScale needs at least 2/);
+	assert.throws(function () { fitTransform([0, 0, 0, 1, 0, 0], [0, 0, 0, 1, 0, 0], { model: "affine2d" }); }, /affine2d needs at least 3/);
+	assert.throws(function () { fitTransform([5, 5, 0, 5, 5, 1], [0, 0, 0, 1, 1, 1], { model: "levelScale" }); }, /share one XY/);
+	assert.throws(function () { fitTransform([0, 0, 0, 1, 0, 0], [7, 7, 0, 7, 7, 0], { model: "levelScale" }); }, /share one XY/);
+	assert.throws(function () { fitTransform([0, 0, 0, 1, 1, 5, 2, 2, 9], [0, 0, 0, 1, 1, 0, 2, 2, 0], { model: "affine2d" }); }, /one line in XY/);
+	assert.throws(function () { fitTransform([0, 0, 0, 1, 0, 0, 0, 1, 0], [0, 0, 0, 1, 0, 0, 0, 1, 0], { model: "affine" }); }, /levelScale.*affine2d/);
+});

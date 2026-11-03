@@ -8,6 +8,9 @@
 // GCP: drop the surveyor's control file (grid), then the scan's target
 // file, or pick targets on the cloud and name them; names are matched
 // (matchControlPoints) and fitTransform moves the scan onto the grid.
+// Pairs file: one file with both sides of each point (parseControlPointPairs:
+// name x y z E N RL rows, or a Vulcan transformation report, one block
+// at a time, its fitted RMS against Vulcan's).
 // Both: a table of each pair's residuals (leave-one-out shows a bad
 // pick), Copy transform ({ m, t } as JSON).
 // Coordinates: picks are kept in world Float64. The reference is read
@@ -20,10 +23,10 @@
 // (a GCP fit onto the grid) keeps its millimetres on the GPU.
 //==========================================================
 
-import { alignCloud, fitTransform, transformPoints, interleavePositions, openLas, parseControlPoints, matchControlPoints } from "../../src/index.js";
+import { alignCloud, fitTransform, transformPoints, interleavePositions, openLas, parseControlPoints, matchControlPoints, parseControlPointPairs, MIN_PAIRS } from "../../src/index.js";
 
 var REF_RGB = [63, 182, 201];   // the reference cloud, one flat colour
-var MIN = { rigid: 3, level: 2, scale: 3 };
+var MIN = MIN_PAIRS;
 var FAR = 10000;   // m: a reference further than this from the cloud is drawn shifted over it
 
 /**
@@ -42,6 +45,8 @@ export function initRegister(ctx) {
 	var grid = null;         // parseControlPoints of the grid file
 	var scanFile = null;     // parseControlPoints of the scan's target file, or null
 	var scanPicks = [];      // [{ name, xyz: [x, y, z] world }] picked on the cloud
+	// Pairs file
+	var pairFile = null;     // parseControlPointPairs of the pairs file
 	// both
 	var picking = false;
 	var result = null;       // the last Fit: { transform, fit, icp? }
@@ -64,6 +69,12 @@ export function initRegister(ctx) {
 			var from = [], to = [];
 			pairs.forEach(function (p) { from.push(p.from[0], p.from[1], p.from[2]); to.push(p.to[0], p.to[1], p.to[2]); });
 			return { names: pairs.map(function (p, i) { return String(i + 1); }), from: from, to: to };
+		}
+		if (mode === "pairs") {
+			if (!pairFile) return { names: [], from: [], to: [] };
+			var b = pairFile.blocks[Number($("pairsBlock").value) || 0];
+			if (!b) return { names: pairFile.names, from: pairFile.from, to: pairFile.to, measured: true };
+			return { names: b.names, from: b.from, to: b.to || b.computed, measured: b.to !== null, rms: b.rms };
 		}
 		if (!grid) return { names: [], from: [], to: [], unmatchedScan: [], unmatchedGrid: [] };
 		var m = matchControlPoints(scanList(), grid);
@@ -101,6 +112,9 @@ export function initRegister(ctx) {
 		if (mode === "align") {
 			pairs.forEach(function (p, i) { add(p.from, String(i + 1), "moving"); add(p.to, String(i + 1), "reference"); });
 			if (half) add(half, String(pairs.length + 1), "moving");
+		} else if (mode === "pairs") {
+			var c = current();
+			for (var j = 0; j < c.names.length; j++) add([c.from[3 * j], c.from[3 * j + 1], c.from[3 * j + 2]], c.names[j], "moving");
 		} else {
 			scanPicks.forEach(function (p) { add(p.xyz, p.name, "moving"); });
 			if (scanFile) for (var i = 0; i < scanFile.names.length; i++) add([scanFile.xyz[3 * i], scanFile.xyz[3 * i + 1], scanFile.xyz[3 * i + 2]], scanFile.names[i], "moving");
@@ -123,8 +137,8 @@ export function initRegister(ctx) {
 			var tr = t.insertRow();
 			if (f && f.worst === i && n > MIN[model()]) tr.className = "worst";
 			[name, f ? mm(f.dH[i]) : "—", f ? mm(f.dZ[i]) : "—", f ? mm(f.residuals[i]) : "—", f ? mm(f.looResiduals[i]) : "—"].forEach(function (v) { tr.insertCell().textContent = v; });
-			var cell = tr.insertCell(), pick = mode === "align" ? i : scanPicks.findIndex(function (p) { return p.name === name; });
-			if (pick < 0) return;   // a row from the scan file: remove it there
+			var cell = tr.insertCell(), pick = mode === "align" ? i : mode === "pairs" ? -1 : scanPicks.findIndex(function (p) { return p.name === name; });
+			if (pick < 0) return;   // a row from a file: remove it there
 			var del = document.createElement("button");
 			del.className = "icon-button small"; del.textContent = "×"; del.title = "Delete " + name;
 			del.addEventListener("click", function () { if (mode === "align") pairs.splice(pick, 1); else scanPicks.splice(pick, 1); changed(); });
@@ -132,7 +146,10 @@ export function initRegister(ctx) {
 		});
 		var info = n + " pairs" + (f ? " · RMS " + mm(f.rms) + " mm (" + model() + ")" : n ? " · " + model() + " needs " + MIN[model()] : "");
 		if (mode === "align") info += half ? " · pick the same point on the reference (orange)" : picking ? " · pick a point on your cloud" : "";
-		else {
+		else if (mode === "pairs") {
+			if (c.measured && c.rms === c.rms && c.rms !== undefined) info += " · Vulcan's RMS " + mm(c.rms) + " mm";
+			if (c.measured === false) info += " · no inverse block: these are Vulcan's computed points, so the fit reproduces its transform (~0 residuals)";
+		} else {
 			if (c.unmatchedScan.length) info += " · scan only: " + c.unmatchedScan.join(", ");
 			if (c.unmatchedGrid.length) info += " · grid only: " + c.unmatchedGrid.join(", ");
 			if (picking) info += " · click a target on your cloud";
@@ -175,7 +192,7 @@ export function initRegister(ctx) {
 
 	// --- picking ------------------------------------------------------------------
 	function setPicking(on) {
-		picking = on && !!ctx.cloud && (mode === "gcp" || !!ref);
+		picking = on && !!ctx.cloud && mode !== "pairs" && (mode === "gcp" || !!ref);
 		if (!picking) half = null;
 		["regPick", "gcpPick"].forEach(function (id) {
 			$(id).classList.toggle("active", picking);
@@ -243,6 +260,51 @@ export function initRegister(ctx) {
 		changed();
 	}
 
+	function loadPairs(text, name) {
+		try { pairFile = parseControlPointPairs(text); } catch (err) { status(name + ": " + err.message, true); return; }
+		var sel = $("pairsBlock");
+		sel.innerHTML = "";
+		pairFile.blocks.forEach(function (b, i) {
+			var o = document.createElement("option");
+			o.value = String(i);
+			o.textContent = (b.title || "block " + (i + 1)) + " · " + b.names.length + " pairs" + (b.to ? "" : " (computed)");
+			sel.appendChild(o);
+		});
+		sel.disabled = pairFile.blocks.length < 2;
+		var n = pairFile.names.length;
+		$("pairsInfo").textContent = name + " · " + (pairFile.format === "vulcan" ? "Vulcan report, " + pairFile.blocks.length + " block" + (pairFile.blocks.length === 1 ? "" : "s") : n + " pairs");
+		// Vulcan fits an XY affine: start there so its RMS can be compared
+		if (pairFile.format === "vulcan") $("regModel").value = "affine2d";
+		status(name + ": " + n + " pairs");
+		changed();
+	}
+	// A made-up two-block report: a mine grid near (10000, 20000) onto a map grid by a known
+	// similarity, the surveyed targets a few cm off it, each block's "->" its affine2d fit
+	function examplePairs() {
+		var deg = 46.8214, k = 0.999996865, r = (deg * Math.PI) / 180, c = k * Math.cos(r), s = k * Math.sin(r), T = [312000.25, 6608000.75, -5000];
+		var seed = 7, rows = [];
+		function rnd() { seed = (seed * 16807) % 2147483647; return seed / 2147483647; }
+		for (var i = 0; i < 9; i++) {
+			var x = 9000 + 2000 * rnd(), y = 19000 + 1500 * rnd(), z = 5300 + 200 * rnd();
+			var E = c * x - s * y + T[0] + 0.03 * (rnd() - 0.5), N = s * x + c * y + T[1] + 0.03 * (rnd() - 0.5);
+			rows.push({ name: i === 4 ? "AAM 108" : "CP" + (i + 1), mine: [x, y, z], grid: [E, N, z + T[2]] });
+		}
+		function f3(v) { return v.toFixed(3); }
+		function f6(v) { return v.toFixed(6); }
+		// the surveyed points to the printed millimetre, as a surveyor's file holds them
+		rows.forEach(function (p) { p.mine = p.mine.map(function (v) { return Number(f3(v)); }); p.grid = p.grid.map(function (v) { return Number(f3(v)); }); });
+		function block(title, a, b) {
+			var f = fitTransform([].concat.apply([], rows.map(function (p) { return p[a]; })), [].concat.apply([], rows.map(function (p) { return p[b]; })), { model: "affine2d" });
+			var lines = ["", "Error report for in transformation : " + title, ""], m = f.transform.m, t = f.transform.t;
+			rows.forEach(function (p, i) {
+				var q = p[a], out = [m[0] * q[0] + m[1] * q[1] + t[0], m[3] * q[0] + m[4] * q[1] + t[1], q[2] + t[2]];
+				lines.push((p.name + "         ").slice(0, 9) + ": " + f6(f.residuals[i]) + "  [" + q.map(f6).join(" ") + " -> " + out.map(f6).join(" ") + "]");
+			});
+			return lines.concat(["", "", "  RMS error = " + f6(f.rms), "", ""]).join("\n");
+		}
+		return block("EXAMPLE_MINE2MGA", "mine", "grid") + block("EXAMPLE_MGA2MINE", "grid", "mine");
+	}
+
 	// --- fit, preview, apply, undo, copy -----------------------------------------
 	function fit() {
 		var c = current(), o = ctx.origin, t0 = performance.now();
@@ -274,7 +336,7 @@ export function initRegister(ctx) {
 		var moved = transformPoints(w, T, { inPlace: true });
 		viewer.clear();
 		viewer.addChunk(interleavePositions(moved, { origin: o, float32: true }), ctx.colours(), ctx.DRAW_CAP);
-		if (mode === "gcp") viewer.fit();   // onto the grid: likely far from where it was
+		if (mode !== "align") viewer.fit();   // onto the grid: likely far from where it was
 		previewing = true;
 	}
 	// Move the cloud by T (world) and re-base it: Float64 world, a new origin at the transformed
@@ -337,6 +399,7 @@ export function initRegister(ctx) {
 		mode = m;
 		$("regAlign").classList.toggle("hidden", m !== "align");
 		$("regGcp").classList.toggle("hidden", m !== "gcp");
+		$("regPairs").classList.toggle("hidden", m !== "pairs");
 		setPicking(false);
 	}
 
@@ -345,6 +408,9 @@ export function initRegister(ctx) {
 	$("refFile").addEventListener("change", function (e) { if (e.target.files[0]) loadReference(e.target.files[0]); });
 	$("gcpGrid").addEventListener("change", function (e) { if (e.target.files[0]) loadControl(e.target.files[0], "grid"); });
 	$("gcpScan").addEventListener("change", function (e) { if (e.target.files[0]) loadControl(e.target.files[0], "scan"); });
+	$("pairsFile").addEventListener("change", async function (e) { var f = e.target.files[0]; if (f) loadPairs(await f.text(), f.name); });
+	$("pairsExample").addEventListener("click", function () { loadPairs(examplePairs(), "example report"); });
+	$("pairsBlock").addEventListener("change", changed);
 	$("regPick").addEventListener("click", function () { setPicking(!picking); });
 	$("gcpPick").addEventListener("click", function () { setPicking(!picking); });
 	$("regClear").addEventListener("click", function () { pairs = []; half = null; changed(); });
@@ -378,6 +444,8 @@ export function initRegister(ctx) {
 		},
 		isPicking: function () { return picking; },
 		/** For checks from the console. */
-		debug: function () { return { ref: ref, pairs: pairs, scanPicks: scanPicks, scanFile: scanFile, grid: grid, result: result }; }
+		debug: function () { return { ref: ref, pairs: pairs, scanPicks: scanPicks, scanFile: scanFile, grid: grid, pairFile: pairFile, result: result }; },
+		/** For checks from the console: the made-up report the Example button loads. */
+		examplePairs: examplePairs
 	};
 }

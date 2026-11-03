@@ -501,7 +501,13 @@ f.rms;
 
 `model` is `"rigid"` (rotate and shift, the default; 3 or more pairs not on one line),
 `"level"` (rotate about Z and shift, for a scan levelled by its IMU; 2 or more pairs at different
-XY) or `"scale"` (rigid plus one uniform scale; 3 or more pairs). The fits are closed form
+XY), `"scale"` (rigid plus one uniform scale; 3 or more pairs), `"levelScale"` (rotate about Z,
+one XY scale and shift: a 2D Helmert, the mine grid to map grid fit with its grid scale factor;
+2 or more pairs) or `"affine2d"` (an XY affine: X and Y scale, shear and rotation, as Vulcan fits;
+3 or more pairs not on one line). The three 2D models never scale or tilt Z (`m[8]` is 1): Z is
+shifted by the mean height difference; their `scale` is `sqrt|det|` of the XY 2 × 2 and `rotateZ`
+its rotation in degrees. `MIN_PAIRS` holds each model's minimum. `applyTransform(f.transform, x, y,
+z)` maps one point (`[x', y', z']`, or into an `out` array). The fits are closed form
 (Horn's quaternion method; the level fit exactly in 2D), on Float64 offsets from each set's
 centroid, so a scan near 0,0 and a grid at UTM magnitude lose nothing. `weights` (one per pair,
 0 leaves a pair out but still reports it) are optional. A bad control point pulls the fit toward
@@ -516,6 +522,37 @@ blank lines, `#` comments, double-quoted names and an optional last column left 
 are accepted. A row with more fields than the first is refused, as is (without a header) a 1–3
 digit field followed by a 3-digit one, so a thousands separator (`478,000.1`) is refused, naming
 the line, never read as two numbers. Names match exactly after trimming, case-sensitive.
+
+### Control-point pairs
+
+```js
+import { parseControlPointPairs, fitTransform } from "las-laz-js";
+
+var p = parseControlPointPairs(await file.text());
+var f = fitTransform(p.from, p.to, { model: "levelScale" });   // or "affine2d" for a Vulcan report
+p.blocks.forEach(function (b) {                               // a Vulcan report: one per block
+	if (!b.to) return;                                         // no inverse block: no targets
+	var g = fitTransform(b.from, b.to, { model: "affine2d" });
+	console.log(b.title, g.rms, "Vulcan:", b.rms);
+});
+```
+
+Both sides of each point on one line: `name x y z E N RL` rows (tab, comma, semicolon or spaces;
+the name may end in `:`, and may hold spaces in a tab, comma or semicolon file or when the six
+numbers end a space-separated line; a header line, blank lines and `#` comments are skipped), or a
+Vulcan transformation error report: blocks headed `Error report for in transformation : NAME`,
+rows `name : residual [x y z -> x' y' z']` and `RMS error = r`. The `->` side of a Vulcan report is
+not the surveyed target but the from point under Vulcan's fitted transform, the residual its
+distance from the target. A report holds the transform and its inverse (`X_MINE2MGA`,
+`X_MGA2MINE`), whose from points are each other's targets, so each block's `to` is taken from the
+other block by name, when every point sits at its printed residual from the computed one;
+`affine2d` on those pairs gives Vulcan's residuals and RMS back. A block with no inverse has `to`
+null (its `computed` points fit Vulcan's transform exactly, residuals ~0). The result's `names`,
+`from` and `to` are the pairs to fit (the first block's, for a report; `measured` false when they
+are its computed points); `blocks` holds each block in its reported direction with `title`,
+`names`, `from`, `computed`, `to`, `residuals`, `rms` (NaN when absent) and `inverse` (the index of
+the block that gave the targets, -1 for none). Duplicate names and malformed rows are refused,
+naming the line.
 
 ### Align to a cloud
 

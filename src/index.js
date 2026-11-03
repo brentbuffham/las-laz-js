@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.19.10";
+export var VERSION = "0.20.0";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -26,7 +26,7 @@ export { pointsInRadius, nearestPoint, pointsNearRay } from "./index/query.js";
 export { nearestPoints } from "./index/knn.js";
 export { selectBox, selectPolygon, selectScreen, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
 export { keepPoints, removePoints, splitPoints, mergePoints } from "./ops/apply.js";
-export { makeTransform, transformPoints } from "./ops/transform.js";
+export { makeTransform, transformPoints, applyTransform } from "./ops/transform.js";
 export { interleavePositions } from "./ops/interleave.js";
 export { selectSparse } from "./ops/sparse.js";
 export { selectDoubleLayer, snapToLayer, suggestDoubleLayer, doubleLayerStats, addDoubleLayerStats } from "./ops/doubleLayer.js";
@@ -34,8 +34,9 @@ export { selectOutliers } from "./ops/outliers.js";
 export { pointNormals, estimateNoise } from "./ops/normals.js";
 export { denoisePoints } from "./ops/denoise.js";
 export { classifyPoints, ASPRS_CLASSES } from "./ops/classify.js";
-export { fitTransform } from "./register/fit.js";
+export { fitTransform, MIN_PAIRS } from "./register/fit.js";
 export { parseControlPoints, matchControlPoints } from "./register/controlPoints.js";
+export { parseControlPointPairs } from "./register/controlPairs.js";
 export { alignCloud } from "./register/align.js";
 export { alignStores, storeSample } from "./tiles/align.js";
 export { dedupeStore, smoothStore, selectOutliersStore, selectSparseStore, roughnessStore, selectDoubleLayerStore, snapToLayerStore, suggestDoubleLayerStore, fixDoubleLayerStore } from "./tiles/storeOps.js";

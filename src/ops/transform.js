@@ -43,17 +43,19 @@ export function checkTransform(T, name) {
 }
 
 /**
- * Apply a transform to one point in Float64: out = m·p + t (internal;
- * not exported from the package entry). The transform is not checked.
+ * Apply a transform to one point in Float64: out = m·p + t. The
+ * transform is not checked (it is called per point; checkTransform or
+ * makeTransform first).
  * @param {{m: ArrayLike<number>, t: ArrayLike<number>}} T
  * @param {number} x
  * @param {number} y
  * @param {number} z
- * @param {number[]|Float64Array} out - receives x', y', z' at 0..2.
+ * @param {number[]|Float64Array} [out] - receives x', y', z' at 0..2 (a new array when omitted).
  * @returns {number[]|Float64Array} out
  */
 export function applyTransform(T, x, y, z, out) {
 	var m = T.m, t = T.t;
+	if (out === undefined) out = [0, 0, 0];
 	out[0] = m[0] * x + m[1] * y + m[2] * z + t[0];
 	out[1] = m[3] * x + m[4] * y + m[5] * z + t[1];
 	out[2] = m[6] * x + m[7] * y + m[8] * z + t[2];

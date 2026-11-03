@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.20.0 (2026-11-03)
+
+Control-point pairs for a local (mine) grid to a map grid:
+- `fitTransform` models `"levelScale"` (2D Helmert: rotation about Z, one XY scale, XY shift, Z shift by the mean dZ; 2 or more
+  pairs) and `"affine2d"` (6-parameter XY affine: X and Y scale, shear and rotation, XY shift, Z shift; 3 or more pairs not on one
+  line). Both closed-form least squares in XY on centred Float64 offsets, `m[8] = 1` (Z never scaled or tilted), the same result
+  shape as the other models; `scale` is `sqrt|det|` of the XY 2 x 2 and `rotateZ` its rotation (degrees). On a pure similarity
+  `affine2d` equals `levelScale`; `level` on grid-scale-factor pairs shows the scale miss (3 mm per km at 0.999996865) that
+  `levelScale` removes. `alignCloud` takes them too (ICP's increment is about Z only, as for `"level"`).
+- New `parseControlPointPairs(text)`: both sides of each point on one line, as `name x y z E N RL` rows (tab, comma, semicolon or
+  spaces; the name may end in `:` and hold spaces) or a Vulcan transformation error report. A report's `->` side is Vulcan's own
+  transformed point, not the surveyed target: each block's targets are taken from its inverse block (`X_MINE2MGA` /
+  `X_MGA2MINE`) by name, when every one sits at the printed residual from the computed point. `affine2d` on those targets
+  reproduces Vulcan's printed residuals and RMS (checked on 24 of 32 real reports to 1e-6 m; the other 8, where
+  Vulcan's Z is not a plain shift, differ by 0.3 to 14 mm). Returns `{ format, names, from, to, measured, blocks }`; each block keeps its title, names, from,
+  computed, to, residuals, RMS and inverse.
+- `applyTransform(T, x, y, z, out?)` and `MIN_PAIRS` (the minimum pairs per model) are exported.
+- Demo: Register has a "Pairs file" mode (a pairs file or a made-up example report, one block at a time, the fitted RMS beside
+  Vulcan's) and the two new models.
+
 ## 0.19.10 (2026-11-01)
 
 The slow per-point tools never go silent, and run on every core:

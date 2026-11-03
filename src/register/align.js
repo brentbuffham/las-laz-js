@@ -9,8 +9,8 @@
 // whole fixed cloud), and solves the
 // small-angle linear system for an increment, applied as an exact
 // rotation about the matched points' centroid plus a shift. The increment
-// is rigid (about Z only for "level") and applied on the left, so the
-// picks' scale is kept. Coordinates: both clouds' columns are local to
+// is rigid (about Z only for the 2D models "level", "levelScale" and
+// "affine2d") and applied on the left, so the picks' scale is kept. Coordinates: both clouds' columns are local to
 // their origins; sums run in the fixed cloud's local frame, near 0;
 // the transform is world to world.
 //==========================================================
@@ -62,7 +62,7 @@ function rodrigues(wx, wy, wz) {
  *   fixedOrigin?: number[], icp?: false|{maxDistance: number, iterations?: number, sample?: number, k?: number},
  *   onProgress?: function(number, number), signal?: AbortSignal}} options - onProgress(done, total) counts iterations (the fixed cloud's
  *   tree build is the first of them); a signal is looked at as it ticks (ABORTED); pairs in world coordinates (from on the moving
- *   cloud, to on the fixed); model "rigid" (default), "level" or "scale"; origins default [0, 0, 0];
+ *   cloud, to on the fixed); model "rigid" (default), "scale", "level", "levelScale" or "affine2d" (see fitTransform); origins default [0, 0, 0];
  *   icp: maxDistance required, iterations 30, sample 50,000, k 16 (neighbours per fixed normal).
  * @returns {{transform: {m: number[], t: number[]}, fit: object, icp?: {iterations: number, converged: boolean,
  *   rmsBefore: number, rmsAfter: number, used: number, sampled: number, constrained: number}}} world to world;
@@ -104,7 +104,7 @@ export function alignCloud(moving, fixed, options) {
 		var q = sel[j] * mc.stride;
 		sx[j] = mc.x[q] + mo[0]; sy[j] = mc.y[q] + mo[1]; sz[j] = mc.z[q] + mo[2];
 	}
-	var maxD2 = maxD * maxD, need = MIN_PAIRS[model], level = model === "level";
+	var maxD2 = maxD * maxD, need = MIN_PAIRS[model], level = model === "level" || model === "levelScale" || model === "affine2d";
 	var normals = new Map(), P = new Uint32Array(k), D = new Float64Array(k), P1 = new Uint32Array(1), D1 = new Float64Array(1), plane = new Float64Array(7);
 	// a fixed point's normal from its k nearest, however far: maxDistance is the pairing distance,
 	// not the plane's neighbourhood (a cloud sparser than it would otherwise have no normals)

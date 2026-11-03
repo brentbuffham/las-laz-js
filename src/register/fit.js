@@ -4,7 +4,11 @@
 // on two clouds), closed form, least squares. "rigid" (rotation +
 // shift) and "scale" (rigid + one uniform scale, Helmert) by Horn's
 // quaternion method (1987), the scale by Umeyama (1991, least squares
-// in the "to" space). Sums run in Float64 on offsets from each set's
+// in the "to" space). Three 2D models keep Z unscaled and shift it by
+// the mean height difference: "level" (rotation about Z), "levelScale"
+// (2D Helmert: rotation about Z + one XY scale, the grid-scale-factor
+// fit of a mine grid to a map grid) and "affine2d" (6-parameter XY
+// affine: X and Y scale and shear too), each exact least squares in XY. Sums run in Float64 on offsets from each set's
 // weighted centroid, so UTM-sized coordinates lose nothing. The result
 // is the 0.5.0 { m, t } (p' = m p + t), with each pair's residual and
 // its horizontal and vertical parts.
@@ -17,28 +21,43 @@ import { largestEigen4 } from "./eigen4.js";
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
 /** Minimum pairs per model. */
-export var MIN_PAIRS = Object.freeze({ rigid: 3, level: 2, scale: 3 });
+export var MIN_PAIRS = Object.freeze({ rigid: 3, level: 2, scale: 3, levelScale: 2, affine2d: 3 });
+var PLANAR = { level: true, levelScale: true, affine2d: true };
 
-// "level": rotation about Z + shift, exact in 2D (an IMU-levelled scan): theta from the centred
-// XY sums, t_z the mean height difference. null when every pair has one XY.
-function solveLevel(from, to, w, skip, ax, ay, az, bx, by, bz) {
-	var num = 0, den = 0, spread = 0, big = 0;
+// The 2D models: "level" (rotation about Z + shift), "levelScale" (+ one XY scale) and "affine2d"
+// (any 2 x 2 in XY), each least squares in XY on the centred offsets, t_z the mean height
+// difference, m[8] = 1. null when the pairs do not fix the model: every pair at one XY (all three),
+// every "to" at one XY (levelScale: scale 0), or the from points on one line (affine2d).
+function solvePlanar(model, from, to, w, skip, ax, ay, az, bx, by, bz) {
+	var xx = 0, xy = 0, yy = 0, Xx = 0, Xy = 0, Yx = 0, Yy = 0, big = 0;
 	for (var i = 0; i < w.length; i++) {
 		if (i === skip || !w[i]) continue;
-		var px = from[3 * i] - ax, py = from[3 * i + 1] - ay, pz = from[3 * i + 2] - az;
+		var v = w[i], px = from[3 * i] - ax, py = from[3 * i + 1] - ay, pz = from[3 * i + 2] - az;
 		var qx = to[3 * i] - bx, qy = to[3 * i + 1] - by;
-		num += w[i] * (px * qy - py * qx);
-		den += w[i] * (px * qx + py * qy);
-		spread += w[i] * (px * px + py * py);
+		xx += v * px * px; xy += v * px * py; yy += v * py * py;
+		Xx += v * qx * px; Xy += v * qx * py; Yx += v * qy * px; Yy += v * qy * py;
 		big = Math.max(big, Math.abs(px), Math.abs(py), Math.abs(pz));
 	}
+	var spread = xx + yy, a, b, c, d;
 	if (!(spread > 1e-24 * big * big)) return null;
-	var theta = Math.atan2(num, den), c = Math.cos(theta), s = Math.sin(theta);
-	var deg = 180 - ((180 - (theta * 180) / Math.PI) % 360);   // in (-180, 180]: -180 becomes 180
+	if (model === "affine2d") {
+		// [qx qy] = A [px py]: A = S C^-1 with S = sum q p^T, C = sum p p^T
+		var D = xx * yy - xy * xy;
+		if (!(D > 1e-12 * spread * spread)) return null;
+		a = (Xx * yy - Xy * xy) / D; b = (Xy * xx - Xx * xy) / D;
+		c = (Yx * yy - Yy * xy) / D; d = (Yy * xx - Yx * xy) / D;
+	} else {
+		// similarity [a -b; b a]: a = sum p.q / spread, b = sum p x q / spread (times the scale)
+		var cs = Xx + Yy, sn = Yx - Xy, theta = Math.atan2(sn, cs), k = model === "levelScale" ? Math.hypot(cs, sn) / spread : 1;
+		if (!(k > 0)) return null;
+		a = d = k * Math.cos(theta); c = k * Math.sin(theta); b = -c;
+	}
+	// rotateZ: the rotation of the 2 x 2 (its nearest rotation for affine2d), in (-180, 180]
+	var deg = 180 - ((180 - (Math.atan2(c - b, a + d) * 180) / Math.PI) % 360);
 	return {
-		m: [c, -s + 0, 0, s, c, 0, 0, 0, 1],
-		t: [bx - (c * ax - s * ay) + 0, by - (s * ax + c * ay) + 0, bz - az + 0],
-		scale: 1, rotateZ: deg + 0
+		m: [a + 0, b + 0, 0, c + 0, d + 0, 0, 0, 0, 1],
+		t: [bx - (a * ax + b * ay) + 0, by - (c * ax + d * ay) + 0, bz - az + 0],
+		scale: model === "level" ? 1 : Math.sqrt(Math.abs(a * d - b * c)), rotateZ: deg + 0
 	};
 }
 
@@ -76,7 +95,7 @@ function checkPairs(from, to, weights) {
  * @param {ArrayLike<number>} from
  * @param {ArrayLike<number>} to
  * @param {Float64Array} w - one weight per pair.
- * @param {string} model - "rigid" | "scale".
+ * @param {string} model - "rigid" | "scale" | "level" | "levelScale" | "affine2d".
  * @param {number} skip
  * @returns {{m: number[], t: number[], scale: number, rotateZ: (number|undefined)}|null} null when
  *   the pairs do not fix the model (degenerate)
@@ -92,7 +111,7 @@ export function solve(from, to, w, model, skip) {
 	}
 	// W is never 0 here: one weighted pair is already degenerate below (its NaN sums fail the checks)
 	ax /= W; ay /= W; az /= W; bx /= W; by /= W; bz /= W;
-	if (model === "level") return solveLevel(from, to, w, skip, ax, ay, az, bx, by, bz);
+	if (PLANAR[model]) return solvePlanar(model, from, to, w, skip, ax, ay, az, bx, by, bz);
 	// S = sum w a' b'^T and the from set's covariance, on centred offsets
 	var Sxx = 0, Sxy = 0, Sxz = 0, Syx = 0, Syy = 0, Syz = 0, Szx = 0, Szy = 0, Szz = 0, aa = 0;
 	var C = new Float64Array(6);
@@ -145,8 +164,11 @@ export function solve(from, to, w, model, skip) {
  * @param {ArrayLike<number>} from - x, y, z per pair (flat; Array, Float64Array or Float32Array).
  * @param {ArrayLike<number>} to - the same length.
  * @param {{model?: string, weights?: ArrayLike<number>}} [options] - model "rigid" (default;
- *   rotation + shift, at least 3 pairs not on one line) or "scale" (rigid + one uniform scale, at
- *   least 3 pairs not on one line). weights: one per pair, >= 0, not all 0; a weight of 0 leaves a
+ *   rotation + shift, at least 3 pairs not on one line), "scale" (rigid + one uniform scale, at
+ *   least 3 pairs not on one line), "level" (rotation about Z + shift, at least 2 pairs at
+ *   different XY), "levelScale" (level + one XY scale; Z not scaled; at least 2) or "affine2d" (XY
+ *   affine: X / Y scale, shear, rotation; Z shifted, not scaled; at least 3 not on one line).
+ *   scale is sqrt|det| of the XY 2 x 2 for the 2D models; rotateZ (degrees) is set for them only. weights: one per pair, >= 0, not all 0; a weight of 0 leaves a
  *   pair out of the fit but its residuals are still reported.
  * @returns {{transform: {m: number[], t: number[]}, model: string, scale: number, rotateZ: (number|undefined),
  *   residuals: Float64Array, dH: Float64Array, dZ: Float64Array, looResiduals: Float64Array, rms: number, worst: number}}
@@ -157,12 +179,13 @@ export function fitTransform(from, to, options) {
 	var o = options === undefined ? {} : options;
 	if (o === null || typeof o !== "object") throw bad("options must be an object");
 	var model = o.model === undefined ? "rigid" : o.model;
-	if (!Object.prototype.hasOwnProperty.call(MIN_PAIRS, model)) throw bad("model must be \"rigid\", \"level\" or \"scale\" (got " + JSON.stringify(model) + ")");
+	if (!Object.prototype.hasOwnProperty.call(MIN_PAIRS, model)) throw bad("model must be \"rigid\", \"scale\", \"level\", \"levelScale\" or \"affine2d\" (got " + JSON.stringify(model) + ")");
 	var w = checkPairs(from, to, o.weights), n = w.length;
 	if (n < MIN_PAIRS[model]) throw bad("model " + model + " needs at least " + MIN_PAIRS[model] + " pairs (got " + n + ")");
 	var f = solve(from, to, w, model, -1);
 	if (!f) {
-		throw bad(model === "level" ? "the pairs do not fix a level transform: their from points share one XY, so the rotation about Z is undetermined"
+		throw bad(model === "level" || model === "levelScale" ? "the pairs do not fix a " + model + " transform: their from (or to) points share one XY, so the rotation about Z is undetermined"
+			: model === "affine2d" ? "the pairs do not fix an affine2d transform: their from points lie on one line in XY (or coincide), so the XY affine is undetermined"
 			: "the pairs do not fix a " + model + " transform: their from points lie on one line (or coincide), so the rotation about it is undetermined");
 	}
 	var residuals = new Float64Array(n), dH = new Float64Array(n), dZ = new Float64Array(n), sum = 0, worst = 0;

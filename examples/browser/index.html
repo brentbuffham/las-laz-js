@@ -174,11 +174,12 @@
 			</div>
 
 			<div class="tab-body hidden" id="tab-register">
-				<p class="muted small">Moves your cloud onto a reference cloud (points you pick on both, with <code>alignCloud</code>: a fit from the picks, then optional ICP) or onto the mine grid (control points matched by name, with <code>fitTransform</code>). Each pair's residual shows how well it fits; "left out" is its residual under the fit made without it, so a bad pick stands out.</p>
+				<p class="muted small">Moves your cloud onto a reference cloud (points you pick on both, with <code>alignCloud</code>: a fit from the picks, then optional ICP) or onto the mine grid (control points matched by name, or a file of control-point pairs such as a Vulcan transformation report, with <code>fitTransform</code>). Each pair's residual shows how well it fits; "left out" is its residual under the fit made without it, so a bad pick stands out.</p>
 				<label class="field">Mode
 					<select id="regMode">
 						<option value="align">Align to a cloud</option>
 						<option value="gcp">GCP: control points</option>
+						<option value="pairs">Pairs file: local → grid</option>
 					</select>
 				</label>
 				<div id="regAlign">
@@ -209,16 +210,28 @@
 					</div>
 					<table class="grid-table" id="gcpPickTable"></table>
 				</div>
+				<div id="regPairs" class="hidden">
+					<h3>Control-point pairs</h3>
+					<p class="muted small">One file holding both sides of each point (<code>parseControlPointPairs</code>): rows of name, x, y, z, E, N, RL (tab, comma, semicolon or spaces; the name may end in ':'), or a Vulcan transformation error report. A Vulcan report's "->" side is Vulcan's own transformed point, not the surveyed one: the targets come from the inverse block (MINE2MGA / MGA2MINE), so the fitted RMS can be checked against Vulcan's.</p>
+					<div class="row wrap">
+						<label class="button">Pairs file<input type="file" id="pairsFile" hidden></label>
+						<button class="button" id="pairsExample" title="A made-up two-block Vulcan-style report (no real site)">Example report</button>
+						<span class="muted small" id="pairsInfo">none</span>
+					</div>
+					<label class="field">Block <select id="pairsBlock" disabled></select></label>
+				</div>
 				<h3>Residuals</h3>
 				<table class="grid-table" id="pairTable"></table>
 				<p class="muted small" id="pairInfo"></p>
 				<h3>Fit</h3>
 				<div class="form-grid">
 					<label>Model
-						<select id="regModel" title="rigid: rotate + shift (3+ pairs); level: rotate about Z + shift, for IMU-levelled scans (2+ pairs); scale: rigid + one scale (3+ pairs)">
+						<select id="regModel" title="rigid: rotate + shift (3+ pairs); level: rotate about Z + shift, for IMU-levelled scans (2+ pairs); scale: rigid + one scale (3+ pairs); levelScale: level + one XY scale, mine grid to map grid (2+ pairs); affine2d: XY affine with X / Y scale and shear, Z shifted (3+ pairs)">
 							<option value="rigid">rigid</option>
 							<option value="level">level</option>
 							<option value="scale">scale</option>
+							<option value="levelScale">levelScale</option>
+							<option value="affine2d">affine2d</option>
 						</select>
 					</label>
 					<label>Max distance (m) <input type="number" id="regMaxDist" value="0.5" min="0.001" step="0.1" title="ICP pairs a point with its nearest reference point within this distance"></label>

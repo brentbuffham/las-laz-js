@@ -21,10 +21,10 @@ function invalid(fn, part) {
 	assert.throws(fn, function (e) { return e instanceof LasError && e.code === ERROR_CODES.INVALID_ARGUMENT && e.message.indexOf(part) >= 0; });
 }
 
-test("the package exports makeTransform and transformPoints only", function () {
+test("the package exports makeTransform, transformPoints and applyTransform, not checkTransform", function () {
 	assert.equal(typeof lib.makeTransform, "function");
 	assert.equal(typeof lib.transformPoints, "function");
-	assert.equal(lib.applyTransform, undefined);
+	assert.equal(typeof lib.applyTransform, "function");
 	assert.equal(lib.checkTransform, undefined);
 });
 
