@@ -637,6 +637,70 @@ export function addColumn(store, name, type, fill, opts) {
 	});
 }
 
+/**
+ * Write an added column and drop others in ONE pass over the nodes (one generation of each node, one manifest): what
+ * addColumn + setColumn + removeColumn do in three whole-store rewrites. name is made (type, fill) when the store has no
+ * such column, else it must have that type. values { key: typed array }: per node, one value a point (or, with
+ * opts.selection, one a selected point, in its order); a node it does not name keeps its values (fill when new). drop:
+ * added columns removed in the same edit (a previous run's), never name itself. Cut short (signal, an error), the store
+ * stays as it was. opts: selection, fill, drop, signal, onProgress({ phase: "edit", done, total }) by tile.
+ */
+export function writeColumn(store, name, type, values, opts) {
+	opts = opts || {};
+	return queued(store, function () {
+		var m = store.manifest, names = m.columns.map(function (c) { return c.name; }), ai = names.indexOf(name);
+		if (!COLUMN_TYPES[type]) throw bad("type " + type + " is not one of u8, i8, u16, i16, u32, i32, u64, i64, f32, f64");
+		if (ai < 0) {
+			if (typeof name !== "string" || !name || name.length > 32 || /[^\x01-\xff]/.test(name)) throw bad("a column name is 1 to 32 characters, one byte each");
+			var taken = Object.keys(FIELD_TYPES).concat(MORE_RESERVED, store.extraBytes.map(function (f) { return f.column; }));
+			if (taken.indexOf(name) >= 0) throw bad("the column name " + name + " is taken (a standard field, a reserved name or a file extra column)");
+		} else if (m.columns[ai].type !== type) throw bad("column " + name + " is " + m.columns[ai].type + ", not " + type + "; give another name");
+		var fill = checkTyped(type, opts.fill === undefined ? 0 : opts.fill, name, "fill");
+		var drop = opts.drop === undefined ? [] : opts.drop;
+		if (!Array.isArray(drop)) throw bad("drop must be an array of added column names");
+		var dropAt = drop.map(function (d) {
+			var j = names.indexOf(d);
+			if (j < 0) throw bad("drop names " + JSON.stringify(d) + ", which is not an added column of the store");
+			if (d === name) throw bad("drop cannot name the column being written (" + name + ")");
+			return j;
+		});
+		if (!values || typeof values !== "object") throw bad("values must be { key: typed array }, per node");
+		var sel = opts.selection;
+		if (sel !== undefined) checkSelection(store, sel);
+		var Typed = COLUMN_TYPES[type], big = EXTRA_TYPES[type].big;
+		Object.keys(values).forEach(function (k) {
+			var node = m.nodes[k], v = values[k];
+			if (!node) throw bad("values names tile " + k + ", which is not in the store");
+			var want = sel ? (sel.tiles[k] ? sel.tiles[k].length : -1) : node.count;
+			if (want < 0) throw bad("values names tile " + k + ", which the selection does not");
+			if (!v || v.length !== want) throw bad("values[" + k + "] must hold one value for each of the tile's " + want + (sel ? " selected" : "") + " points");
+			if (!(v instanceof Typed)) for (var i = 0; i < v.length; i++) checkTyped(type, v[i], name, "point " + (sel ? sel.tiles[k][i] : i) + " of tile " + k);
+		});
+		var gone = new Set(dropAt);
+		return session(store, async function (put) {
+			// every node when the column is new or a column goes; else only the nodes given values
+			var keys = (ai < 0 || dropAt.length ? Object.keys(m.nodes) : Object.keys(values)).sort(keyOrder);
+			await eachTile(keys, opts, async function (key) {
+				var n = await readNodeColumns(store, key), cols = n.t.columns, v = values[key], col;
+				if (ai >= 0) col = v ? cols[ai].slice() : cols[ai];
+				else { col = new Typed(n.t.count); if (big ? fill !== 0n : fill !== 0) col.fill(fill); }
+				if (v) {
+					var idx = sel ? sel.tiles[key] : null;
+					for (var i = 0; i < v.length; i++) col[idx ? idx[i] : i] = big ? BigInt(v[i]) : v[i];
+				}
+				var next = [];
+				for (var j = 0; j < cols.length; j++) if (!gone.has(j)) next.push(j === ai ? col : cols[j]);
+				if (ai < 0) next.push(col);
+				await put(key, null, next, n.t.size, n);
+			});
+		}, function (body) {
+			var kept = body.columns.filter(function (c, j) { return !gone.has(j); });
+			if (ai < 0) kept.push({ name: name, type: type, fill: typeof fill === "bigint" ? String(fill) : fill });
+			body.columns = kept;
+		});
+	});
+}
+
 /** Remove an added column from every node. */
 // opts as addColumn
 export function removeColumn(store, name, opts) {

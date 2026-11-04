@@ -976,6 +976,7 @@ await store.deletePoints(sel);                                     // or keepPoi
 var copy = await cloneStore(store, { opfs: "scan-before-edits" }); // the node files as they are
 await store.setColumn(sel, "classification", 64);                  // a value, or { [key]: typed array }
 await store.addColumn("facet", "i32", -1);                         // written back as extra bytes
+await store.writeColumn("rock_2", "u32", labels, { drop: ["rock_1"] }); // one pass: write one column, drop others
 await store.transform(T);                                          // makeTransform's { m, t }; no tile rewritten
 await store.writeLas(sink, { compress: true });                    // tile by tile through createLasWriter
 ```
@@ -994,6 +995,19 @@ cut crosses without reading the cloud. Only the tiles whose box comes within `to
 on screen are read; `selectScreenLine(cols, view, line, opts)` is the same rule in memory.
 `store.select(fn, { classify })` takes your own box rule: `classify(box)`
 returns -1 to skip a tile, 1 to take it whole, or 0 to read it.
+
+`addColumn`, `setColumn` and `removeColumn` each rewrite every node they touch. `writeColumn(name, type, values,
+{ selection, fill, drop, signal, onProgress })` does the three in one pass, one generation of each node and one
+manifest: `name` is made (`type`, `fill`) when the store has none, else set again; `values` is `{ key: typed array }`,
+one value a point of the node (or, with `selection`, one a selected point); a node it does not name keeps its values;
+`drop` lists added columns removed in the same edit. Cut short, the store is as it was. A run that writes its labels
+(`findFragmentsParallel` / `findFacetsParallel` on a store with `column`) writes them this way, and its `dropColumns`
+removes the previous run's columns in that same edit, so a new run replaces an old one in one rewrite and a failed run
+leaves the old one whole.
+
+An OPFS call that does not answer within 60 s (one tile file's read or write takes milliseconds) rejects with a
+`BAD_STORE` error naming the call and the file, and the edit stops with the store as it was, rather than waiting for
+ever; the store's later calls on that opening fail at once, and the next opening sweeps the files the edit left.
 
 `cloneStore(store, where, { replace, signal, onProgress })` copies a store to another place
 (memory, OPFS, a folder) without decoding anything: the node files with their added columns, the

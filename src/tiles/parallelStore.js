@@ -37,7 +37,7 @@ import { poleOf, orientationOf } from "../facets/orientation.js";
 var STORE_THREADS = 8, SAMPLE_POINTS = 200000, SAMPLE_MIN = 1000, TILE_POINTS = 500000, CELL_SPACINGS = 1.5, MAX_CELLS = 6e7, D = Math.PI / 180;
 var MIN = ["minX", "minY", "minZ"], MAX = ["maxX", "maxY", "maxZ"];
 var FACET_ONLY = ["maxDistance", "k", "normals", "facetOptions", "concaveAngle", "surfaceDistance", "viewpoint", "fill", "fillDistance"];
-var STRIP = ["onProgress", "signal", "threads", "tile", "overlap", "normals", "keepNormals", "column", "localOrigin", "tilePoints"];
+var STRIP = ["onProgress", "signal", "threads", "tile", "overlap", "normals", "keepNormals", "column", "localOrigin", "tilePoints", "dropColumns"];
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 function stopped() { return new LasError(ERROR_CODES.ABORTED, "the run was stopped"); }
@@ -136,18 +136,12 @@ function barred(opts) {
 	};
 }
 
-// the labels as an added u32 column of the store (made, or set again)
-async function writeColumn(store, name, out, wopts) {
+// the labels as an added u32 column of the store (made, or set again), and dropColumns gone, in ONE pass over the nodes
+// (it was addColumn then setColumn: two whole-store rewrites, and a third when the caller then dropped the last run's)
+async function writeColumn(store, name, out, drop, wopts) {
 	var has = store.manifest.columns.filter(function (c) { return c.name === name; })[0];
 	if (has && has.type !== "u32") throw bad("column " + name + " is taken by an added " + has.type + " column; give another name");
-	if (!has) await store.addColumn(name, "u32", 0);   // refuses a name a standard field or the file's extra bytes hold
-	var sel = { deletes: store.manifest.deletes, count: 0, tiles: {} };
-	Object.keys(out).forEach(function (k) {
-		var idx = new Uint32Array(out[k].length);
-		for (var i = 0; i < idx.length; i++) idx[i] = i;
-		sel.tiles[k] = idx; sel.count += idx.length;
-	});
-	await store.setColumn(sel, name, out, wopts);
+	await store.writeColumn(name, "u32", out, { drop: drop, signal: wopts.signal, onProgress: wopts.onProgress });
 }
 
 export async function common(store, opts, name) {
@@ -157,6 +151,15 @@ export async function common(store, opts, name) {
 	if (!Number.isInteger(threads) || threads < 1) throw bad("threads must be a whole number >= 1, not " + JSON.stringify(opts.threads));
 	if (opts.tile !== undefined && !(typeof opts.tile === "number" && opts.tile > 0 && isFinite(opts.tile))) throw bad("tile must be a positive distance, not " + JSON.stringify(opts.tile));
 	if (opts.column !== undefined && (typeof opts.column !== "string" || !opts.column)) throw bad("column must be a column name, not " + JSON.stringify(opts.column));
+	if (opts.dropColumns !== undefined) {
+		if (!opts.column) throw bad("dropColumns needs column: they are dropped in the edit that writes it");
+		if (!Array.isArray(opts.dropColumns) || !opts.dropColumns.every(function (c) { return typeof c === "string" && c; })) throw bad("dropColumns must be an array of added column names, not " + JSON.stringify(opts.dropColumns));
+		var added = store.manifest.columns.map(function (c) { return c.name; });
+		opts.dropColumns.forEach(function (c) {
+			if (added.indexOf(c) < 0) throw bad("dropColumns names " + JSON.stringify(c) + ", which is not an added column of the store");
+			if (c === opts.column) throw bad("dropColumns cannot name column (" + c + "): it is the one written");
+		});
+	}
 	if (opts.normals !== undefined) throw bad("normals cannot be given for a run on a tile store (each tile makes its own)");
 	if (opts.signal && opts.signal.aborted) throw stopped();
 	return threads;
@@ -167,7 +170,8 @@ export async function common(store, opts, name) {
  * @param {object} store - an open TileStore.
  * @param {object} opts - findFragments' options, and threads, tile, overlap, tilePoints (about how many points a tile's core
  *   holds, default 500,000: each worker holds its tile and the overlap, about 100 bytes a point while it runs), localOrigin (the frame of the results; default the store box's centre), column (write the
- *   labels to this added column), onProgress, signal.
+ *   labels to this added column, in one pass over the nodes), dropColumns (added columns removed in that same edit: the
+ *   previous run's), onProgress, signal.
  * @returns {Promise<object>} findFragments' result without fragment (its labels are byTile: { key: Uint32Array })
  *   plus origin, tiles, threads; facets null; measure for measureFragmentsOnStore; each fragment's box ([u0, u1, v0, v1],
  *   world, on measure.areas.axes: its points' plan box).
@@ -228,7 +232,7 @@ export async function fragmentsOnStore(store, opts) {
 	var given = { sideOn: sideOn };
 	if (method !== "watershed" && opts.maxDistance !== undefined) given.maxDistance = opts.maxDistance;
 	if (method === "watershed") given.ignored = FACET_ONLY.filter(function (key) { return opts[key] !== undefined; });
-	if (opts.column) await writeColumn(store, opts.column, out.byTile, bars.write);
+	if (opts.column) await writeColumn(store, opts.column, out.byTile, opts.dropColumns, bars.write);
 	bars.finish();
 	return Object.assign(resultFields(out, spacing, given), { tiles: L.tiles.length, threads: ran });
 }
@@ -236,7 +240,7 @@ export async function fragmentsOnStore(store, opts) {
 /**
  * findFacetsParallel on a tile store (see the banner).
  * @param {object} store - an open TileStore.
- * @param {object} opts - findFacets' options, and threads, tile, overlap, tilePoints, localOrigin, column, onProgress,
+ * @param {object} opts - findFacets' options, and threads, tile, overlap, tilePoints, localOrigin, column, dropColumns, onProgress,
  *   signal.
  * @returns {Promise<object>} findFacets' result without facet (byTile: { key: Uint32Array }) plus origin, tiles,
  *   threads; a joined facet has outlineParts.
@@ -316,7 +320,7 @@ export async function facetsOnStore(store, opts) {
 	var facets = found.map(function (e, w) { idOf[e.rt] = w + 1; return Object.assign(e.f, { id: w + 1 }); });
 	labels.forEach(function (lab) { for (var q = 0; q < lab.length; q++) if (lab[q]) lab[q] = idOf[find(lab[q])]; });
 	var out = { byTile: byTile(L, labels), facets: facets, planeDistance: pd, origin: L.origin, tiles: L.tiles.length, threads: ran };
-	if (opts.column) await writeColumn(store, opts.column, out.byTile, bars.write);
+	if (opts.column) await writeColumn(store, opts.column, out.byTile, opts.dropColumns, bars.write);
 	bars.finish();
 	return out;
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.0 (2026-11-04)
+
+A fragments or facets run on a big OPFS store no longer freezes after its regions, and replaces a previous run in one
+rewrite:
+- New `store.writeColumn(name, type, values, { selection, fill, drop, signal, onProgress })`: an added column written
+  and others dropped in ONE pass over the nodes (one generation of each node, one manifest), where `addColumn`,
+  `setColumn` and `removeColumn` take three whole-store rewrites. Cut short, the store is as it was.
+- `findFragmentsParallel` / `findFacetsParallel` on a store write their `column` through it (one rewrite, was two), with
+  the write on the progress bar; new `dropColumns: [names]` removes the previous run's columns in that same edit.
+- OPFS calls that never answer (seen in Chrome: a store edit froze, a group of tile file calls waiting for ever, no
+  error) reject after 60 s with a `BAD_STORE` error naming the call and the file; the edit rolls back, the store's later
+  calls on that opening fail at once, and the next opening sweeps the edit's files. A sync access handle that arrives
+  after the limit is closed.
+
 ## 0.21.0 (2026-11-04)
 
 - New `selectScreenLine(view, line, { tolerance, signal, onProgress, threads })` on a tile store, and

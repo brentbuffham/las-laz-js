@@ -249,6 +249,8 @@ TileStore.prototype.setColumn = editing("setColumn");
 TileStore.prototype.addColumn = editing("addColumn");
 /** Remove an added column; opts { signal, onProgress } as deletePoints. @function */
 TileStore.prototype.removeColumn = editing("removeColumn");
+/** Write an added column and drop others in one pass (one rewrite, one manifest): (name, type, values { key: typed array }, { selection, fill, drop, signal, onProgress }). @function */
+TileStore.prototype.writeColumn = editing("writeColumn");
 /** Compose a transform ({ m, t }, as makeTransform) onto the store's. @function */
 TileStore.prototype.transform = editing("transform");
 /**

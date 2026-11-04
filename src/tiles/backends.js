@@ -21,6 +21,28 @@ var LOCK = "lock";
 var LOCKED_ERRORS = ["NoModificationAllowedError", "InvalidModificationError"];
 var NODE_FS = ["node", "fs"].join(":");
 
+// OPFS calls that never settle (seen in Chrome: a store edit froze with no error, every file call of a group of
+// tiles waiting for ever) reject after STALL ms naming the call and the file, so the edit fails and rolls back
+// instead of hanging. A tile file's call takes milliseconds; the limit is far above any real one.
+var STALL = { ms: 60000 };
+
+function closeLate(h) { try { h.close(); } catch (e) { /* gone */ } }
+
+/** Tests: the OPFS stall limit in ms (returns the previous). Internal. */
+export function opfsStall(ms) { var was = STALL.ms; STALL.ms = ms; return was; }
+
+// late(value): what to do with a value that comes after the limit (a sync access handle is closed, or it would hold its file).
+// state: the backend's; once one call has stalled, its later calls fail at once (the edit's clean-up would otherwise wait
+// the limit for each file it removes; the next opening sweeps what is left)
+function within(state, promise, what, late) {
+	if (state.stuck) { if (late) promise.then(late, function () {}); return Promise.reject(new LasError(ERROR_CODES.BAD_STORE, "OPFS is stuck (an earlier call did not answer): not " + what + ". Reload the page and try again")); }
+	var timer;
+	var limit = new Promise(function (res, rej) {
+		timer = setTimeout(function () { state.stuck = true; if (late) promise.then(late, function () {}); rej(new LasError(ERROR_CODES.BAD_STORE, "OPFS did not answer for " + Math.round(STALL.ms / 1000) + " s while " + what + ": the browser's file system is stuck; the edit was stopped and the store left as it was. Reload the page and try again")); }, STALL.ms);
+	});
+	return Promise.race([promise, limit]).finally(function () { clearTimeout(timer); });
+}
+
 function badWhere() { return new LasError(ERROR_CODES.INVALID_ARGUMENT, "where must be { memory }, { opfs: id } or { dir: path }"); }
 
 function split(name) {
@@ -91,7 +113,7 @@ async function folder(root, path, create) {
 }
 
 function opfsBackend(where) {
-	var base = TILES_DIR + "/" + where.opfs, held = null;
+	var base = TILES_DIR + "/" + where.opfs, held = null, state = { stuck: false };
 	function opts(sub) { return { root: where.root, dir: sub ? base + "/" + sub : base }; }
 	// the store's folders, looked up once each (a walk from the OPFS root on every file was about 7 ms of the
 	// 12 ms a tile write took); forgotten when the store's folder is removed
@@ -102,7 +124,8 @@ function opfsBackend(where) {
 		return d;
 	}
 	async function writer(p, flush) {
-		var fh = await (await dirFor(p[0])).getFileHandle(p[1], { create: true }), h = await fh.createSyncAccessHandle();
+		var what = "opening " + p[1] + " of tile store " + where.opfs + " for writing";
+		var fh = await within(state, (await within(state, dirFor(p[0]), what)).getFileHandle(p[1], { create: true }), what), h = await within(state, fh.createSyncAccessHandle(), what, closeLate);
 		h.truncate(0);
 		var at = 0;
 		return {
@@ -116,7 +139,7 @@ function opfsBackend(where) {
 	function missing(e) { return e && e.name === "NotFoundError"; }
 	// a write refused before a byte went in: the empty file it made goes too
 	async function refused(p, e) {
-		try { await removeScratchFile(p[1], opts(p[0])); } catch (x) { /* not made */ }
+		try { await within(state, removeScratchFile(p[1], opts(p[0])), "removing " + p[1] + " of tile store " + where.opfs); } catch (x) { /* not made */ }
 		return needWorker(e);
 	}
 	async function names(dir, prefix, out) {
@@ -132,8 +155,10 @@ function opfsBackend(where) {
 		get: async function (name) {
 			var p = split(name);
 			try {
-				var file = await (await (await dirFor(p[0])).getFileHandle(p[1])).getFile();
-				return new Uint8Array(await file.arrayBuffer());
+				return await within(state, (async function () {
+					var file = await (await (await dirFor(p[0])).getFileHandle(p[1])).getFile();
+					return new Uint8Array(await file.arrayBuffer());
+				})(), "reading " + p[1] + " of tile store " + where.opfs);
 			} catch (e) {
 				if (missing(e)) return null;
 				throw e;
@@ -152,7 +177,7 @@ function opfsBackend(where) {
 		},
 		remove: async function (name) {
 			var p = split(name);
-			try { await (await dirFor(p[0])).removeEntry(p[1]); } catch (e) { if (!missing(e)) throw e; }
+			try { await within(state, (async function () { await (await dirFor(p[0])).removeEntry(p[1]); })(), "removing " + p[1] + " of tile store " + where.opfs); } catch (e) { if (!missing(e)) throw e; }
 		},
 		list: async function () {
 			try { return (await names(await folder(where.root, base, false), "", [])).sort(); } catch (e) { if (missing(e)) return []; throw e; }
@@ -169,7 +194,7 @@ function opfsBackend(where) {
 			if (held) return;
 			var dir = await folder(where.root, base, true);
 			var fh = await dir.getFileHandle(LOCK, { create: true });
-			try { held = await fh.createSyncAccessHandle(); } catch (e) {
+			try { held = await within(state, fh.createSyncAccessHandle(), "taking the write lock of tile store " + where.opfs, closeLate); } catch (e) {
 				if (e && LOCKED_ERRORS.indexOf(e.name) >= 0) throw new LasError(ERROR_CODES.BAD_STORE, "store " + where.opfs + " is open for writing in another tab or worker");
 				throw needWorker(e);
 			}
