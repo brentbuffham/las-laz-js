@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.20.5";
+export var VERSION = "0.21.0";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -24,7 +24,7 @@ export { selectOutliersParallel, selectSparseParallel, pointNormalsParallel, den
 export { buildIndex } from "./index/grid.js";
 export { pointsInRadius, nearestPoint, pointsNearRay } from "./index/query.js";
 export { nearestPoints } from "./index/knn.js";
-export { selectBox, selectPolygon, selectScreen, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
+export { selectBox, selectPolygon, selectScreen, selectScreenLine, selectClasses, selectReturns, thinSelection, unionSelections, intersectSelections, subtractSelections } from "./ops/select.js";
 export { keepPoints, removePoints, splitPoints, mergePoints } from "./ops/apply.js";
 export { makeTransform, transformPoints, applyTransform } from "./ops/transform.js";
 export { interleavePositions } from "./ops/interleave.js";

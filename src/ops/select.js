@@ -11,7 +11,7 @@
 import { LasError, ERROR_CODES } from "../errors.js";
 import { countOf, checkSelection, needColumn } from "./columns.js";
 import { makePolygonTest } from "./polygon.js";
-import { screenOf, toPixel } from "./screen.js";
+import { screenOf, toPixel, checkLine, lineDistance2 } from "./screen.js";
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 
@@ -130,6 +130,38 @@ export function selectScreen(cols, view, polygon, opts) {
 	var px = new Float64Array(2), out = new Uint32Array(n), m = 0;
 	for (var i = 0; i < n; i++) if (toPixel(s, x[i], y[i], z[i], px) && test(px[0], px[1])) out[m++] = i;
 	return trim(out, m);
+}
+
+/**
+ * Indices of the points whose pixel lies near an open polyline drawn on the screen (a knife line): each point
+ * through the camera as selectScreen (on screen, Float64), kept when its pixel is within tolerance of a segment.
+ * Every depth: not only the points in front.
+ * @param {object} cols - point columns (x, y, z), in world coordinates.
+ * @param {{viewProjection: number[], width: number, height: number, localOrigin?: {x, y, z}}} view - as selectScreen
+ * @param {number[]|TypedArray} line - pixels [x0, y0, x1, y1, ...] from the view's top-left, y down, at least 2
+ *   vertices, open (the last vertex is not joined to the first)
+ * @param {{tolerance?: number}} [opts] - pixels either side of the line (default 4)
+ * @returns {Uint32Array}
+ */
+export function selectScreenLine(cols, view, line, opts) {
+	var n = countOf(cols), s = screenOf(view), L = checkLine(line), tol = lineTolerance(opts), t2 = tol * tol;
+	var x = needColumn(cols, "x", "selectScreenLine"), y = needColumn(cols, "y", "selectScreenLine"), z = needColumn(cols, "z", "selectScreenLine");
+	var px = new Float64Array(2), out = new Uint32Array(n), m = 0;
+	for (var i = 0; i < n; i++) if (toPixel(s, x[i], y[i], z[i], px) && lineDistance2(L, px[0], px[1]) <= t2) out[m++] = i;
+	return trim(out, m);
+}
+
+/**
+ * selectScreenLine's tolerance, checked (pixels, default 4).
+ * @param {{tolerance?: number}} [opts]
+ * @returns {number}
+ */
+export function lineTolerance(opts) {
+	if (opts === undefined || opts === null) return 4;
+	if (typeof opts !== "object") throw bad("options must be an object { tolerance }");
+	if (opts.tolerance === undefined) return 4;
+	if (typeof opts.tolerance !== "number" || !(opts.tolerance >= 0) || !isFinite(opts.tolerance)) throw bad("tolerance must be a number of pixels >= 0, not " + String(opts.tolerance));
+	return opts.tolerance;
 }
 
 /**

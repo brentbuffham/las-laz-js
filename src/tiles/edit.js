@@ -24,10 +24,10 @@ import { decodeRecords, recordFields, FIELD_TYPES } from "../read/decodeRecords.
 import { encodeRecords } from "../write/encodeRecords.js";
 import { createChunkCompressor } from "../laz/compressChunk.js";
 import { EXTRA_TYPES } from "../format/ExtraBytes.js";
-import { selectBox as boxOf, selectPolygon as polygonOf, selectScreen as screenSel, selectClasses as classesOf, unionSelections, intersectSelections, subtractSelections } from "../ops/select.js";
+import { selectBox as boxOf, selectPolygon as polygonOf, selectScreen as screenSel, selectScreenLine as screenLineSel, lineTolerance, selectClasses as classesOf, unionSelections, intersectSelections, subtractSelections } from "../ops/select.js";
 import { checkTransform } from "../ops/transform.js";
 import { makePolygonTest, rectAgainstPolygon } from "../ops/polygon.js";
-import { screenOf, boxOnScreen } from "../ops/screen.js";
+import { screenOf, boxOnScreen, boxNearLine, checkLine } from "../ops/screen.js";
 import { writeManifest, readManifest } from "./manifest.js";
 import { encodeTile, COLUMN_TYPES } from "./tileFile.js";
 import { tileName } from "./TileStore.js";
@@ -178,6 +178,24 @@ export function selectScreen(store, view, polygon, opts) {
 	return select(store, function (cols) { return screenSel(cols, view, polygon, opts); }, {
 		fields: ["x", "y", "z"], signal: opts && opts.signal, onProgress: opts && opts.onProgress, threads: opts && opts.threads,
 		classify: function (nb) { return boxOnScreen(s, nb, shape.points, margin); }
+	});
+}
+
+/**
+ * The points whose pixel lies near an open polyline drawn on the screen (selectScreenLine's rule), at any depth: a
+ * knife line's neighbourhood. A tile whose box is outside the view, or whose pixels stay clear of the line by more
+ * than the tolerance, is not read.
+ * @param {object} store
+ * @param {{viewProjection: number[], width: number, height: number, localOrigin?: {x, y, z}}} view - as selectScreen
+ * @param {number[]|TypedArray} line - pixels from the view's top-left, y down, at least 2 vertices, open
+ * @param {{tolerance?: number, signal?: AbortSignal, onProgress?: function, threads?: number}} [opts] - tolerance in
+ *   pixels (default 4); signal, onProgress, threads as select
+ */
+export function selectScreenLine(store, view, line, opts) {
+	var s = screenOf(view), L = checkLine(line), tol = lineTolerance(opts), margin = tol + 1e-6 * (1 + s.width + s.height);
+	return select(store, function (cols) { return screenLineSel(cols, view, L, opts); }, {
+		fields: ["x", "y", "z"], signal: opts && opts.signal, onProgress: opts && opts.onProgress, threads: opts && opts.threads,
+		classify: function (nb) { return boxNearLine(s, nb, L, margin); }
 	});
 }
 

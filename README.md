@@ -970,6 +970,7 @@ for await (var t of store.readTiles(keys, { fields: ["x", "y", "z", "red", "gree
 ```js
 var sel = await store.selectBox({ minX, maxX, minY, maxY });      // also selectPolygon, selectClasses
 var sel = await store.selectScreen(view, lasso);                   // a shape drawn on the screen, in pixels
+var sel = await store.selectScreenLine(view, knife, { tolerance: 4 }); // points near an open line on the screen
 var sel = await store.select(function (cols, tile) { return selectPolygon(cols, poly); }, { fields: ["x", "y"] });
 await store.deletePoints(sel);                                     // or keepPoints
 var copy = await cloneStore(store, { opfs: "scan-before-edits" }); // the node files as they are
@@ -986,7 +987,12 @@ as `selectTiles` does (`viewProjection`, `width`, `height`, `localOrigin`) and t
 from the canvas's top-left, y down (a mouse event's `offsetX` / `offsetY`). It selects every point
 the shape covers at any depth, between the near and far planes, through any camera: perspective
 or orthographic, plan, section or oblique. `selectScreen(cols, view, polygon)` is the same rule on
-points in memory. `store.select(fn, { classify })` takes your own box rule: `classify(box)`
+points in memory. `selectScreenLine(view, line, { tolerance })` takes an open polyline in pixels (at
+least 2 vertices, the last not joined to the first) and selects the points whose pixel is within
+`tolerance` pixels of it (default 4), at any depth: a knife line's neighbourhood, for finding what a
+cut crosses without reading the cloud. Only the tiles whose box comes within `tolerance` of the line
+on screen are read; `selectScreenLine(cols, view, line, opts)` is the same rule in memory.
+`store.select(fn, { classify })` takes your own box rule: `classify(box)`
 returns -1 to skip a tile, 1 to take it whole, or 0 to read it.
 
 `cloneStore(store, where, { replace, signal, onProgress })` copies a store to another place

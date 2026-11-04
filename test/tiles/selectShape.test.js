@@ -15,7 +15,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openLas } from "../../src/LasReader.js";
 import { buildTiles } from "../../src/tiles/build.js";
-import { selectBox, selectPolygon, selectScreen } from "../../src/ops/select.js";
+import { selectBox, selectPolygon, selectScreen, selectScreenLine } from "../../src/ops/select.js";
+import * as lib from "../../src/index.js";
 import { makePolygonTest, rectAgainstPolygon } from "../../src/ops/polygon.js";
 import { makeTransform } from "../../src/ops/transform.js";
 import { tileLas } from "../helpers/tileFiles.js";
@@ -147,6 +148,62 @@ test("selectScreen refuses a bad view", async function () {
 	await assert.rejects(store.selectScreen({ viewProjection: [1, 2, 3], width: W, height: H }, PIXELS), /viewProjection/);
 	await assert.rejects(store.selectScreen({ viewProjection: new Array(16).fill(0), width: 0, height: H }, PIXELS), /width/);
 	await assert.rejects(store.selectScreen(perspectiveView([CX - 10, CY, 900], [CX, CY, 0]), [1, 2, 3]), /polygon/);
+});
+
+// a knife line: open, three segments across the view
+var KNIFE = [90, 210, 380, 260, 520, 180, 730, 420];
+function distToLine(line, x, y) {
+	var best = Infinity;
+	for (var i = 0; i + 3 < line.length; i += 2) {
+		var ax = line[i], ay = line[i + 1], dx = line[i + 2] - ax, dy = line[i + 3] - ay, t = ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy);
+		t = Math.max(0, Math.min(1, t));
+		best = Math.min(best, Math.hypot(x - ax - t * dx, y - ay - t * dy));
+	}
+	return best;
+}
+
+test("selectScreenLine (in memory) is the projection rule: points within tolerance of the open line", async function () {
+	var cols = await (await openLas(BYTES)).readPoints({ fields: ["x", "y", "z"] });
+	var view = perspectiveView([CX - 300, CY - 350, 600], [CX, CY, 300], { x: CX, y: CY, z: 0 });
+	[undefined, 1.5, 10].forEach(function (tol) {
+		var want = [];
+		for (var i = 0; i < cols.count; i++) { var p = onScreen(view, cols.x[i], cols.y[i], cols.z[i]); if (p && distToLine(KNIFE, p[0], p[1]) <= (tol === undefined ? 4 : tol)) want.push(i); }
+		var got = selectScreenLine(cols, view, KNIFE, tol === undefined ? undefined : { tolerance: tol });
+		assert.ok(want.length > 20 && want.length < cols.count / 4, want.length + " points at tolerance " + tol);
+		assert.deepEqual(Array.from(got), want, "tolerance " + tol);
+	});
+	// open: nothing near the chord from the last vertex back to the first, away from the segments
+	var chord = selectScreenLine(cols, view, [90, 210, 730, 420]), knife = new Set(selectScreenLine(cols, view, KNIFE)), apart = 0;
+	chord.forEach(function (i) {
+		var p = onScreen(view, cols.x[i], cols.y[i], cols.z[i]);
+		if (distToLine(KNIFE, p[0], p[1]) > 4) { apart++; assert.ok(!knife.has(i), "point " + i + " near the chord only"); }
+	});
+	assert.ok(apart > 20, apart + " points near the chord and clear of the knife");
+	assert.equal(lib.selectScreenLine, selectScreenLine);
+});
+
+test("selectScreenLine on a store: the per-point rule's points, only the tiles near the line read", async function () {
+	var store = await build(), all = nodesWithPoints(store);
+	var outside = perspectiveView([CX - 300, CY - 350, 600], [CX, CY, 300], { x: CX, y: CY, z: 0 });
+	var reads = await same(store, function () { return store.selectScreenLine(outside, KNIFE); }, function (t) { return selectScreenLine(t, outside, KNIFE); }, "perspective");
+	assert.ok(reads < all / 2, reads + " of " + all + " nodes read");
+	var inside = perspectiveView([CX, CY, 320], [CX + 100, CY + 60, 310]);
+	await same(store, function () { return store.selectScreenLine(inside, KNIFE, { tolerance: 8 }); }, function (t) { return selectScreenLine(t, inside, KNIFE, { tolerance: 8 }); }, "inside the cloud");
+	var top = { viewProjection: multiply(orthographic(-200, 200, 150, -150, 1, 1000), lookAt([CX, CY, 800], [CX, CY, 0], [0, 1, 0])), width: W, height: H };
+	var oreads = await same(store, function () { return store.selectScreenLine(top, KNIFE, { tolerance: 3 }); }, function (t) { return selectScreenLine(t, top, KNIFE, { tolerance: 3 }); }, "orthographic, top down");
+	assert.ok(oreads < all / 2, oreads + " of " + all + " nodes read (top down)");
+	// a line off the screen reads nothing but the tiles straddling the camera
+	var off = await store.selectScreenLine(top, [-500, -500, -400, -450]);
+	assert.equal(off.count, 0);
+});
+
+test("selectScreenLine refuses a bad line or tolerance", async function () {
+	var store = await build(), view = perspectiveView([CX - 10, CY, 900], [CX, CY, 0]);
+	await assert.rejects(store.selectScreenLine(view, [1, 2]), /at least 2 vertices/);
+	await assert.rejects(store.selectScreenLine(view, [1, 2, 3]), /odd length/);
+	await assert.rejects(store.selectScreenLine(view, [1, 2, NaN, 4]), /finite/);
+	await assert.rejects(store.selectScreenLine(view, KNIFE, { tolerance: -1 }), /tolerance/);
+	await assert.rejects(store.selectScreenLine({ viewProjection: [1], width: W, height: H }, KNIFE), /viewProjection/);
 });
 
 test("rectAgainstPolygon: in means every point in, out means none", function () {

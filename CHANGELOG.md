@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.21.0 (2026-11-04)
+
+- New `selectScreenLine(view, line, { tolerance, signal, onProgress, threads })` on a tile store, and
+  `selectScreenLine(cols, view, line, { tolerance })` in memory: the points whose pixel is within `tolerance` pixels
+  (default 4) of an open polyline drawn on the screen, at any depth, through any camera (as `selectScreen`). On a
+  store only the tiles whose box comes within `tolerance` of the line on screen are read, so a knife line finds the
+  rocks it crosses without reading the cloud.
+
 ## 0.20.5 (2026-11-04)
 
 - `measureFragmentsOnStore`: `box` is widened by half a cell before it is taken to whole cells. A box made from

@@ -235,6 +235,8 @@ TileStore.prototype.selectBox = editing("selectBox");
 TileStore.prototype.selectPolygon = editing("selectPolygon");
 /** The points inside a shape drawn on the screen (selectScreen's rule). @function */
 TileStore.prototype.selectScreen = editing("selectScreen");
+/** The points near an open polyline drawn on the screen (selectScreenLine's rule: a knife line), reading only the tiles near it. @function */
+TileStore.prototype.selectScreenLine = editing("selectScreenLine");
 /** The points of some classes. @function */
 TileStore.prototype.selectClasses = editing("selectClasses");
 /** Delete the selected points; opts { signal, onProgress } (phase "edit", by tile). @function @returns {Promise<{removed: number}>} */
