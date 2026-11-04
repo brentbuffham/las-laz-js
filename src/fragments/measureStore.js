@@ -81,13 +81,16 @@ export async function measureFragmentsOnStore(store, opts) {
 		return v;
 	}
 
-	// the cells read: box widened to whole cells, or the whole grid
+	// the cells read: box widened by half a cell, then to whole cells, or the whole grid. The half cell takes a box
+	// made from Float64 world coordinates (the caller's reads) round points placed by their Float32 local ones (the
+	// run's): a box edge on a changed point a hair from a cell edge still holds it. Cells the edit leaves alone add
+	// nothing to the areas, so a wider box changes no number.
 	var px = G.px, ax = G.axes, o = [ms.origin.x, ms.origin.y, ms.origin.z], ou = o[ax[0]], ov = o[ax[1]];
 	var cu0 = 0, cu1 = G.W - 1, cv0 = 0, cv1 = G.H - 1, b = opts.box;
 	if (b !== undefined) {
 		if (!(Array.isArray(b) && b.length === 4 && b.every(function (v) { return typeof v === "number" && isFinite(v); }) && b[1] >= b[0] && b[3] >= b[2])) throw bad("box must be [u0, u1, v0, v1], world, on measure.areas.axes, not " + JSON.stringify(b));
-		cu0 = Math.max(0, Math.floor((b[0] - G.u0) / px)); cu1 = Math.min(G.W - 1, Math.floor((b[1] - G.u0) / px));
-		cv0 = Math.max(0, Math.floor((b[2] - G.v0) / px)); cv1 = Math.min(G.H - 1, Math.floor((b[3] - G.v0) / px));
+		cu0 = Math.max(0, Math.floor((b[0] - G.u0) / px - EDGE)); cu1 = Math.min(G.W - 1, Math.floor((b[1] - G.u0) / px + EDGE));
+		cv0 = Math.max(0, Math.floor((b[2] - G.v0) / px - EDGE)); cv1 = Math.min(G.H - 1, Math.floor((b[3] - G.v0) / px + EDGE));
 	}
 	var WW = Math.max(0, cu1 - cu0 + 1), WH = Math.max(0, cv1 - cv0 + 1);
 	var ebox = [G.u0 + cu0 * px, G.u0 + (cu1 + 1) * px, G.v0 + cv0 * px, G.v0 + (cv1 + 1) * px];

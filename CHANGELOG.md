@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.20.5 (2026-11-04)
+
+- `measureFragmentsOnStore`: `box` is widened by half a cell before it is taken to whole cells. A box made from
+  Float64 world reads (the edit's own points) round points the run places by their Float32 local coordinates no
+  longer throws "outside box" when a box edge sits on a changed point a hair from a cell edge. Cells the edit
+  leaves alone add nothing to the areas, so no number moves.
+
 ## 0.20.4 (2026-11-04)
 
 Hand edits on a fragments run on a tile store (OPFS), never reading the whole cloud:

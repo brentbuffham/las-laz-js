@@ -153,6 +153,26 @@ test("a hybrid store run: facet rocks measured from the pile round them", async 
 	assert.equal(m.surfaceArea, fr.surfaceArea);
 });
 
+test("a box a hair off its changed points (Float64 vs Float32) still holds them; a cell off does not", async function () {
+	var store = await storeOf(), fr = await findFragmentsParallel(store, Object.assign({ method: "watershed", column: "rock" }, OPTS)), ms = fr.measure, G = ms.areas, px = G.px;
+	var nodes = await labelsOf(store, "rock"), low = new Map();
+	nodes.forEach(function (nd) { for (var i = 0; i < nd.lab.length; i++) { var l = nd.lab[i]; if (l && !(low.get(l) <= nd.x[i])) low.set(l, nd.x[i]); } });
+	// a rock whose lowest point sits in the top half of its cell: the box's low u edge goes on the next cell boundary,
+	// past that point by under half a cell (as a Float64 box round Float32 cells can)
+	var A = fr.fragments.find(function (f) { var fu = (low.get(f.id) - G.u0) / px, fr2 = fu - Math.floor(fu); return fr2 > 0.6 && fr2 < 0.95; });
+	assert.ok(A, "a rock with its lowest point in the top half of a cell");
+	var lo = low.get(A.id), edge = G.u0 + Math.ceil((lo - G.u0) / px) * px;
+	var sel = selectWhere(store, nodes, function (l) { return l === A.id; });
+	var opts = { column: "rock", measure: ms, ids: [A.id], changes: [{ selection: sel, label: 0 }], areas: fr };
+	var want = await measureFragmentsOnStore(store, Object.assign({}, opts, { box: A.box }));
+	var hair = await measureFragmentsOnStore(store, Object.assign({}, opts, { box: [edge, A.box[1], A.box[2], A.box[3]] }));
+	assert.equal(hair.unassignedArea, want.unassignedArea);
+	assert.equal(hair.surfaceArea, want.surfaceArea);
+	// over half a cell short: refused
+	await assert.rejects(measureFragmentsOnStore(store, Object.assign({}, opts, { box: [lo + 1.6 * px, A.box[1], A.box[2], A.box[3]] })), /outside box/);
+	assert.deepEqual(want.gone, [A.id]);
+});
+
 test("bad inputs are named", async function () {
 	var r = await run("watershed"), fr = r.fr, ms = fr.measure, A = fr.fragments[0], nodes = await labelsOf(r.store, "rock");
 	var mem = { method: "watershed", minPoints: 50, cell: 0.03, areas: { px: 1, u0: 0, v0: 0, W: 1, H: 1 } };
