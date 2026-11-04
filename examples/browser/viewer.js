@@ -15,6 +15,11 @@
 // The Ghosting tab crops with a box (setClip: clip planes on the points'
 // material, so the main cloud, the tiles and the reference are cut alike,
 // and a magenta outline of the box) and looks at it from a side (lookAtBox).
+// The camera is orthographic: a point's place on screen does not depend on
+// its distance, so a polygon drawn from above holds the points it covers on
+// screen at every height, and a selection is what you see. The view's
+// half-height (in local units at zoom 1) is set by fit, topView and
+// lookAtBox; the wheel zooms.
 //==========================================================
 
 import * as THREE from "three";
@@ -26,8 +31,17 @@ export function createViewer(container) {
 	renderer.setPixelRatio(window.devicePixelRatio || 1);
 	container.appendChild(renderer.domElement);
 	var scene = new THREE.Scene();
-	var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 1e7);
+	var camera = new THREE.OrthographicCamera(-1, 1, 1, -1, -1e7, 1e7), aspect = 1, halfH = 1;
 	camera.up.set(0, 0, 1);
+	// the frustum from the half-height and the canvas's aspect; zoom back to 1 when asked
+	function frame(h, resetZoom) {
+		if (h !== undefined) halfH = h;
+		camera.left = -halfH * aspect; camera.right = halfH * aspect; camera.top = halfH; camera.bottom = -halfH;
+		if (resetZoom) camera.zoom = 1;
+		camera.updateProjectionMatrix();
+	}
+	// near and far round the target, both sides of the eye: an orthographic view never needs the eye outside the cloud
+	function depth(size) { camera.near = -size * 20; camera.far = size * 20; }
 	var controls = new OrbitControls(camera, renderer.domElement);
 	controls.enableDamping = true;
 	var group = new THREE.Group();
@@ -83,8 +97,8 @@ export function createViewer(container) {
 	function resize() {
 		var w = container.clientWidth || 1, h = container.clientHeight || 1;
 		renderer.setSize(w, h);
-		camera.aspect = w / h;
-		camera.updateProjectionMatrix();
+		aspect = w / h;
+		frame();
 		cameraListeners.forEach(function (fn) { fn(); });
 	}
 	window.addEventListener("resize", resize);
@@ -142,8 +156,8 @@ export function createViewer(container) {
 			var size = all.getSize(new THREE.Vector3()).length() || 1;
 			controls.target.copy(centre);
 			camera.position.set(centre.x - size * 0.6, centre.y - size * 0.8, centre.z + size * 0.6);
-			camera.near = size / 10000; camera.far = size * 20;
-			camera.updateProjectionMatrix();
+			depth(size);
+			frame(size * 0.55, true);
 		},
 		/** Look straight down over the cloud's box, north (+Y) up. */
 		topView: function () {
@@ -151,13 +165,13 @@ export function createViewer(container) {
 			if (b.isEmpty()) return;
 			var centre = b.getCenter(new THREE.Vector3()), s = b.getSize(new THREE.Vector3());
 			var size = s.length() || 1;
-			// the height at which the box's X and Y extents fill the view, with a margin
-			var h = Math.max(s.y, s.x / camera.aspect, size * 0.01) / 2 / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * 1.1;
+			// the half-height at which the box's X and Y extents fill the view, with a margin
+			var h = Math.max(s.y, s.x / aspect, size * 0.01) / 2 * 1.1;
 			controls.target.copy(centre);
 			// a hair south of overhead: straight down, camera.up (+Z) would leave the heading undefined
-			camera.position.set(centre.x, centre.y - h * 1e-4, b.max.z + h);
-			camera.near = size / 10000; camera.far = Math.max(size, h) * 20;
-			camera.updateProjectionMatrix();
+			camera.position.set(centre.x, centre.y - size * 1e-4, b.max.z + size);
+			depth(size);
+			frame(h, true);
 			controls.update();
 		},
 		/** Where the cursor's ray meets the horizontal plane at local z: { x, y }, or null when it misses. */
@@ -241,17 +255,17 @@ export function createViewer(container) {
 			var f = function (lo, hi, a) { return [isFinite(lo) ? lo : (all.isEmpty() ? -1 : all.min[a]), isFinite(hi) ? hi : (all.isEmpty() ? 1 : all.max[a])]; };
 			var xr = f(c.minX, c.maxX, "x"), yr = f(c.minY, c.maxY, "y"), zr = f(c.minZ, c.maxZ, "z");
 			var centre = new THREE.Vector3((xr[0] + xr[1]) / 2, (yr[0] + yr[1]) / 2, (zr[0] + zr[1]) / 2);
-			var sx = xr[1] - xr[0], sy = yr[1] - yr[0], sz = zr[1] - zr[0], tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-			var wide = side === "south" || side === "north" ? sx : side === "top" ? Math.max(sx, sy * camera.aspect) : sy;
+			var sx = xr[1] - xr[0], sy = yr[1] - yr[0], sz = zr[1] - zr[0];
+			var wide = side === "south" || side === "north" ? sx : side === "top" ? Math.max(sx, sy * aspect) : sy;
 			var high = side === "top" ? sy : sz;
-			var d = Math.max(wide / camera.aspect, high, 0.5) / 2 / tan * 1.15 + (side === "top" ? sz : (side === "south" || side === "north" ? sy : sx)) / 2;
+			var h = Math.max(wide / aspect, high, 0.5) / 2 * 1.15, d = Math.max(sx, sy, sz, 1);
 			var dir = { top: [0, -1e-4, 1], south: [0, -1, 0], north: [0, 1, 0], east: [1, 0, 0], west: [-1, 0, 0] }[side];
 			if (!dir) return;
 			controls.target.copy(centre);
 			camera.position.set(centre.x + dir[0] * d, centre.y + dir[1] * d, centre.z + dir[2] * d);
-			var size = Math.max(sx, sy, sz, 1);
-			camera.near = Math.max(size / 10000, 0.01); camera.far = Math.max(d * 4, size * 20);
-			camera.updateProjectionMatrix();
+			var all2 = all.isEmpty() ? 1 : all.getSize(new THREE.Vector3()).length();
+			depth(Math.max(d, all2));
+			frame(h, true);
 			controls.update();
 		},
 		/** Every point set drawn, as Float32 x, y, z in the local frame, for the Ghosting overview: [{ positions, count }]. */
@@ -313,7 +327,7 @@ export function createViewer(container) {
 			var m = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
 			return { viewProjection: m.elements.slice(), width: container.clientWidth || 1, height: container.clientHeight || 1 };
 		},
-		/** The camera's position, in the local frame (the Fragments tab's viewpoint). */
+		/** The camera's position, in the local frame (the Fragments tab's viewpoint: on the open side, a cloud's size off). */
 		cameraPosition: function () { return [camera.position.x, camera.position.y, camera.position.z]; },
 		/** Call fn whenever the camera moves or the view resizes. */
 		onCameraChange: function (fn) { cameraListeners.push(fn); },
@@ -395,7 +409,8 @@ export function createViewer(container) {
 		pick: function (clientX, clientY, maxPx, layer, exact) {
 			var rect = renderer.domElement.getBoundingClientRect();
 			var mx = clientX - rect.left, my = clientY - rect.top;
-			var v = new THREE.Vector3(), w = new THREE.Vector3(), lim = maxPx * maxPx, hits = [];   // [layer, index, screen d, distance from the camera]
+			var v = new THREE.Vector3(), w = new THREE.Vector3(), lim = maxPx * maxPx, hits = [];   // [layer, index, screen d, depth along the view]
+			var look = camera.getWorldDirection(new THREE.Vector3());
 			var layers = layer === "reference" ? (ref ? [ref] : []) : chunks;
 			for (var c = 0; c < layers.length; c++) {
 				var pos = layers[c].positions;
@@ -405,7 +420,7 @@ export function createViewer(container) {
 					if (v.z > 1) continue;
 					var sx = (v.x * 0.5 + 0.5) * rect.width - mx, sy = (-v.y * 0.5 + 0.5) * rect.height - my;
 					var d = sx * sx + sy * sy;
-					if (d < lim) hits.push([c, i, Math.sqrt(d), w.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).distanceTo(camera.position)]);
+					if (d < lim) hits.push([c, i, Math.sqrt(d), w.set(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]).sub(camera.position).dot(look)]);
 				}
 			}
 			if (!hits.length) return null;
@@ -414,7 +429,7 @@ export function createViewer(container) {
 			var best = nearest;
 			if (exact) {
 				// one pixel's footprint at the nearest point's distance; a surface in front is 10 of them nearer
-				var gap = 10 * nearest[3] * 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / rect.height;
+				var gap = 10 * (camera.top - camera.bottom) / camera.zoom / rect.height;
 				hits.forEach(function (h) { if (h[2] <= nearest[2] + 2 && h[3] < nearest[3] - gap && h[3] < best[3]) best = h; });
 			}
 			return layer === "reference" ? { index: best[1] } : { chunk: best[0], index: best[1] };
