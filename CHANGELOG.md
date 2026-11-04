@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.3 (2026-11-04)
+
+- `measureFragments` takes points up to half a cell outside the run's area grid into the edge cell, instead of refusing them
+  as another cloud's. Positions kept in Float32 and shifted to another local origin and back (a reload in Kirra) leave the
+  pile's edge a hair outside the grid. A point further out still throws "outside the run's grid".
+- Demo: the viewer's camera is orthographic, so a polygon drawn from above selects the points it covers on screen at every
+  height.
+
 ## 0.20.2 (2026-11-04)
 
 Hand edits on a fragments run, measured as the run measures:

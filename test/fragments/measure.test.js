@@ -154,6 +154,25 @@ test("a parallel run: its areas and its watershed rocks exactly", async function
 	});
 });
 
+test("a cloud shifted to another frame and back in Float32 (a reload) is measured in the run's frame", function () {
+	// Kirra: positions Float32 local to a session origin; a reload rebases them 1.4 km away, and they are shifted back
+	// for the run's frame: the pile's edge lands a hair outside the run's grid
+	var n = PILE.cols.count, c = { count: n, x: new Float32Array(n), y: new Float32Array(n), z: Float32Array.from(PILE.cols.z) }, i;
+	for (i = 0; i < n; i++) { c.x[i] = PILE.cols.x[i]; c.y[i] = PILE.cols.y[i]; }
+	var fr = findFragments(c, { method: "watershed" }), g = fr.measure.areas;
+	var back = { count: n, x: new Float32Array(n), y: new Float32Array(n), z: c.z }, outside = 0;
+	for (i = 0; i < n; i++) {
+		back.x[i] = Math.fround(Math.fround(c.x[i] - 1404.34) + 1404.34); back.y[i] = Math.fround(Math.fround(c.y[i] - 1120.4) + 1120.4);
+		if (back.x[i] < g.u0 || back.y[i] < g.v0) outside++;
+	}
+	assert.ok(outside > 0, "the round trip puts edge points outside the grid");
+	var m = measureFragments(back, fr.fragment, { measure: fr.measure });
+	assert.equal(m.fragments.length, fr.fragments.length);
+	m.fragments.forEach(function (f, q) { assert.equal(f.count, fr.fragments[q].count); assert.ok(Math.abs(f.size - fr.fragments[q].size) < 1e-3, "rock " + f.id); });
+	assert.ok(Math.abs(m.surfaceArea - fr.surfaceArea) <= 0.01 * fr.surfaceArea, m.surfaceArea + " vs " + fr.surfaceArea);
+	assert.ok(Math.abs(m.unassignedArea - fr.unassignedArea) <= 0.02 * fr.unassignedArea, m.unassignedArea + " vs " + fr.unassignedArea);
+});
+
 test("progress runs to its total; a signal stops it", function () {
 	var fr = run("hybrid"), seen = [];
 	measureFragments(PILE.cols, fr.fragment, { measure: fr.measure, from: fromOf(fr), onProgress: function (d, t) { seen.push([d, t]); } });
@@ -183,6 +202,9 @@ test("bad inputs are named", function () {
 	// another cloud's measure: points off the grid
 	var far = { count: n, x: Float64Array.from(PILE.cols.x, function (v) { return v + 100; }), y: PILE.cols.y, z: PILE.cols.z };
 	assert.throws(function () { measureFragments(far, L, { measure: fr.measure }); }, /outside the run's grid/);
+	// over half a cell outside is not the run's either
+	var g = fr.measure.areas, past = { count: n, x: Float64Array.from(PILE.cols.x, function (v, i) { return i === 7 ? g.u0 - 0.6 * g.px : v; }), y: PILE.cols.y, z: PILE.cols.z };
+	assert.throws(function () { measureFragments(past, L, { measure: fr.measure, ids: [] }); }, /point 7 is outside the run's grid/);
 	// an empty cloud
 	var e = measureFragments({ count: 0, x: new Float64Array(0), y: new Float64Array(0), z: new Float64Array(0) }, [], { measure: fr.measure });
 	assert.deepEqual([e.fragments.length, e.surfaceArea, e.unassignedArea], [0, 0, 0]);

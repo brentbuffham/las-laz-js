@@ -15,7 +15,9 @@
 // run's surfaceDistance and viewpoint; in a hybrid, the pile of the
 // points in no watershed rock, as the run took it) and its outline on
 // the run's outlineCell. The areas are the run's: per pile cell on its
-// plane for the facets method, else plan cells of the run's grid.
+// plane for the facets method, else plan cells of the run's grid (a point
+// up to half a cell outside it, as Float32 rounding after a shift between
+// frames leaves the pile's edge, counts in the edge cell).
 // Removed points count in neither area, but stay in the pile's shape.
 // A rock under the run's minPoints comes back measured and small: true,
 // and counts as fines in the areas.
@@ -37,7 +39,7 @@ import { SHEET_CB } from "./resolution.js";
 /** The label of a point taken out of the analysis: in no rock and in neither area. */
 export var FRAGMENT_REMOVED = 4294967295;
 
-var METHODS = { facets: 1, watershed: 1, hybrid: 1 }, CHECK = 65536;
+var METHODS = { facets: 1, watershed: 1, hybrid: 1 }, CHECK = 65536, EDGE = 0.5;   // EDGE: how far outside the grid a point may be, in cells
 
 function bad(message) { return new LasError(ERROR_CODES.INVALID_ARGUMENT, message); }
 function pos(v) { return typeof v === "number" && v > 0 && isFinite(v); }
@@ -176,8 +178,12 @@ export function measureFragments(cols, label, opts) {
 		var hit = new Uint8Array(GW * GH), held = new Uint8Array(GW * GH), nc = 0, none = 0;
 		for (i = 0; i < n; i++) {
 			if (removed(label[i])) continue;
-			var gu = Math.floor((U[i * st] - A.u0) / px), gv = Math.floor((V[i * st] - A.v0) / px);
-			if (gu < 0 || gu >= GW || gv < 0 || gv >= GH) throw bad("point " + i + " is outside the run's grid: these are not the run's points");
+			var fu = (U[i * st] - A.u0) / px, fv = (V[i * st] - A.v0) / px, gu = Math.floor(fu), gv = Math.floor(fv);
+			// a point up to half a cell outside (Float32 rounding after a shift between frames) goes in the edge cell
+			if (gu < 0 || gu >= GW || gv < 0 || gv >= GH) {
+				if (!(fu >= -EDGE && fu < GW + EDGE && fv >= -EDGE && fv < GH + EDGE)) throw bad("point " + i + " is outside the run's grid: these are not the run's points");
+				gu = Math.min(GW - 1, Math.max(0, gu)); gv = Math.min(GH - 1, Math.max(0, gv));
+			}
 			var g = gv * GW + gu;
 			hit[g] = 1; if (rock(label[i])) held[g] = 1;
 			if ((i & (CHECK - 1)) === 0) stop();
