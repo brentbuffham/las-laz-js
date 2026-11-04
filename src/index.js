@@ -6,7 +6,7 @@
 //==========================================================
 
 /** Library version, matches package.json. */
-export var VERSION = "0.20.1";
+export var VERSION = "0.20.2";
 
 export { LasError, ERROR_CODES } from "./errors.js";
 export { openLas, LasReader } from "./LasReader.js";
@@ -47,6 +47,7 @@ export { findFacets } from "./facets/findFacets.js";
 export { findFacetsParallel } from "./facets/parallel.js";
 export { jointSets } from "./facets/jointSets.js";
 export { findFragments } from "./fragments/findFragments.js";
+export { measureFragments, FRAGMENT_REMOVED } from "./fragments/measure.js";
 export { findFragmentsParallel } from "./fragments/parallel.js";
 export { sizeDistribution } from "./fragments/sizeDistribution.js";
 export { pointSpacing } from "./fragments/spacing.js";

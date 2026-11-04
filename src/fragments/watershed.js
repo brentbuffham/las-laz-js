@@ -19,7 +19,9 @@
 // measured as findFragments' are (PCA spans, the normal facing up, the
 // outline on its plane). Areas are plan: the cells holding points, so
 // the cells the hole fill adds round a selection's edge count for
-// nothing. 2.5D: a wall or a drawpoint seen side-on collapses in plan
+// nothing; in no fragment, the cells of a gap or of a label under
+// minPoints (0.20.2: before, those labels counted as their points'
+// share of the surface). 2.5D: a wall or a drawpoint seen side-on collapses in plan
 // (sideOn). Internal: reached through findFragments({ method }).
 //==========================================================
 
@@ -38,13 +40,14 @@ var MAX_CELLS = 6e7, SIGMA = 1.5, FILL_PASSES = 10, SIDE_ON = 0.6;
  *   columns' units.
  * @param {number} spacing - pointSpacing of the points (for the side-on test).
  * @returns {{fragment: Uint32Array, fragments: object[], surfaceArea: number, unassignedArea: number, cell: number,
- *   sideOn: boolean, labels?: {lab: Int32Array, cellOf: Int32Array, W: number, N: number}}} labels (with keepLabels):
- *   each cell's label before the clip, each point's cell.
+ *   sideOn: boolean, grid: object|null, labels?: {lab: Int32Array, cellOf: Int32Array, W: number, N: number}}} labels
+ *   (with keepLabels): each cell's label before the clip, each point's cell; grid: { px, u0, v0, W, H, axes } for
+ *   measureFragments' areas.
  * @throws {LasError} INVALID_ARGUMENT naming cell when the grid would be too large.
  */
 export function watershedFragments(cols, o, spacing) {
 	var n = cols.count, i, k, d, px = o.cell, h = o.seedHeight, tick = o.onProgress || function () {}, STEPS = 7;
-	var none = { fragment: new Uint32Array(n), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: px, sideOn: false };
+	var none = { fragment: new Uint32Array(n), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: px, sideOn: false, grid: null };
 	if (n < 9) return none;
 	var co = coordsOf(cols, "findFragments"), X = co.x, Y = co.y, Z = co.z, st = co.stride, x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity;
 	for (i = 0; i < n; i++) { var oi = i * st; if (X[oi] < x0) x0 = X[oi]; if (X[oi] > x1) x1 = X[oi]; if (Y[oi] < y0) y0 = Y[oi]; if (Y[oi] > y1) y1 = Y[oi]; if (Z[oi] < z0) z0 = Z[oi]; }
@@ -118,9 +121,8 @@ export function watershedFragments(cols, o, spacing) {
 		for (d = 0; d < 8; d++) { if (!ok(p, d)) continue; q = p + D8[d]; if (!lab[q] && !inq[q]) { inq[q] = 1; heap.push(-relief[q], q); } }
 	}
 	var labels = o.keepLabels ? { lab: Int32Array.from(lab), cellOf: cellOf, W: W, N: N } : undefined;
-	// the gaps: under the mean surface by more than -clipBelow; areas over the cells holding points
-	var cells = 0, unassignedCells = 0;
-	for (k = 0; k < N; k++) { if (!mask[k]) continue; if (relief[k] < o.clipBelow) lab[k] = 0; if (!hit[k]) continue; cells++; if (!lab[k]) unassignedCells++; }
+	// the gaps: under the mean surface by more than -clipBelow
+	for (k = 0; k < N; k++) if (mask[k] && relief[k] < o.clipBelow) lab[k] = 0;
 	tick(5, STEPS);
 
 	// fragments: the points of each label, minPoints and up; ids by size, largest first
@@ -130,9 +132,9 @@ export function watershedFragments(cols, o, spacing) {
 	for (l = 1; l <= nl; l++) start[l + 1] = start[l] + count[l];
 	var members = new Uint32Array(start[nl + 1]), at = Uint32Array.from(start);
 	for (i = 0; i < n; i++) { l = lab[cellOf[i]]; if (l) members[at[l]++] = i; }
-	var frags = [], dropped = 0;
+	var frags = [];
 	for (l = 1; l <= nl; l++) {
-		if (count[l] < o.minPoints) { dropped += count[l]; continue; }
+		if (count[l] < o.minPoints) continue;
 		var pts = members.subarray(start[l], start[l + 1]), ax = fragmentAxes(X, Y, Z, st, pts), nv = ax.smallest;
 		if (nv[2] < 0) nv = [-nv[0], -nv[1], -nv[2]];
 		var shape = facetOutline(X, Y, Z, st, pts, ax.centroid, nv, 2 * px);
@@ -144,9 +146,12 @@ export function watershedFragments(cols, o, spacing) {
 	var fragment = new Uint32Array(n);
 	for (i = 0; i < n; i++) fragment[i] = idOf[lab[cellOf[i]]];
 	tick(6, STEPS);
-	var surfaceArea = cells * px * px, unassignedArea = unassignedCells * px * px + dropped / n * surfaceArea;
+	// areas over the cells holding points; in no fragment, those whose label is a gap or under minPoints
+	var cells = 0, unassignedCells = 0;
+	for (k = 0; k < N; k++) if (hit[k]) { cells++; if (!idOf[lab[k]]) unassignedCells++; }
 	tick(STEPS, STEPS);
-	var out = { fragment: fragment, fragments: frags, surfaceArea: surfaceArea, unassignedArea: unassignedArea, cell: px, sideOn: sideOn };
+	var out = { fragment: fragment, fragments: frags, surfaceArea: cells * px * px, unassignedArea: unassignedCells * px * px, cell: px, sideOn: sideOn,
+		grid: { px: px, u0: x0, v0: y0, W: W, H: H, axes: [0, 1] } };
 	if (labels) out.labels = labels;
 	return out;
 

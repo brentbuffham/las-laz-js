@@ -351,6 +351,10 @@
 					<label class="small">over <input type="number" id="fraOversize" value="1" min="0" step="0.1" style="width: 5em"> m</label>
 					<button class="button" id="fraSelectBig" title="The points of every fragment larger than this size become the selection">Select oversize</button>
 				</div>
+				<div class="row wrap">
+					<button class="button" id="fraToFines" title="Hand edit: the fragment last under the pointer becomes fines; the areas are measured again (measureFragments)">Fragment to fines</button>
+					<button class="button" id="fraSplit" title="Hand edit: the fragment last under the pointer is cut in two across its middle, on its wider plan axis; both halves are measured as the run measures (measureFragments), the ids of the others kept">Split fragment</button>
+				</div>
 				<h3>Size curve</h3>
 				<p class="muted small"><code>sizeDistribution</code>: % passing by size b. The fit uses the coarse part only (from <em>Fit from</em> up), where a scan's sizes hold; below the measured curve it is dashed: extrapolated, not measured.</p>
 				<div class="form-grid">

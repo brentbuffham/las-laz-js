@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.20.2 (2026-11-04)
+
+Hand edits on a fragments run, measured as the run measures:
+- New `measureFragments(cols, label, { measure, ids, from, onProgress, signal })` and `FRAGMENT_REMOVED`. Measures a labelling of
+  the run's points (0 fines, `FRAGMENT_REMOVED` or -1 out of the analysis, else a rock id, kept as given) as the run measured:
+  a watershed rock by its PCA spans facing up, its outline on 2 cells; a facet rock facing out of the pile (the run's
+  surfaceDistance and viewpoint; in a hybrid the pile of the points in no watershed rock, as the run took it), its outline on
+  the run's outline cell; the run's areas (per pile cell for facets, else its plan grid), removed points in neither. Returns
+  `{ fragments, gone, tooSmall, surfaceArea, unassignedArea }`; a rock under `minPoints` comes back `small: true`, its id in
+  `tooSmall`, and counts as fines in the areas (one call an edit).
+  Measuring a `findFragments` run's own labelling gives back its fragments and areas exactly (facets, watershed and hybrid;
+  Float32 at a UTM origin); on `findFragmentsParallel` the areas and watershed rocks are exact and facet rocks close.
+- Every `findFragments` and in-memory `findFragmentsParallel` result carries `measure`: plain data (method, minPoints, cell,
+  outlineCell, surfaceDistance, viewpoint, the area grid) for `measureFragments`.
+- The watershed's `unassignedArea` counts the cells of a label under `minPoints` as cells in no fragment, as the hybrid and
+  the parallel run always did; before, it added those points' share of the surface. On the test piles the fines area moved by
+  under 0.3 % at `minPoints` 400, under 0.01 % at the default 50. The hybrid's areas are now `cells x cell x cell`, as the others (a last-digit
+  rounding change).
+- Demo: Fragments has **Fragment to fines** and **Split fragment** on the fragment last hovered, measured with
+  `measureFragments`; the other ids stay.
+
 ## 0.20.1 (2026-11-03)
 
 - `parseControlPointPairs` skips lines starting `*` as comments, as it does `#`. Vulcan's Transparams3D pair files open with

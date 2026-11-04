@@ -14,11 +14,14 @@
 // the result: model, weight, fit from, lower and upper limits, fines
 // size and the unseen fines %; sizeChart.js) with its P-values ("fines"
 // under the lower limit, "> upper" over the upper), Fragments and Curve
-// CSV, and a DXF of the outlines. Results are in the cloud's local frame;
-// CSV centroids are world coordinates.
+// CSV, and a DXF of the outlines. Hand edits on the fragment last
+// hovered (to fines, split in two) are measured as the run measures
+// (measureFragments with the run's measure field); the other ids stay.
+// Results are in the cloud's local frame; CSV centroids are world
+// coordinates.
 //==========================================================
 
-import { findFragmentsParallel, sizeDistribution } from "../../src/index.js";
+import { findFragmentsParallel, sizeDistribution, measureFragments } from "../../src/index.js";
 
 // labels of a full read (by file record index) onto the points shown (their indices); both reads keep the
 // file's order, so one walk matches them
@@ -101,12 +104,11 @@ export function initFragments(ctx) {
 				if (method !== "watershed") $("fraMaxDist").placeholder = "auto (" + sp(4 * fr.spacing) + ")";
 				if (method !== "facets") $("fraWsCell").placeholder = "auto (" + sp(fr.cell) + ")";
 			}
-			var fragment = new Uint32Array(cloud.count), inFragments = 0, inRun = null;
+			var inFragments = 0, inRun = null;
 			for (i = 0; i < fr.fragment.length; i++) if (fr.fragment[i]) inFragments++;
-			if (full) fragment = byIndex(full.index, fr.fragment, cloud.index);
-			else for (i = 0; i < fr.fragment.length; i++) fragment[idx ? idx[i] : i] = fr.fragment[i];
 			if (idx) { inRun = new Uint8Array(cloud.count); for (i = 0; i < idx.length; i++) inRun[idx[i]] = 1; }
-			res = { fr: fr, idx: idx, fragment: fragment, inRun: inRun, note: full ? null : thinnedNote(fr), every: !!full };
+			res = { fr: fr, idx: idx, cols: cols, full: full, inRun: inRun, note: full ? null : thinnedNote(fr), every: !!full };
+			onCloud();
 			hovered = 0;
 			showOutlines();
 			$("colourBy").value = $("fraColour").value;
@@ -123,6 +125,59 @@ export function initFragments(ctx) {
 			if (ctx.onResult) ctx.onResult();
 		}, 0); });
 	}
+	// the run's labels onto the cloud's points, and each fragment by its id
+	function onCloud() {
+		var fr = res.fr, cloud = ctx.cloud, fragment = new Uint32Array(cloud.count), i;
+		if (res.full) fragment = byIndex(res.full.index, fr.fragment, cloud.index);
+		else for (i = 0; i < fr.fragment.length; i++) fragment[res.idx ? res.idx[i] : i] = fr.fragment[i];
+		res.fragment = fragment;
+		res.byId = new Map();
+		res.maxId = 0;
+		fr.fragments.forEach(function (f) { res.byId.set(f.id, f); if (f.id > res.maxId) res.maxId = f.id; });
+	}
+	function rec(id) { return res.byId.get(id); }
+
+	// --- hand edits: the fragment last hovered, measured again as the run measures; the other ids stay -------------
+	function handEdit(kind) {
+		if (!res) return;
+		if (!hovered || !rec(hovered)) { status("hover a fragment first (its id shows on the line under the view)", true); return; }
+		var fr = res.fr, id = hovered, L = Uint32Array.from(fr.fragment), cols = res.cols, n = L.length, touched = [id], i, text;
+		if (kind === "fines") {
+			for (i = 0; i < n; i++) if (L[i] === id) L[i] = 0;
+			text = "fragment " + id + " is fines now";
+		} else {
+			// across its middle, square to its wider plan axis
+			var c = rec(id).centroid, lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+			for (i = 0; i < n; i++) if (L[i] === id) { var p = [cols.x[i], cols.y[i]]; for (var a = 0; a < 2; a++) { if (p[a] < lo[a]) lo[a] = p[a]; if (p[a] > hi[a]) hi[a] = p[a]; } }
+			var ax = hi[0] - lo[0] >= hi[1] - lo[1] ? 0 : 1, U = ax ? cols.y : cols.x, other = res.maxId + 1;
+			for (i = 0; i < n; i++) if (L[i] === id && U[i] > c[ax]) L[i] = other;
+			touched.push(other);
+			text = "fragment " + id + " split in two: " + id + " and " + other;
+		}
+		var kinds = new Map();
+		fr.fragments.forEach(function (f) { if (f.from) kinds.set(f.id, f.from); });
+		if (touched.length > 1 && kinds.has(id)) kinds.set(touched[1], kinds.get(id));
+		var t0 = performance.now(), m;
+		try { m = measureFragments(cols, L, { measure: fr.measure, ids: touched, from: kinds }); } catch (err) { status(err.message, true); return; }
+		// a piece under minPoints is fines, and said so
+		var small = m.fragments.filter(function (f) { return f.small; }).map(function (f) { return f.id; });
+		if (small.length) for (i = 0; i < n; i++) if (small.indexOf(L[i]) >= 0) L[i] = 0;
+		var got = new Map();
+		m.fragments.forEach(function (f) { if (!f.small) got.set(f.id, f); });
+		var list = [];
+		fr.fragments.forEach(function (f) { if (touched.indexOf(f.id) < 0) list.push(f); else if (got.has(f.id)) { list.push(got.get(f.id)); got.delete(f.id); } });
+		got.forEach(function (f) { list.push(f); });
+		res.fr = Object.assign({}, fr, { fragment: L, fragments: list, surfaceArea: m.surfaceArea, unassignedArea: m.unassignedArea });
+		res.bins = null; hovered = 0;
+		onCloud();
+		showOutlines();
+		curve();
+		ctx.recolour();
+		status(text + (small.length ? "; " + small.join(", ") + " under Min points, so fines" : "") + "; measured in " + ctx.since(t0) + " ms (measureFragments); " +
+			res.fr.unassignedArea.toFixed(1) + " m² of " + res.fr.surfaceArea.toFixed(1) + " m² in none");
+		if (ctx.onResult) ctx.onResult();
+	}
+
 	// Max points thinned the read: fragments are density-bound, so say what the spacing would be with every point
 	function thinnedNote(fr) {
 		var t = ctx.thinned;
@@ -194,8 +249,8 @@ export function initFragments(ctx) {
 	}
 	function selectOversize() {
 		if (!res) return;
-		var lim = num("fraOversize", 1), fs = res.fr.fragments;
-		selectWhere(function (f) { return fs[f - 1].size > lim; }, "Fragments over " + lim + " m");
+		var lim = num("fraOversize", 1);
+		selectWhere(function (f) { return rec(f).size > lim; }, "Fragments over " + lim + " m");
 	}
 	function showScope() {
 		var sel = ctx.selection;
@@ -210,10 +265,10 @@ export function initFragments(ctx) {
 	}
 	/** Colours for the drawn points by fragment, or (by "fragmentSize") by the fragment's size range; sheets grey as fines. */
 	function colours(drawn, drawnIdx, by) {
-		var n = drawn.count, out = new Uint8Array(n * 3), bins = by === "fragmentSize" && res ? sizeBins() : null, fs = res ? res.fr.fragments : null;
+		var n = drawn.count, out = new Uint8Array(n * 3), bins = by === "fragmentSize" && res ? sizeBins() : null;
 		for (var j = 0; j < n; j++) {
 			var i = drawnIdx ? drawnIdx[j] : j, f = res ? res.fragment[i] : 0;
-			var c = res && res.inRun && !res.inRun[i] ? OUTSIDE_RGB : !f ? NONE_RGB : fs[f - 1].sheet ? FINES_RGB : bins ? bins.rgbOf(f) : fragmentRgb(f);
+			var c = res && res.inRun && !res.inRun[i] ? OUTSIDE_RGB : !f ? NONE_RGB : rec(f).sheet ? FINES_RGB : bins ? bins.rgbOf(f) : fragmentRgb(f);
 			out[j * 3] = c[0]; out[j * 3 + 1] = c[1]; out[j * 3 + 2] = c[2];
 		}
 		showSizeLegend(bins);
@@ -231,7 +286,7 @@ export function initFragments(ctx) {
 		if (upperLim > 0) hi = upperLim;
 		var edges = [];
 		for (var k = 0; k <= nb; k++) edges.push(lo < hi ? Number((lo * Math.pow(hi / lo, k / nb)).toPrecision(2)) : lo);
-		var of = new Int16Array(fs.length + 1), count = new Array(nb).fill(0), area = new Array(nb).fill(0), overCount = 0, overArea = 0;
+		var of = new Int16Array(res.maxId + 1), count = new Array(nb).fill(0), area = new Array(nb).fill(0), overCount = 0, overArea = 0;
 		fs.forEach(function (f) {
 			if (f.sheet || !(f.size > 0) || f.size < lowerLim) { of[f.id] = -1; return; }
 			if (upperLim > 0 && f.size > upperLim) { of[f.id] = -2; overCount++; overArea += f.area; return; }
@@ -325,6 +380,8 @@ export function initFragments(ctx) {
 	$("fraBins").addEventListener("change", function () { if (!res) return; res.bins = null; if ($("colourBy").value === "fragmentSize") ctx.recolour(); });
 	$("fraSelectOne").addEventListener("click", selectHovered);
 	$("fraSelectBig").addEventListener("click", selectOversize);
+	$("fraToFines").addEventListener("click", function () { handEdit("fines"); });
+	$("fraSplit").addEventListener("click", function () { handEdit("split"); });
 	$("fraCsv").addEventListener("click", function () { if (res) download("fragments.csv", fragmentsCsv()); });
 	$("fraDxf").addEventListener("click", function () { if (res) download("fragments.dxf", fragmentsDxf()); });
 	$("fraCurveCsv").addEventListener("click", function () { if (res && res.psd) download("size-curve.csv", curveCsv()); });
@@ -336,7 +393,7 @@ export function initFragments(ctx) {
 		/** The fragment of cloud point i, or null; remembered as the one Select fragment takes. */
 		fragmentOf: function (i) {
 			if (!res || !res.fragment[i]) return null;
-			var f = res.fr.fragments[res.fragment[i] - 1];
+			var f = rec(res.fragment[i]);
 			hovered = f.id;
 			return { id: f.id, size: f.size, axes: f.axes, sheet: !!f.sheet };
 		},

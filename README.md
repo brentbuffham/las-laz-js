@@ -711,6 +711,28 @@ psd.p;              // { 10, 20, 50, 80, 90: { size, extrapolated, below, above 
 psd.size, psd.passing, psd.sizeAt(80), psd.fit;
 ```
 
+**Hand edits.** `measureFragments(cols, label, { measure: fr.measure, ids, from })` measures a
+labelling of the run's points as the run measured its fragments, so a rock made, split, merged or
+sent to fines by hand is sized as a found one. `label` is per point: 0 fines, `FRAGMENT_REMOVED`
+(or -1) out of the analysis, else a rock id, kept as given (ask only for the touched `ids`, and the
+others keep theirs). `from` gives each rock's kind in a hybrid (`"watershed"` or `"facets"`, by id;
+new ones default to `"watershed"`). It returns `{ fragments, gone, tooSmall, surfaceArea, unassignedArea }`:
+each asked rock as a run gives it (`id, count, centroid, normal, axes, size, area, outline, sheet`,
+`from` in a hybrid) with `small: true` when it is under the run's `minPoints` (it counts as fines in
+the areas: make it fines); `gone`, the asked ids holding no point; `tooSmall`, the asked ids under `minPoints`; the areas for the whole labelling,
+removed points in neither. Measuring a `findFragments` run's own labelling gives back its fragments
+and areas exactly. On `findFragmentsParallel` the areas and the watershed rocks are exact; each tile
+measured its own facet rocks, so those agree closely, not to the last digit. `onProgress` and
+`signal` as the runs. `fr.measure` is plain data (it survives JSON) and holds what the measuring
+needs: method, minPoints, cell, outlineCell, surfaceDistance, viewpoint and the area grid.
+
+```js
+var label = Uint32Array.from(fr.fragment);
+for (var i = 0; i < label.length; i++) if (label[i] === 7 && pts.x[i] > fr.fragments[6].centroid[0]) label[i] = 900;   // split rock 7
+var m = measureFragments(pts, label, { measure: fr.measure, ids: [7, 900], from: { 7: "watershed", 900: "watershed" } });
+m.fragments;   // rocks 7 and 900, measured as the run measures; small: true on one under minPoints
+```
+
 ### What a cloud can resolve
 
 Whether a cloud can size rocks comes down to its point spacing. `pointSpacing(cols)` measures it
@@ -820,7 +842,9 @@ can resolve" holds the table above. Colour by fragment or by size range (bins fr
 the upper limit, an "over" bin, fines grey), outlines on the cloud, a hover readout (fragment,
 size, axes, sheet), **Select fragment** and **Select oversize**, the size curve (model, weight,
 fit from, lower and upper limit, fines and fines size) with its P-values, and downloads:
-fragments CSV, curve CSV and **Fragments DXF** (each outline a closed 3D polyline). Only the
+fragments CSV, curve CSV and **Fragments DXF** (each outline a closed 3D polyline). **Fragment to fines** and **Split fragment** edit the fragment last hovered by hand (split
+across its middle, square to its wider plan axis) and measure it again with `measureFragments`: the
+other fragments keep their ids and colours, and the curve and areas follow. Only the
 selection counts; the rest is drawn dark. Save with facet / set / fragment writes the `fragment`
 extra-bytes field.
 

@@ -138,7 +138,8 @@ function groupBy(label, m) {
  *   above: cell 1.5 spacings, reliefRadius 1 (about the largest rock), seedHeight 0.005, clipBelow 0, minPoints 50;
  *   watershed.js) or "hybrid" (the watershed, then the facet options on what it left; its rock-shaped fragments
  *   are rocks too). spacing: the point spacing when it is known (default measured by pointSpacing).
- * @returns {object} the method's result (fragment, fragments, surfaceArea, unassignedArea; facets and planeDistance,
+ * @returns {object} the method's result (fragment, fragments, surfaceArea, unassignedArea, measure (for
+ *   measureFragments: how this run measures a fragment and the areas); facets and planeDistance,
  *   null and NaN for the watershed; cell for the grid methods; from on each fragment and fromWatershed /
  *   fromFacets for the hybrid) plus method, spacing, floor (30 spacings), resolution ("fine", "coarse",
  *   "oversize", "unresolved"; null with too few points), warnings [{ code, message }], and sheet on each fragment.
@@ -168,9 +169,10 @@ function watershedRun(cols, opts) {
 	if (opts.cell !== undefined || opts.reliefRadius !== undefined) watershedOptions(opts, NaN);   // a bad option is refused before the spacing is measured
 	var spacing = spacingOf(cols, opts), o = watershedOptions(opts, spacing);
 	var ignored = FACET_ONLY.filter(function (key) { return opts[key] !== undefined; });
-	var fr = o.cell > 0 ? watershedFragments(cols, o, spacing) : { fragment: new Uint32Array(cols.count), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: NaN, sideOn: false };
+	var fr = o.cell > 0 ? watershedFragments(cols, o, spacing) : { fragment: new Uint32Array(cols.count), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: NaN, sideOn: false, grid: null };
 	var sideOn = fr.sideOn;
-	delete fr.sideOn;
+	fr.measure = { method: "watershed", minPoints: o.minPoints, cell: fr.cell, outlineCell: NaN, surfaceDistance: NaN, viewpoint: null, areas: fr.grid };
+	delete fr.sideOn; delete fr.grid;
 	fr.method = "watershed"; fr.facets = null; fr.planeDistance = NaN;
 	return resultFields(fr, spacing, { ignored: ignored, sideOn: sideOn });
 }
@@ -186,7 +188,8 @@ function hybridRun(cols, opts) {
 	wo.onProgress = prog ? function (d, t) { prog(0.15 * d / t, 1); } : undefined;
 	var w = wo.cell > 0 ? watershedFragments(cols, wo, spacing) : null;
 	if (!w || !w.labels) {
-		var empty = { fragment: new Uint32Array(n), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: w ? w.cell : NaN, method: "hybrid", facets: null, planeDistance: NaN, fromWatershed: 0, fromFacets: 0 };
+		var empty = { fragment: new Uint32Array(n), fragments: [], surfaceArea: 0, unassignedArea: 0, cell: w ? w.cell : NaN, method: "hybrid", facets: null, planeDistance: NaN, fromWatershed: 0, fromFacets: 0,
+			measure: { method: "hybrid", minPoints: wo.minPoints, cell: w ? w.cell : NaN, outlineCell: NaN, surfaceDistance: NaN, viewpoint: opts.viewpoint || null, areas: w ? w.grid : null } };
 		return resultFields(empty, spacing, {});
 	}
 	// the rest: the points the watershed left in no fragment, as x / y / z columns
@@ -220,10 +223,11 @@ function hybridRun(cols, opts) {
 	var N = w.labels.N, cellOf = w.labels.cellOf, hit = new Uint8Array(N), held = new Uint8Array(N), cells = 0, none = 0;
 	for (i = 0; i < n; i++) { k = cellOf[i]; hit[k] = 1; if (fragment[i]) held[k] = 1; }
 	for (k = 0; k < N; k++) if (hit[k]) { cells++; if (!held[k]) none++; }
-	var a2 = w.cell * w.cell;
+	var px = w.cell;   // cells x px x px, as the watershed, the parallel run and measureFragments
 	if (prog) prog(1, 1);
-	var out = { fragment: fragment, fragments: fragments, surfaceArea: cells * a2, unassignedArea: none * a2, cell: w.cell, method: "hybrid",
-		facets: fr.facets, planeDistance: fr.planeDistance, fromWatershed: w.fragments.length, fromFacets: kept.length };
+	var out = { fragment: fragment, fragments: fragments, surfaceArea: cells * px * px, unassignedArea: none * px * px, cell: w.cell, method: "hybrid",
+		facets: fr.facets, planeDistance: fr.planeDistance, fromWatershed: w.fragments.length, fromFacets: kept.length,
+		measure: { method: "hybrid", minPoints: wo.minPoints, cell: w.cell, outlineCell: fr.measure.outlineCell, surfaceDistance: fr.measure.surfaceDistance, viewpoint: fr.measure.viewpoint, areas: w.grid } };
 	return resultFields(out, spacing, Object.assign(given, { sideOn: w.sideOn }));
 }
 
@@ -250,7 +254,8 @@ export function facetFragments(cols, opts) {
 	if (!n) {
 		var none = findFacets(cols, Object.assign({}, o.face, { onProgress: undefined }));
 		if (o.onProgress) o.onProgress(0, 0);
-		return { fragment: new Uint32Array(0), fragments: [], facets: none, surfaceArea: 0, unassignedArea: 0, planeDistance: none.planeDistance };
+		return { fragment: new Uint32Array(0), fragments: [], facets: none, surfaceArea: 0, unassignedArea: 0, planeDistance: none.planeDistance,
+			measure: { method: "facets", minPoints: o.minPoints, cell: NaN, outlineCell: NaN, surfaceDistance: NaN, viewpoint: o.viewpoint || null, areas: null } };
 	}
 	var co = coordsOf(cols, "findFragments"), X = co.x, Y = co.y, Z = co.z, st = co.stride, i, j, k;
 
@@ -412,5 +417,7 @@ export function facetFragments(cols, opts) {
 		surfaceArea += ca; unassignedArea += ca * z0 / pts.length;
 	}
 	tick(total);
-	return { fragment: fragment, fragments: fragments, facets: ff, surfaceArea: surfaceArea, unassignedArea: unassignedArea, planeDistance: pd };
+	// what measureFragments needs to measure a labelling as this run measured
+	var measure = { method: "facets", minPoints: o.minPoints, cell: NaN, outlineCell: cell, surfaceDistance: sd, viewpoint: o.viewpoint || null, areas: "pile" };
+	return { fragment: fragment, fragments: fragments, facets: ff, surfaceArea: surfaceArea, unassignedArea: unassignedArea, planeDistance: pd, measure: measure };
 }

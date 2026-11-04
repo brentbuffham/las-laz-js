@@ -41,8 +41,8 @@ function checkNormals(nm, n) { if (!nm || !nm.normal || !nm.residual || nm.norma
  *   points), signal (an AbortSignal: the workers end and the run rejects with ABORTED), normals (pointNormals for
  *   the whole cloud: each tile gets its cut).
  * @returns {Promise<object>} findFragments' result (fragment, fragments, surfaceArea, unassignedArea, method,
- *   spacing, floor, resolution, warnings, cell, fromWatershed / fromFacets for the hybrid), plus tiles and threads;
- *   facets is null (facet ids are each tile's own).
+ *   spacing, floor, resolution, warnings, cell, fromWatershed / fromFacets for the hybrid, measure for
+ *   measureFragments), plus tiles and threads; facets is null (facet ids are each tile's own).
  */
 export async function findFragmentsParallel(cols, opts) {
 	if (opts === undefined || opts === null || typeof opts !== "object") throw bad("findFragmentsParallel needs options: { method?, … }");
@@ -73,13 +73,15 @@ export async function findFragmentsParallel(cols, opts) {
 	var results = ran.results;
 
 	// stitch: keep each tile's fragments whose centroid is in its core; the first claim on a point holds
-	var label = new Uint32Array(n), kept = [], planeDistances = [], sideOn = false, cell = NaN;
+	var label = new Uint32Array(n), kept = [], planeDistances = [], outlineCells = [], surfaceDistances = [], sideOn = false, cell = NaN;
 	results.forEach(function (r, ti) {
 		if (!r) return;
 		var idx = members[ti];
 		if (r.planeDistance > 0) planeDistances.push(r.planeDistance);
 		if (r.warnings.some(function (w) { return w.code === "SIDE_ON"; })) sideOn = true;
 		if (r.cell > 0) cell = r.cell;
+		if (r.measure && r.measure.outlineCell > 0) outlineCells.push(r.measure.outlineCell);
+		if (r.measure && r.measure.surfaceDistance > 0) surfaceDistances.push(r.measure.surfaceDistance);
 		var gid = new Uint32Array(r.fragments.length + 1);
 		r.fragments.forEach(function (f) {
 			if (plan.inCore(ti, f.centroid[order[0]], f.centroid[order[1]])) { kept.push(f); gid[f.id] = kept.length; }
@@ -110,9 +112,12 @@ export async function findFragmentsParallel(cols, opts) {
 		hit[q2] = 1; if (fragment[i]) held[q2] = 1;
 	}
 	for (k = 0; k < hit.length; k++) if (hit[k]) { cells++; if (!held[k]) none++; }
-	planeDistances.sort(function (p, q) { return p - q; });
+	// for measureFragments: the plan grid exactly; a facet rock's outline cell and pile scale, the tiles' median
+	var measure = { method: method, minPoints: opts.minPoints === undefined ? 50 : opts.minPoints, cell: method === "facets" ? NaN : cell,
+		outlineCell: median(outlineCells), surfaceDistance: median(surfaceDistances), viewpoint: opts.viewpoint || null,
+		areas: { px: px, u0: u0, v0: v0, W: GW, H: GH, axes: [order[0], order[1]] } };
 	var out = { fragment: fragment, fragments: fragments, surfaceArea: cells * px * px, unassignedArea: none * px * px, method: method,
-		facets: null, planeDistance: planeDistances.length ? planeDistances[Math.floor((planeDistances.length - 1) / 2)] : NaN };
+		facets: null, planeDistance: median(planeDistances), measure: measure };
 	if (method !== "facets") out.cell = cell;
 	if (method === "hybrid") {
 		out.fromWatershed = fragments.filter(function (f) { return f.from === "watershed"; }).length;
@@ -123,6 +128,8 @@ export async function findFragmentsParallel(cols, opts) {
 	if (method === "watershed") given.ignored = FACET_ONLY.filter(function (key) { return opts[key] !== undefined; });
 	return Object.assign(resultFields(out, spacing, given), { tiles: NT, threads: ran.threads });
 }
+
+function median(a) { a.sort(function (p, q) { return p - q; }); return a.length ? a[Math.floor((a.length - 1) / 2)] : NaN; }
 
 // findFragments' own options: no function or signal (they cannot go to a worker), no normals (each tile gets its own cut) and none of this module's
 var STRIP = ["onProgress", "signal", "threads", "tile", "overlap", "normals"];
