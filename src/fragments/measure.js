@@ -64,6 +64,7 @@ export function measureFragments(cols, label, opts) {
 	if (!opts || typeof opts !== "object") throw bad("measureFragments needs options: { measure } from the run's result");
 	var ms = opts.measure;
 	if (!ms || typeof ms !== "object" || !METHODS[ms.method]) throw bad("measure must be the run result's measure field ({ method, … })");
+	if (ms.areas && ms.areas.world) throw bad("measure is from a run on a tile store: use measureFragmentsOnStore");
 	var n = cols && cols.count;
 	if (!Number.isInteger(n) || n < 0) throw bad("cols must be point columns with a count");
 	if (!label || label.length !== n) throw bad("label must hold one value a point (" + n + "), not " + (label ? label.length : label));

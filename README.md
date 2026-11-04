@@ -726,6 +726,13 @@ measured its own facet rocks, so those agree closely, not to the last digit. `on
 `signal` as the runs. `fr.measure` is plain data (it survives JSON) and holds what the measuring
 needs: method, minPoints, cell, outlineCell, surfaceDistance, viewpoint and the area grid.
 
+On a tile store (OPFS, the whole scan), `measureFragmentsOnStore(store, { column, measure, ids, changes, box, areas, from })`
+measures an edit of the run's label column before it is written: `changes` is `[{ selection, label }]` (store
+selections, as `selectPolygon` gives them), `box` the plan region holding the asked rocks and every changed point (a
+store run gives each rock its `box`; add the edit shape's), `areas` the run's or the last edit's. Only the nodes meeting
+`box` are read; the areas move by what the edit does to the cells there. Then write the same changes with
+`store.setColumn(selection, column, label)`.
+
 ```js
 var label = Uint32Array.from(fr.fragment);
 for (var i = 0; i < label.length; i++) if (label[i] === 7 && pts.x[i] > fr.fragments[6].centroid[0]) label[i] = 900;   // split rock 7

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.20.4 (2026-11-04)
+
+Hand edits on a fragments run on a tile store (OPFS), never reading the whole cloud:
+- New `measureFragmentsOnStore(store, { column, measure, ids, changes, box, areas, from, onProgress, signal })`. The labels
+  are the run's column as the run (or the last edit) left it; `changes` is the edit (`[{ selection, label }]`, store
+  selections as `selectPolygon` gives them), applied in memory: measure first, then write the same changes with
+  `setColumn`. Only the nodes meeting `box` (widened to whole cells of the run's grid) are read: the asked rocks' points
+  are measured as the run measures, and the areas move by what the edit does to those cells, from the `areas` passed in.
+  Without `box` and `areas` the whole store is read a node at a time and the areas counted afresh. Returns
+  `{ fragments, gone, tooSmall, surfaceArea, unassignedArea }` as `measureFragments`, each rock with its `box`.
+- `findFragmentsParallel` on a store returns `measure` (with the run's frame, `origin`, and its plan grid, world) and a
+  plan `box` per rock (`[u0, u1, v0, v1]`, world, on `measure.areas.axes`), so an edit's box is the touched rocks' boxes
+  and the edit shape's.
+- With no edit, a watershed rock no seam trimmed is its run record to the digit and the areas do not move; after an edit
+  the areas equal a whole count of the store with the edit written. `measureFragments` refuses a store run's measure and
+  `measureFragmentsOnStore` an in-memory one, each naming the other.
+
 ## 0.20.3 (2026-11-04)
 
 - `measureFragments` takes points up to half a cell outside the run's area grid into the edge cell, instead of refusing them

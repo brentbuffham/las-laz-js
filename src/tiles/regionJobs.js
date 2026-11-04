@@ -85,7 +85,8 @@ function local(t) {
  * @param {object} store - an open TileStore.
  * @param {{keys: string[], which: number[], axes: number[], box: number[], core: number[], origin: object, opts: object,
  *   grid: {px: number, u0: number, v0: number, W: number, H: number}, onProgress?: function(number, number)}} t
- * @returns {Promise<object>} { count, kept, node, index, gid, prio (1 = a core point), win, planeDistance, cell, sideOn }
+ * @returns {Promise<object>} { count, kept (each with box: its plan box, world), node, index, gid, prio (1 = a core point), win,
+ *   planeDistance, cell, sideOn, outlineCell, surfaceDistance }
  */
 export async function fragmentsRegion(store, t) {
 	var reg = await readRegion(store, t.keys, t.which, t.axes, t.box, t.origin), L = local(t), a = t.axes;
@@ -99,8 +100,17 @@ export async function fragmentsRegion(store, t) {
 		delete g.facets; delete g.sheet;
 		kept.push(g); keptId[f.id] = kept.length;
 	});
-	var m = 0;
-	for (j = 0; j < reg.count; j++) if (keptId[r.fragment[j]]) m++;
+	// each kept fragment's plan box (world, on the tile axes) over its points in the region: measureFragmentsOnStore
+	// reads the nodes meeting it
+	var ou0 = t.origin[AXES[a[0]]], ov0 = t.origin[AXES[a[1]]], bx = new Float64Array(4 * (kept.length + 1)).fill(NaN), m = 0;
+	for (j = 0; j < reg.count; j++) {
+		var kk = keptId[r.fragment[j]];
+		if (!kk) continue;
+		m++;
+		var bu = U[j] + ou0, bv = V[j] + ov0, b4 = 4 * kk;
+		if (!(bx[b4] <= bu)) bx[b4] = bu; if (!(bx[b4 + 1] >= bu)) bx[b4 + 1] = bu; if (!(bx[b4 + 2] <= bv)) bx[b4 + 2] = bv; if (!(bx[b4 + 3] >= bv)) bx[b4 + 3] = bv;
+	}
+	kept.forEach(function (g, q) { g.box = [bx[4 * (q + 1)], bx[4 * (q + 1) + 1], bx[4 * (q + 1) + 2], bx[4 * (q + 1) + 3]]; });
 	var node = new Uint32Array(m), index = new Uint32Array(m), gid = new Uint32Array(m), core = new Uint8Array(m), q = 0;
 	for (j = 0; j < reg.count; j++) {
 		var k = keptId[r.fragment[j]];
@@ -123,7 +133,7 @@ export async function fragmentsRegion(store, t) {
 		win = { u0: wu0, v0: wv0, W: WW, H: WH, hit: hit, held: held };
 	}
 	return { count: reg.count, kept: kept, node: node, index: index, gid: gid, core: core, win: win, planeDistance: r.planeDistance, cell: r.cell,
-		sideOn: r.warnings.some(function (w) { return w.code === "SIDE_ON"; }) };
+		sideOn: r.warnings.some(function (w) { return w.code === "SIDE_ON"; }), outlineCell: r.measure.outlineCell, surfaceDistance: r.measure.surfaceDistance };
 }
 
 /**

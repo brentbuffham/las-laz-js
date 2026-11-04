@@ -120,6 +120,7 @@ export async function runAll(store, L, opts, threads, op, task, apply) {
 	}
 }
 
+function median(a) { a.sort(function (p, q) { return p - q; }); return a.length ? a[Math.floor((a.length - 1) / 2)] : NaN; }
 function labelArrays(L) { return L.nodes.counts.map(function (c) { return new Uint32Array(c); }); }
 function byTile(L, labels) { var out = {}; L.nodes.keys.forEach(function (k, i) { out[k] = labels[i]; }); return out; }
 
@@ -168,7 +169,8 @@ export async function common(store, opts, name) {
  *   holds, default 500,000: each worker holds its tile and the overlap, about 100 bytes a point while it runs), localOrigin (the frame of the results; default the store box's centre), column (write the
  *   labels to this added column), onProgress, signal.
  * @returns {Promise<object>} findFragments' result without fragment (its labels are byTile: { key: Uint32Array })
- *   plus origin, tiles, threads; facets null.
+ *   plus origin, tiles, threads; facets null; measure for measureFragmentsOnStore; each fragment's box ([u0, u1, v0, v1],
+ *   world, on measure.areas.axes: its points' plan box).
  */
 export async function fragmentsOnStore(store, opts) {
 	var threads = await common(store, opts, "findFragmentsParallel"), method = opts.method === undefined ? "facets" : opts.method;
@@ -182,7 +184,7 @@ export async function fragmentsOnStore(store, opts) {
 	var px = CELL_SPACINGS * spacing, GW = Math.floor(L.du / px) + 1, GH = Math.floor(L.dv / px) + 1;
 	while (GW * GH > MAX_CELLS) { px *= 2; GW = Math.floor(L.du / px) + 1; GH = Math.floor(L.dv / px) + 1; }
 	var grid = { px: px, u0: L.u0, v0: L.v0, W: GW, H: GH }, hit = new Uint8Array(GW * GH), held = new Uint8Array(GW * GH);
-	var labels = labelArrays(L), kept = [], planeDistances = [], cell = NaN, sideOn = false, tileOpts = Object.assign(strip(opts), { spacing: spacing });
+	var labels = labelArrays(L), kept = [], planeDistances = [], outlineCells = [], surfaceDistances = [], cell = NaN, sideOn = false, tileOpts = Object.assign(strip(opts), { spacing: spacing });
 	var bars = barred(opts);
 	var ran = await runAll(store, L, bars.run, threads, "fragmentsRegion", function (t) {
 		return { which: t.which, axes: L.axes, box: t.box, core: t.core, origin: L.origin, opts: tileOpts, grid: grid };
@@ -200,6 +202,8 @@ export async function fragmentsOnStore(store, opts) {
 			hit[g] = 1; if (r.win.held[wv * r.win.W + wu]) held[g] = 1;
 		}
 		if (r.planeDistance > 0) planeDistances.push(r.planeDistance);
+		if (r.outlineCell > 0) outlineCells.push(r.outlineCell);
+		if (r.surfaceDistance > 0) surfaceDistances.push(r.surfaceDistance);
 		if (r.cell > 0) cell = r.cell;
 		if (r.sideOn) sideOn = true;
 	});
@@ -213,9 +217,12 @@ export async function fragmentsOnStore(store, opts) {
 	labels.forEach(function (lab) { for (var j = 0; j < lab.length; j++) if (lab[j]) lab[j] = newId[lab[j]]; });
 	var cells = 0, none = 0;
 	for (k = 0; k < hit.length; k++) if (hit[k]) { cells++; if (!held[k]) none++; }
-	planeDistances.sort(function (p, q) { return p - q; });
+	// for measureFragmentsOnStore: the plan grid (world) exactly, the results' frame; a facet rock's outline cell and pile scale, the tiles' median
+	var measure = { method: method, minPoints: opts.minPoints === undefined ? 50 : opts.minPoints, cell: method === "facets" ? NaN : cell,
+		outlineCell: median(outlineCells), surfaceDistance: median(surfaceDistances), viewpoint: opts.viewpoint || null, origin: L.origin,
+		areas: { px: px, u0: L.u0, v0: L.v0, W: GW, H: GH, axes: L.axes.slice(), world: true } };
 	var out = { byTile: byTile(L, labels), fragments: fragments, surfaceArea: cells * px * px, unassignedArea: none * px * px, method: method, facets: null,
-		planeDistance: planeDistances.length ? planeDistances[Math.floor((planeDistances.length - 1) / 2)] : NaN, origin: L.origin };
+		planeDistance: median(planeDistances), origin: L.origin, measure: measure };
 	if (method !== "facets") out.cell = cell;
 	if (method === "hybrid") { out.fromWatershed = 0; for (i = 0; i < fragments.length; i++) if (fragments[i].from === "watershed") out.fromWatershed++; out.fromFacets = fragments.length - out.fromWatershed; }
 	var given = { sideOn: sideOn };
